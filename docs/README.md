@@ -6,6 +6,10 @@ This folder contains the documentation for the project, built using [MkDocs](htt
 
     To make this work in your repo you will need to update your repo settings under `Settings/Pages/` so that docs are deployed from the`gh-pages` branch.
 
+!!! info
+
+    If your docs aren't building in the GitHub action, you should make sure your Settings -> Actions -> Workflow permissions are set to read and write.
+
 ## Writing Documentation
 
 - Documentation is written in **Markdown (`.md`)** files.

@@ -179,6 +179,10 @@ The `Makefile` in this repository enables you to run tests, fix import order, li
 
 Before you push your updates, run `make` inside the directory and resolve any issues that arise. This repository includes actions that will run these tools on GitHub, and show you if they pass. (See the buttons below).
 
+## Adding documentation
+
+You should click the docs folder and read that README to see instructions on how to build docs.
+
 ## Updating the package version and publishing to pypi
 
 The package version is automaticaly found from the `pyproject.toml` file. This means when you are ready to release a new version you only need to follow these steps:
@@ -214,7 +218,9 @@ It is ok to release new versions often.
 
 Your package must include a README document. You should use this file (`README.md`) as your README document. Your can delete all information above this line, and leave the information below as your README file. You should update the URLs in the badges below to be the URLs for your package on github. i.e. replace `https://github.com/pandoramission/pandora-blank/` with `https://github.com/username/reponame/`.
 
-<a href="https://github.com/pandoramission/pandora-blank/actions/workflows/tests.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/tests/badge.svg" alt="Test status"/></a> <a href="https://github.com/pandoramission/pandora-blank/actions/workflows/black.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/black/badge.svg" alt="black status"/></a> <a href="https://github.com/pandoramission/pandora-blank/actions/workflows/flake8.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/flake8/badge.svg" alt="flake8 status"/></a> [![Generic badge](https://img.shields.io/badge/documentation-live-blue.svg)](https://pandoramission.github.io/pandora-blank/) ![PyPI Version](https://img.shields.io/pypi/v/packagename)
+<a href="https://github.com/pandoramission/pandora-blank/actions/workflows/tests.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/tests/badge.svg" alt="Test status"/></a> <a href="https://github.com/pandoramission/pandora-blank/actions/workflows/black.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/black/badge.svg" alt="black status"/></a> <a href="https://github.com/pandoramission/pandora-blank/actions/workflows/flake8.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/flake8/badge.svg" alt="flake8 status"/></a> [![Generic badge](https://img.shields.io/badge/documentation-live-blue.svg)](https://pandoramission.github.io/pandora-blank/)
+[![PyPI - Version](https://img.shields.io/pypi/v/packagename)](https://pypi.org/project/packagename/)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/packagename)](https://pypi.org/project/packagename/)
 
 # Package Name
 
