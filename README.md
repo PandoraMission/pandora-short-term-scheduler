@@ -222,11 +222,7 @@ To use the actions and docs that are set up here you will need to update your re
 
 I've set up dependabot in this repository to automatically update the github actions with the most recent versions. This will run every week. To make use of this you will need to add these repo settings
 
-You will need to create the automerge label by hand. Go to issues, labels, and create a new label
-
-![gh-pages settings](docs/images/label.png)
-
-You will need to make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
+You should make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
 
 ![gh-pages settings](docs/images/branch-ruleset.png)
 
@@ -246,13 +242,9 @@ Make sure you select these options:
 4. Turn off `Block force pushes`
 5. Turn on `Require status checks to pass`
 
-You will need to add any github actions you want to be required to have them pass. I suggest you add flake8, black, and the tests.
+You should add any github actions you want to be required to have users pull requests be merged. I suggest you add flake8, black (`lint`), and the tests (`build 3.X`).
 
 ![gh-pages settings](docs/images/ruleset2.png)
-
-Finally, turn on automerge in your General settings
-
-![gh-pages settings](docs/images/automerge.png)
 
 ## Setting up the README for your package
 
