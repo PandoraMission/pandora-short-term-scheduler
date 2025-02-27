@@ -222,7 +222,11 @@ To use the actions and docs that are set up here you will need to update your re
 
 I've set up dependabot in this repository to automatically update the github actions with the most recent versions. This will run every week. To make use of this you will need to add these repo settings
 
-One, you will need to make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
+You will need to create the automerge label by hand. Go to issues, labels, and create a new label
+
+![gh-pages settings](docs/images/label.png)
+
+You will need to make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
 
 ![gh-pages settings](docs/images/branch-ruleset.png)
 
