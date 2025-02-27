@@ -5,7 +5,7 @@ description = ""
 authors = [
     {name = "Christina Hedges",email = "christina.l.hedges@nasa.gov"}
 ]
-readme = "docs/README.md"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "rich (>=13.9.4,<14.0.0)",
@@ -33,7 +33,7 @@ pytkdocs = {version = "^0.16.2", extras = ["numpy-style"]}
 mkdocs-include-markdown-plugin = "^7.1.4"
 mkdocstrings = {version = "^0.28.2", extras = ["python"]}
 jupyter-contrib-nbextensions = "^0.7.0"
-notebook = "^6.0.0"
+notebook = ">=6.0.0,<7.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
