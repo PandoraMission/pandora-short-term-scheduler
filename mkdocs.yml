@@ -10,7 +10,7 @@ nav:
 theme:
   name: "material"
   icon:
-    logo: material/checkbox-blank
+    logo: material/blur
   features:
     - content.code.copy
     - content.code.annotate 
