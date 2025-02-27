@@ -214,6 +214,42 @@ For example, if a package is at version 1.2.3, then:
 
 It is ok to release new versions often.
 
+### Update repository settings
+
+To use the actions and docs that are set up here you will need to update your repository settings. One of them is making sure docs are built from the `gh-pages` branch. You can update this in settings:
+
+![gh-pages settings](docs/images/gh-pages.png)
+
+I've set up dependabot in this repository to automatically update the github actions with the most recent versions. This will run every week. To make use of this you will need to add these repo settings
+
+One, you will need to make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
+
+![gh-pages settings](docs/images/branch-ruleset.png)
+
+You will then need to go into the ruleset and
+
+1. Name the ruleset (I called it main)
+2. Make the ruleset active
+3. Add people who can bypass the ruleset. I suggest you add the admins for the repo and organization
+
+![gh-pages settings](docs/images/ruleset1.png)
+
+Make sure you select these options:
+
+1. Branch targeting criteria: Add the `default` branch
+2. Turn on `Restrict deletions`
+3. Turn on `Require a pull request before merging`
+4. Turn off `Block force pushes`
+5. Turn on `Require status checks to pass`
+
+You will need to add any github actions you want to be required to have them pass. I suggest you add flake8, black, and the tests.
+
+![gh-pages settings](docs/images/ruleset2.png)
+
+Finally, turn on automerge in your General settings
+
+![gh-pages settings](docs/images/automerge.png)
+
 ## Setting up the README for your package
 
 Your package must include a README document. You should use this file (`README.md`) as your README document. Your can delete all information above this line, and leave the information below as your README file. You should update the URLs in the badges below to be the URLs for your package on github. i.e. replace `https://github.com/pandoramission/pandora-blank/` with `https://github.com/username/reponame/`.
