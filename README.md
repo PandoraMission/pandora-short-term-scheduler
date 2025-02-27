@@ -220,6 +220,10 @@ To use the actions and docs that are set up here you will need to update your re
 
 ![gh-pages settings](docs/images/gh-pages.png)
 
+To make sure that you can update the website automatically, you need to ensure the action has read and write permissions in Settings/Actions:
+
+![gh-pages settings](docs/images/read-write.png)
+
 I've set up dependabot in this repository to automatically update the github actions with the most recent versions. This will run every week. To make use of this you will need to add these repo settings
 
 You should make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
