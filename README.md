@@ -9,7 +9,7 @@ If you are starting a new Pandora tool from scratch, consider forking this repos
 To get started, fork this repository on GitHub, then clone your fork:
 
 ```sh
-  git clone https://github.com/your-username/pandora-blank.git
+  git clone https://github.com/pandoramission/pandora-blank.git
   cd pandora-blank
 ```
 
