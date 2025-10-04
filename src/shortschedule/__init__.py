@@ -90,7 +90,7 @@ def reset_config():
     config = configparser.ConfigParser()
     config["SETTINGS"] = {
         "log_level": "WARNING",
-        "data_dir": user_data_dir("pandorapsf"),
+        "data_dir": user_data_dir("shortschedule"),
     }
     with open(CONFIGPATH, "w") as configfile:
         config.write(configfile)

@@ -1,9 +1,9 @@
 [project]
-name = "packagename"
+name = "shortschedule"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "Christina Hedges",email = "christina.l.hedges@nasa.gov"}
+    {name = "Tom Barclay",email = "barclay.astro@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.9"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{include = "packagename", from = "src"}]
+packages = [{include = "shortschedule", from = "src"}]
 
 [tool.poetry.group.dev]
 optional = true

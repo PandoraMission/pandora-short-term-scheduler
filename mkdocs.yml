@@ -1,5 +1,5 @@
-site_name: packagename
-site_url: https://pandoramission.github.io/pandora-blank/
+site_name: ShortSchedule
+site_url: https://pandoramission.github.io/pandora-short-term-scheduler/
 docs_dir: docs
 
 nav:
@@ -35,7 +35,7 @@ theme:
         icon: material/brightness-4
         name: Switch to system preference
 
-repo_url: https://github.com/pandoramission/pandora-blank
+repo_url: https://github.com/pandoramission/pandora-short-term-scheduler
 plugins:
   - search
   - include-markdown
@@ -43,7 +43,7 @@ plugins:
       execute: false
   - mkdocstrings:
       watch:
-        - src/packagename
+        - src/shortschedule
       default_handler: python      
       handlers:
         python:
