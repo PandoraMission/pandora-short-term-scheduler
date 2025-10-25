@@ -18,7 +18,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.patches import Rectangle
+from matplotlib.figure import Figure
 from astropy.time import Time
+from typing import Any, Optional, Tuple
 
 from .models import ScienceCalendar, Visit
 
@@ -35,13 +37,13 @@ class ScheduleVisualizer:
     and produce comparison summaries.
     """
 
-    def __init__(self, scheduler):
+    def __init__(self, scheduler: Any) -> None:
         self.scheduler = scheduler
         self.gap_report = scheduler.get_gap_report()
 
     def plot_gantt_timeline(
-        self, original_calendar, processed_calendar, figsize=(16, 10)
-    ):
+        self, original_calendar: ScienceCalendar, processed_calendar: ScienceCalendar, figsize: Tuple[int, int] = (16, 10)
+    ) -> Figure:
         """Create a proper Gantt chart style timeline."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
 
@@ -90,12 +92,12 @@ class ScheduleVisualizer:
 
     def plot_gantt_timeline_with_visits(
         self,
-        original_calendar,
-        processed_calendar,
-        figsize=(20, 14),
-        show_sequence_labels=False,
-        processed_only=False,
-    ):
+        original_calendar: ScienceCalendar,
+        processed_calendar: ScienceCalendar,
+        figsize: Tuple[int, int] = (20, 14),
+        show_sequence_labels: bool = False,
+        processed_only: bool = False,
+    ) -> Figure:
         """Create a Gantt chart organized by visits with cleaner labeling."""
 
         if processed_only:
@@ -353,11 +355,11 @@ class ScheduleVisualizer:
 
     def plot_visit_summary_timeline(
         self,
-        original_calendar,
-        processed_calendar,
-        figsize=(16, 8),
-        processed_only=False,
-    ):
+        original_calendar: ScienceCalendar,
+        processed_calendar: ScienceCalendar,
+        figsize: Tuple[int, int] = (16, 8),
+        processed_only: bool = False,
+    ) -> Figure:
         """Create a high-level timeline showing just visits and their overall spans."""
 
         if processed_only:
@@ -523,12 +525,12 @@ class ScheduleVisualizer:
     # Updated generate_full_report method
     def generate_full_report(
         self,
-        original_calendar,
-        processed_calendar,
-        save_path=None,
-        show_sequence_labels=False,
-        processed_only=False,
-    ):
+        original_calendar: ScienceCalendar,
+        processed_calendar: ScienceCalendar,
+        save_path: Optional[str] = None,
+        show_sequence_labels: bool = False,
+        processed_only: bool = False,
+    ) -> Tuple[Figure, Figure, Figure, pd.DataFrame]:
         """Generate complete visualization report with options."""
 
         # Create visit-organized Gantt chart
@@ -579,7 +581,7 @@ class ScheduleVisualizer:
 
         return fig1, fig2, fig3, comparison_df
 
-    def _plot_gantt_chart(self, calendar, ax, title):
+    def _plot_gantt_chart(self, calendar: ScienceCalendar, ax: Any, title: str) -> None:
         """Plot calendar as a proper Gantt chart with targets as rows."""
         if not calendar.visits:
             ax.text(

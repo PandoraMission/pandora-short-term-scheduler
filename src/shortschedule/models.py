@@ -17,8 +17,10 @@ Notes
 
 # Standard library
 import xml.etree.ElementTree as ET
+from typing import Any, Dict, List, Optional
 
 # Third-party
+from astropy.time import Time, TimeDelta
 import astropy.units as u
 import numpy as np
 
@@ -28,14 +30,14 @@ class ObservationSequence:
 
     def __init__(
         self,
-        id,
-        target,
-        priority,
-        start_time,
-        stop_time,
-        ra,
-        dec,
-        payload_params,
+        id: str,
+        target: str,
+        priority: int,
+        start_time: Time,
+        stop_time: Time,
+        ra: float,
+        dec: float,
+        payload_params: Dict[str, Any],
     ):
         self.id = id
         self.target = target
@@ -47,7 +49,7 @@ class ObservationSequence:
         self.payload_params = payload_params
 
     @property
-    def duration(self):
+    def duration(self) -> TimeDelta:
         """Return the sequence duration as an Astropy TimeDelta.
 
         Returns
@@ -59,7 +61,7 @@ class ObservationSequence:
         delta = self.stop_time - self.start_time  # TimeDelta
         return delta
 
-    def copy(self):
+    def copy(self) -> "ObservationSequence":
         """Create a deep copy of this observation sequence."""
         # Deep copy the payload parameters XML elements
         payload_copy = {}
@@ -87,16 +89,18 @@ class ObservationSequence:
         return ET.fromstring(xml_str)
 
     @property
-    def start_time_str(self):
+    def start_time_str(self) -> str:
         """Format start time as ISO string with Z suffix."""
         return self.start_time.isot
 
     @property
-    def stop_time_str(self):
+    def stop_time_str(self) -> str:
         """Format stop time as ISO string with Z suffix."""
         return self.stop_time.isot
 
-    def get_payload_parameter(self, category, parameter_name, default=None):
+    def get_payload_parameter(
+        self, category: str, parameter_name: str, default: Any = None
+    ) -> Any:
         """Retrieve a payload parameter from the stored XML payload element.
 
         Parameters
@@ -139,8 +143,12 @@ class ObservationSequence:
         return default
 
     def get_nested_payload_parameter(
-        self, category, parameter_name, sub_parameter_name, default=None
-    ):
+        self,
+        category: str,
+        parameter_name: str,
+        sub_parameter_name: str,
+        default: Any = None,
+    ) -> Any:
         """Get nested payload parameter value."""
         parent_elem = self.get_payload_parameter(category, parameter_name)
         if parent_elem is not None and hasattr(parent_elem, "find"):
@@ -149,7 +157,7 @@ class ObservationSequence:
                 return child_elem.text.strip()
         return default
 
-    def set_payload_parameter(self, category, parameter_name, value):
+    def set_payload_parameter(self, category: str, parameter_name: str, value: Any) -> bool:
         """Set payload parameter value in XML structure."""
         if category not in self.payload_params:
             return False
@@ -160,7 +168,7 @@ class ObservationSequence:
             return True
         return False
 
-    def get_all_payload_parameters(self):
+    def get_all_payload_parameters(self) -> Dict[str, Any]:
         """Return all payload parameters as a nested dictionary.
 
         The returned structure converts XML elements into Python-native types
@@ -177,7 +185,7 @@ class ObservationSequence:
 
         return all_params
 
-    def _xml_element_to_clean_dict(self, element):
+    def _xml_element_to_clean_dict(self, element: ET.Element) -> Any:
         """Convert XML element to dictionary with clean values (no _text wrappers)."""
         result = {}
 
@@ -209,7 +217,7 @@ class ObservationSequence:
 
         return result
 
-    def get_flat_payload_parameters(self):
+    def get_flat_payload_parameters(self) -> Dict[str, Any]:
         """Return a flattened mapping of payload parameters.
 
         Keys use dot-notation to represent nesting (e.g.
@@ -226,7 +234,7 @@ class ObservationSequence:
 
         return flat_params
 
-    def _flatten_xml_element(self, element, prefix, result_dict):
+    def _flatten_xml_element(self, element: ET.Element, prefix: str, result_dict: Dict[str, Any]) -> None:
         """Flatten XML element to dot-notation dictionary."""
         # Add element text if it exists
         if element.text and element.text.strip():
@@ -249,8 +257,8 @@ class Visit:
     """Represents a visit in the science calendar."""
 
     def __init__(self, id, sequences):
-        self.id = id
-        self.sequences = sequences
+        self.id: str = id
+        self.sequences: List["ObservationSequence"] = sequences
 
     @property
     def total_duration(self):
@@ -276,7 +284,7 @@ class Visit:
             return None
         return np.max([seq.stop_time for seq in self.sequences])
 
-    def copy(self, sequences=None):
+    def copy(self, sequences: Optional[List["ObservationSequence"]] = None) -> "Visit":
         """Create a copy of this visit, optionally with different sequences."""
         if sequences is None:
             sequences = [seq.copy() for seq in self.sequences]
@@ -289,12 +297,14 @@ class Visit:
 class ScienceCalendar:
     """Represents a complete Science Calendar."""
 
-    def __init__(self, metadata, visits, visibility=None):
-        self.metadata = metadata
-        self.visits = visits
+    def __init__(
+        self, metadata: Optional[Dict[str, Any]], visits: List[Visit], visibility: Any = None
+    ):
+        self.metadata: Dict[str, Any] = metadata or {}
+        self.visits: List[Visit] = visits
         self.visibility = visibility
 
-    def set_visibility_calculator(self, visibility):
+    def set_visibility_calculator(self, visibility: Any) -> None:
         """Set or update the visibility calculator."""
         self.visibility = visibility
 
@@ -309,17 +319,17 @@ class ScienceCalendar:
         return np.sum([visit.total_duration for visit in self.visits])
 
     @property
-    def total_duration_minutes(self):
+    def total_duration_minutes(self) -> float:
         """Total duration of all observations in minutes."""
         return self.total_duration.to(u.s).value / 60
 
     @property
-    def total_duration_hours(self):
+    def total_duration_hours(self) -> float:
         """Total duration of all observations in hours."""
         return self.total_duration_minutes / 60
 
     @property
-    def total_duration_days(self):
+    def total_duration_days(self) -> float:
         """Total duration of all observations in days."""
         return self.total_duration_minutes / (60 * 24)
 
@@ -347,12 +357,12 @@ class ScienceCalendar:
         return latest - earliest
 
     @property
-    def calendar_span_days(self):
+    def calendar_span_days(self) -> float:
         """Total span of the calendar from first to last observation in days."""
         return self.calendar_span.to(u.d).value
 
     @property
-    def duty_cycle_percent(self):
+    def duty_cycle_percent(self) -> float:
         """Percentage of calendar span that is actually observing."""
         span_days = self.calendar_span_days
         if span_days == 0:
@@ -391,7 +401,7 @@ class ScienceCalendar:
 
         return np.min(all_times), np.max(all_times)
 
-    def get_summary_stats(self):
+    def get_summary_stats(self) -> Dict[str, Any]:
         """Get comprehensive summary statistics."""
         start_date, end_date = self.date_range
         priority_stats = self.priority_breakdown
@@ -419,7 +429,7 @@ class ScienceCalendar:
 
         return stats
 
-    def copy(self):
+    def copy(self) -> "ScienceCalendar":
         """Create a complete deep copy of this calendar."""
         copied_visits = [visit.copy() for visit in self.visits]
         return ScienceCalendar(
@@ -428,7 +438,7 @@ class ScienceCalendar:
             visibility=self.visibility,
         )
 
-    def get_sequence(self, visit_id, sequence_id):
+    def get_sequence(self, visit_id: str, sequence_id: str) -> Optional["ObservationSequence"]:
         """Get observation sequence by visit ID and sequence ID."""
         for visit in self.visits:
             if visit.id == visit_id:
@@ -437,7 +447,9 @@ class ScienceCalendar:
                         return sequence
         return None
 
-    def replace_sequence(self, visit_id, sequence_id, new_sequence):
+    def replace_sequence(
+        self, visit_id: str, sequence_id: str, new_sequence: "ObservationSequence"
+    ) -> bool:
         """
         Replace an existing sequence with a new one.
 

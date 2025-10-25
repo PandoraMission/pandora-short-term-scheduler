@@ -53,3 +53,6 @@ smex2024
 
 # VSC
 .vscode/
+
+# Ignore test/site builds
+site_test_build/

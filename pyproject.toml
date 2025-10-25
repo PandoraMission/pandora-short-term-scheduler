@@ -6,7 +6,7 @@ authors = [
     {name = "Tom Barclay",email = "barclay.astro@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.10 <4.0"
+requires-python = ">=3.10,<4.0"
 
 dependencies = [
     "rich (>=13.9.4,<14.0.0)",
@@ -27,6 +27,7 @@ pytest = "^8.3.4"
 black = "^25.1.0"
 isort = "^6.0.0"
 flake8 = "^7.1.2"
+ruff = "^0.6.0"
 jupyterlab = "^4.3.5"
 mkdocs = "^1.6.1"
 mkdocs-jupyter = "^0.25.1"

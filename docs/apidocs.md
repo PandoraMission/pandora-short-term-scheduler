@@ -1,7 +1,9 @@
 # API Documentation
 
-This contains automatically generated API documentation for the example function in this repository. You can add more information to this markdown file as needed.
+This file generates API reference documentation using `mkdocstrings` for the
+package contained in this repository. It is a simple starting point — update
+the entries below to document the modules you care about.
 
-::: packagename.module.example_function
+::: shortschedule
     selection:
       docstring_style: numpy
