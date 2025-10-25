@@ -42,7 +42,6 @@ plugins:
   - mkdocs-jupyter:
       execute: false
   - mkdocstrings:
-  - mkdocstrings:
       default_handler: python
       handlers:
         python:
