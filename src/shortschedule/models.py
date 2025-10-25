@@ -20,9 +20,9 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional
 
 # Third-party
-from astropy.time import Time, TimeDelta
 import astropy.units as u
 import numpy as np
+from astropy.time import Time, TimeDelta
 
 
 class ObservationSequence:
@@ -157,7 +157,9 @@ class ObservationSequence:
                 return child_elem.text.strip()
         return default
 
-    def set_payload_parameter(self, category: str, parameter_name: str, value: Any) -> bool:
+    def set_payload_parameter(
+        self, category: str, parameter_name: str, value: Any
+    ) -> bool:
         """Set payload parameter value in XML structure."""
         if category not in self.payload_params:
             return False
@@ -234,7 +236,9 @@ class ObservationSequence:
 
         return flat_params
 
-    def _flatten_xml_element(self, element: ET.Element, prefix: str, result_dict: Dict[str, Any]) -> None:
+    def _flatten_xml_element(
+        self, element: ET.Element, prefix: str, result_dict: Dict[str, Any]
+    ) -> None:
         """Flatten XML element to dot-notation dictionary."""
         # Add element text if it exists
         if element.text and element.text.strip():
@@ -284,7 +288,9 @@ class Visit:
             return None
         return np.max([seq.stop_time for seq in self.sequences])
 
-    def copy(self, sequences: Optional[List["ObservationSequence"]] = None) -> "Visit":
+    def copy(
+        self, sequences: Optional[List["ObservationSequence"]] = None
+    ) -> "Visit":
         """Create a copy of this visit, optionally with different sequences."""
         if sequences is None:
             sequences = [seq.copy() for seq in self.sequences]
@@ -298,7 +304,10 @@ class ScienceCalendar:
     """Represents a complete Science Calendar."""
 
     def __init__(
-        self, metadata: Optional[Dict[str, Any]], visits: List[Visit], visibility: Any = None
+        self,
+        metadata: Optional[Dict[str, Any]],
+        visits: List[Visit],
+        visibility: Any = None,
     ):
         self.metadata: Dict[str, Any] = metadata or {}
         self.visits: List[Visit] = visits
@@ -438,7 +447,9 @@ class ScienceCalendar:
             visibility=self.visibility,
         )
 
-    def get_sequence(self, visit_id: str, sequence_id: str) -> Optional["ObservationSequence"]:
+    def get_sequence(
+        self, visit_id: str, sequence_id: str
+    ) -> Optional["ObservationSequence"]:
         """Get observation sequence by visit ID and sequence ID."""
         for visit in self.visits:
             if visit.id == visit_id:
@@ -448,7 +459,10 @@ class ScienceCalendar:
         return None
 
     def replace_sequence(
-        self, visit_id: str, sequence_id: str, new_sequence: "ObservationSequence"
+        self,
+        visit_id: str,
+        sequence_id: str,
+        new_sequence: "ObservationSequence",
     ) -> bool:
         """
         Replace an existing sequence with a new one.

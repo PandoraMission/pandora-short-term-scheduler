@@ -14,7 +14,7 @@ without losing attributes or nested elements.
 
 # Standard library
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 # Third-party
 import numpy as np
@@ -23,7 +23,9 @@ from astropy.time import Time
 from .models import ObservationSequence, ScienceCalendar, Visit
 
 
-def parse_science_calendar(xml_path: str, verbose: bool = False) -> "ScienceCalendar":
+def parse_science_calendar(
+    xml_path: str, verbose: bool = False
+) -> "ScienceCalendar":
     """
     Parse a PAN-SCICAL Science Calendar XML file into a `ScienceCalendar` object.
 
@@ -129,7 +131,9 @@ def parse_science_calendar(xml_path: str, verbose: bool = False) -> "ScienceCale
     return ScienceCalendar(metadata=metadata, visits=visits)
 
 
-def _parse_observation_sequence(seq_elem: ET.Element, namespace: Dict[str, str]) -> Optional["ObservationSequence"]:
+def _parse_observation_sequence(
+    seq_elem: ET.Element, namespace: Dict[str, str]
+) -> Optional["ObservationSequence"]:
     """Parse a single `Observation_Sequence` XML element into an
     `ObservationSequence` object.
 
@@ -233,7 +237,12 @@ def _create_clean_element_copy(element: ET.Element) -> ET.Element:
     return new_element
 
 
-def _get_element_text(element: Optional[ET.Element], child_path: str, namespace: Optional[Dict[str, str]] = None, default: Optional[str] = None) -> Optional[str]:
+def _get_element_text(
+    element: Optional[ET.Element],
+    child_path: str,
+    namespace: Optional[Dict[str, str]] = None,
+    default: Optional[str] = None,
+) -> Optional[str]:
     """Safely get text content from an element's child."""
     if element is None:
         return default
@@ -254,7 +263,9 @@ def parse_xml_element(xml_string: str) -> ET.Element:
     return _create_clean_element_copy(root)
 
 
-def write_science_calendar(calendar: "ScienceCalendar", output_path: str) -> str:
+def write_science_calendar(
+    calendar: "ScienceCalendar", output_path: str
+) -> str:
     """Write science calendar to XML file."""
     from .writer import XMLWriter
 

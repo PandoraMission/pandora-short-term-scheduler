@@ -20,6 +20,7 @@ assignments for testing and visualization.
 import copy
 import uuid
 from copy import deepcopy
+from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party
 import numpy as np
@@ -27,7 +28,6 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
-from typing import Any, Dict, List, Optional, Tuple
 
 from .models import ObservationSequence, ScienceCalendar, Visit
 
@@ -229,7 +229,11 @@ class ScheduleProcessor:
         return processed_calendar
 
     def _extract_time_window(
-        self, calendar: ScienceCalendar, window_start: Optional[Any], window_duration_days: int, verbose: bool
+        self,
+        calendar: ScienceCalendar,
+        window_start: Optional[Any],
+        window_duration_days: int,
+        verbose: bool,
     ) -> ScienceCalendar:
         """Extract time-based window from calendar."""
         if isinstance(window_start, str):
@@ -273,7 +277,9 @@ class ScheduleProcessor:
             metadata=calendar.metadata, visits=windowed_visits
         )
 
-    def _process_all_sequences(self, calendar: ScienceCalendar, verbose: bool = False) -> ScienceCalendar:
+    def _process_all_sequences(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> ScienceCalendar:
         """Iterate through sequences and build minute-resolution visibility.
 
         This internal routine constructs a synchronized time grid for the
@@ -356,7 +362,9 @@ class ScheduleProcessor:
 
         return working_calendar
 
-    def _fill_gaps(self, sequence: ObservationSequence, gap_length: int) -> ObservationSequence:
+    def _fill_gaps(
+        self, sequence: ObservationSequence, gap_length: int
+    ) -> ObservationSequence:
         """
         Extend the start of a sequence backward in time to fill a gap.
 
@@ -384,7 +392,9 @@ class ScheduleProcessor:
             payload_params=deepcopy(sequence.payload_params),
         )
 
-    def _get_synchronized_time_grid(self, calendar: ScienceCalendar) -> Tuple[int, Optional[Time], Optional[Time], Any]:
+    def _get_synchronized_time_grid(
+        self, calendar: ScienceCalendar
+    ) -> Tuple[int, Optional[Time], Optional[Time], Any]:
         """Create a minute-resolution time grid covering all sequences.
 
         Returns a tuple (total_minutes, start_time, end_time, time_grid)
@@ -413,7 +423,9 @@ class ScheduleProcessor:
 
         return total_minutes, start_time, end_time, time_grid
 
-    def _fix_visibility(self, calendar: ScienceCalendar, all_minutes_bool: Any) -> ScienceCalendar:
+    def _fix_visibility(
+        self, calendar: ScienceCalendar, all_minutes_bool: Any
+    ) -> ScienceCalendar:
         """
         Fix visibility gaps by extending previous sequences and shrinking current sequences.
         """
@@ -572,7 +584,9 @@ class ScheduleProcessor:
 
         return working_cal
 
-    def get_minute_by_minute_assignments(self, calendar: ScienceCalendar) -> Dict[str, Any]:
+    def get_minute_by_minute_assignments(
+        self, calendar: ScienceCalendar
+    ) -> Dict[str, Any]:
         """Generate assignments using synchronized time grid."""
         # Use synchronized time grid
         total_minutes, start_time, end_time, time_grid = (
@@ -643,7 +657,9 @@ class ScheduleProcessor:
 
         return {"times": times, "assignments": assignments}
 
-    def _update_payload_parameters(self, calendar: ScienceCalendar) -> ScienceCalendar:
+    def _update_payload_parameters(
+        self, calendar: ScienceCalendar
+    ) -> ScienceCalendar:
         """Adjust payload parameters based on observation duration."""
         for visit in calendar.visits:
             visit_id = visit.id
@@ -654,7 +670,9 @@ class ScheduleProcessor:
 
         return calendar
 
-    def _update_payload_parameters_sequence(self, sequence: ObservationSequence) -> ObservationSequence:
+    def _update_payload_parameters_sequence(
+        self, sequence: ObservationSequence
+    ) -> ObservationSequence:
         duration = sequence.duration.to(u.us)
 
         sequence = self._update_VDA_integrations(sequence, duration)
@@ -662,7 +680,9 @@ class ScheduleProcessor:
 
         return sequence
 
-    def _update_VDA_integrations(self, sequence: ObservationSequence, duration: TimeDelta) -> ObservationSequence:
+    def _update_VDA_integrations(
+        self, sequence: ObservationSequence, duration: TimeDelta
+    ) -> ObservationSequence:
 
         # Get parameters
         exposure_time_str = sequence.get_payload_parameter(
@@ -719,7 +739,9 @@ class ScheduleProcessor:
             )
             return sequence
 
-    def _update_NIRDA_integrations(self, sequence: ObservationSequence, duration: TimeDelta) -> ObservationSequence:
+    def _update_NIRDA_integrations(
+        self, sequence: ObservationSequence, duration: TimeDelta
+    ) -> ObservationSequence:
 
         # Get parameters
         ROI_SizeX = int(
@@ -832,7 +854,9 @@ class ScheduleProcessor:
 
         return sequence
 
-    def validate_visibility(self, calendar: ScienceCalendar, report_issues: bool = True) -> List[Dict[str, Any]]:
+    def validate_visibility(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> List[Dict[str, Any]]:
         """Validate that all sequences have good visibility."""
         issues = []
 
@@ -906,7 +930,9 @@ class ScheduleProcessor:
             "priority_breakdown": stats["priority_breakdown"],
         }
 
-    def _analyze_original_visibility(self, calendar: ScienceCalendar, verbose: bool = False) -> None:
+    def _analyze_original_visibility(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> None:
         """Analyze visibility gaps in original calendar."""
         original_gaps = []
         total_gap_time = 0
@@ -1038,7 +1064,10 @@ class ScheduleProcessor:
             )
 
     def debug_sequence_visibility(
-        self, calendar: ScienceCalendar, sequence_id: str, target_name: Optional[str] = None
+        self,
+        calendar: ScienceCalendar,
+        sequence_id: str,
+        target_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Debug visibility for a specific sequence."""
         # Find the sequence
@@ -1097,7 +1126,9 @@ class ScheduleProcessor:
             "visibility_fraction": np.sum(vis) / len(vis),
         }
 
-    def validate_no_overlaps_astropy(self, calendar: ScienceCalendar, report_issues: bool = True) -> List[Dict[str, Any]]:
+    def validate_no_overlaps_astropy(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> List[Dict[str, Any]]:
         """
         Use Astropy's time comparison with proper tolerance.
         """
@@ -1152,7 +1183,9 @@ class ScheduleProcessor:
 
         return overlaps
 
-    def validate_sequence_timing(self, calendar: ScienceCalendar, report_issues: bool = True) -> Dict[str, Any]:
+    def validate_sequence_timing(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> Dict[str, Any]:
         """
         Comprehensive timing validation including overlaps, gaps, and minimum durations.
 
@@ -1296,7 +1329,9 @@ class ScheduleProcessor:
 
         return issues
 
-    def validate_payload_exposures(self, calendar: ScienceCalendar, report_issues: bool = True) -> List[Dict[str, Any]]:
+    def validate_payload_exposures(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> List[Dict[str, Any]]:
         """
         Validate that payload exposure times (single exposure and total requested exposure)
         do not exceed the enclosing sequence duration.

@@ -11,16 +11,16 @@ the documentation and analysis notebooks.
 
 # Standard library
 from datetime import timedelta
+from typing import Any, Optional, Tuple
 
 # Third-party
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.patches import Rectangle
-from matplotlib.figure import Figure
 from astropy.time import Time
-from typing import Any, Optional, Tuple
+from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 
 from .models import ScienceCalendar, Visit
 
@@ -42,7 +42,10 @@ class ScheduleVisualizer:
         self.gap_report = scheduler.get_gap_report()
 
     def plot_gantt_timeline(
-        self, original_calendar: ScienceCalendar, processed_calendar: ScienceCalendar, figsize: Tuple[int, int] = (16, 10)
+        self,
+        original_calendar: ScienceCalendar,
+        processed_calendar: ScienceCalendar,
+        figsize: Tuple[int, int] = (16, 10),
     ) -> Figure:
         """Create a proper Gantt chart style timeline."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
@@ -581,7 +584,9 @@ class ScheduleVisualizer:
 
         return fig1, fig2, fig3, comparison_df
 
-    def _plot_gantt_chart(self, calendar: ScienceCalendar, ax: Any, title: str) -> None:
+    def _plot_gantt_chart(
+        self, calendar: ScienceCalendar, ax: Any, title: str
+    ) -> None:
         """Plot calendar as a proper Gantt chart with targets as rows."""
         if not calendar.visits:
             ax.text(
