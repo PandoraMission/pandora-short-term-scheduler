@@ -1,0 +1,3014 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://pandoramission.github.io/pandora-short-term-scheduler/apidocs/">
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../notebook-example/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.5">
+    
+    
+      
+        <title>API - ShortSchedule</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.8608ea7d.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#api-documentation" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="ShortSchedule" class="md-header__button md-logo" aria-label="ShortSchedule" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 3H5c-1.11 0-2 .89-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ShortSchedule
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              API
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/pandoramission/pandora-short-term-scheduler" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="ShortSchedule" class="md-nav__button md-logo" aria-label="ShortSchedule" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 3H5c-1.11 0-2 .89-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2"/></svg>
+
+    </a>
+    ShortSchedule
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/pandoramission/pandora-short-term-scheduler" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    API
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    API
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      shortschedule
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      ObservationSequence
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ObservationSequence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      duration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="duration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.duration--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.start_time_str" class="md-nav__link">
+    <span class="md-ellipsis">
+      start_time_str
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.stop_time_str" class="md-nav__link">
+    <span class="md-ellipsis">
+      stop_time_str
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      copy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_all_payload_parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_all_payload_parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_flat_payload_parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_flat_payload_parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_nested_payload_parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_nested_payload_parameter
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_payload_parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_payload_parameter
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="get_payload_parameter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_payload_parameter--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_payload_parameter--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.set_payload_parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      set_payload_parameter
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor" class="md-nav__link">
+    <span class="md-ellipsis">
+      ScheduleProcessor
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ScheduleProcessor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor--public-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Public methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.debug_sequence_visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      debug_sequence_visibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.get_gap_report" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_gap_report
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.get_minute_by_minute_assignments" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_minute_by_minute_assignments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_gap_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      print_gap_summary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_timing_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      print_timing_summary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      process_calendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="process_calendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar--side-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      Side effects
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_no_overlaps_astropy" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_no_overlaps_astropy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_payload_exposures" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_payload_exposures
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_payload_exposures">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_payload_exposures--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_sequence_timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_sequence_timing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_sequence_timing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_sequence_timing--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_visibility
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      ScienceCalendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ScienceCalendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.calendar_span" class="md-nav__link">
+    <span class="md-ellipsis">
+      calendar_span
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.calendar_span_days" class="md-nav__link">
+    <span class="md-ellipsis">
+      calendar_span_days
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.date_range" class="md-nav__link">
+    <span class="md-ellipsis">
+      date_range
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.duty_cycle_percent" class="md-nav__link">
+    <span class="md-ellipsis">
+      duty_cycle_percent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.priority_breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      priority_breakdown
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration_days" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_days
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration_hours" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_hours
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration_minutes" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_minutes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_sequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_sequences
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      copy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.get_sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_sequence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.get_summary_stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_summary_stats
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.replace_sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      replace_sequence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.set_visibility_calculator" class="md-nav__link">
+    <span class="md-ellipsis">
+      set_visibility_calculator
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.Visit" class="md-nav__link">
+    <span class="md-ellipsis">
+      Visit
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Visit">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.end_time" class="md-nav__link">
+    <span class="md-ellipsis">
+      end_time
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.start_time" class="md-nav__link">
+    <span class="md-ellipsis">
+      start_time
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.total_duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.total_duration_minutes" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_minutes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      copy
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter" class="md-nav__link">
+    <span class="md-ellipsis">
+      XMLWriter
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="XMLWriter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter.write_calendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      write_calendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="write_calendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter.write_calendar--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters:
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter.write_calendar--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns:
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.get_version" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_version
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      parse_science_calendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="parse_science_calendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar--notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.setup_logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      setup_logging
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="setup_logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.setup_logging--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters:
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../notebook-example/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Example using the short calendar generation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule" class="md-nav__link">
+    <span class="md-ellipsis">
+      shortschedule
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      ObservationSequence
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ObservationSequence">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      duration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="duration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.duration--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.start_time_str" class="md-nav__link">
+    <span class="md-ellipsis">
+      start_time_str
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.stop_time_str" class="md-nav__link">
+    <span class="md-ellipsis">
+      stop_time_str
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      copy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_all_payload_parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_all_payload_parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_flat_payload_parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_flat_payload_parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_nested_payload_parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_nested_payload_parameter
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_payload_parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_payload_parameter
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="get_payload_parameter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_payload_parameter--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.get_payload_parameter--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ObservationSequence.set_payload_parameter" class="md-nav__link">
+    <span class="md-ellipsis">
+      set_payload_parameter
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor" class="md-nav__link">
+    <span class="md-ellipsis">
+      ScheduleProcessor
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ScheduleProcessor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor--public-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      Public methods
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.debug_sequence_visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      debug_sequence_visibility
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.get_gap_report" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_gap_report
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.get_minute_by_minute_assignments" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_minute_by_minute_assignments
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_gap_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      print_gap_summary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_timing_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      print_timing_summary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      process_calendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="process_calendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar--side-effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      Side effects
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.process_calendar--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_no_overlaps_astropy" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_no_overlaps_astropy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_payload_exposures" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_payload_exposures
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_payload_exposures">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_payload_exposures--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_sequence_timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_sequence_timing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_sequence_timing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_sequence_timing--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_visibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_visibility
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      ScienceCalendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ScienceCalendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.calendar_span" class="md-nav__link">
+    <span class="md-ellipsis">
+      calendar_span
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.calendar_span_days" class="md-nav__link">
+    <span class="md-ellipsis">
+      calendar_span_days
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.date_range" class="md-nav__link">
+    <span class="md-ellipsis">
+      date_range
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.duty_cycle_percent" class="md-nav__link">
+    <span class="md-ellipsis">
+      duty_cycle_percent
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.priority_breakdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      priority_breakdown
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration_days" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_days
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration_hours" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_hours
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_duration_minutes" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_minutes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.total_sequences" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_sequences
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      copy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.get_sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_sequence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.get_summary_stats" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_summary_stats
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.replace_sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      replace_sequence
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScienceCalendar.set_visibility_calculator" class="md-nav__link">
+    <span class="md-ellipsis">
+      set_visibility_calculator
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.Visit" class="md-nav__link">
+    <span class="md-ellipsis">
+      Visit
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Visit">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.end_time" class="md-nav__link">
+    <span class="md-ellipsis">
+      end_time
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.start_time" class="md-nav__link">
+    <span class="md-ellipsis">
+      start_time
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.total_duration" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.total_duration_minutes" class="md-nav__link">
+    <span class="md-ellipsis">
+      total_duration_minutes
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.Visit.copy" class="md-nav__link">
+    <span class="md-ellipsis">
+      copy
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter" class="md-nav__link">
+    <span class="md-ellipsis">
+      XMLWriter
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="XMLWriter">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter.write_calendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      write_calendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="write_calendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter.write_calendar--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters:
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.XMLWriter.write_calendar--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns:
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.get_version" class="md-nav__link">
+    <span class="md-ellipsis">
+      get_version
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar" class="md-nav__link">
+    <span class="md-ellipsis">
+      parse_science_calendar
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="parse_science_calendar">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.parse_science_calendar--notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#shortschedule.setup_logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      setup_logging
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="setup_logging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.setup_logging--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters:
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="api-documentation">API Documentation</h1>
+<p>This file generates API reference documentation using <code>mkdocstrings</code> for the
+package contained in this repository. It is a simple starting point — update
+the entries below to document the modules you care about.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="shortschedule"></a>
+    <div class="doc doc-contents first">
+
+        <p>shortschedule - Science Calendar Processing and Scheduling</p>
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="shortschedule.ObservationSequence" class="doc doc-heading">
+            <code>ObservationSequence</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Represents an observation sequence within a visit.</p>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ObservationSequence.duration" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">duration</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return the sequence duration as an Astropy TimeDelta.</p>
+<h5 id="shortschedule.ObservationSequence.duration--returns">Returns</h5>
+<p>astropy.time.TimeDelta
+    TimeDelta representing stop_time - start_time. The caller can
+    convert to seconds/minutes/hours via <code>.sec</code> or astropy unit methods.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ObservationSequence.start_time_str" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">start_time_str</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Format start time as ISO string with Z suffix.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ObservationSequence.stop_time_str" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">stop_time_str</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Format stop time as ISO string with Z suffix.</p>
+    </div>
+
+</div>
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ObservationSequence.copy" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">copy</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create a deep copy of this observation sequence.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ObservationSequence.get_all_payload_parameters" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_all_payload_parameters</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return all payload parameters as a nested dictionary.</p>
+<p>The returned structure converts XML elements into Python-native types
+(strings, dicts, lists) making it easier to inspect payload values in
+tests and analysis code.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ObservationSequence.get_flat_payload_parameters" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_flat_payload_parameters</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return a flattened mapping of payload parameters.</p>
+<p>Keys use dot-notation to represent nesting (e.g.
+'AcquireVisCamScienceData.ExposureTime_us'). Attributes are
+represented using the '@' prefix (e.g. 'Payload.@attr').</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ObservationSequence.get_nested_payload_parameter" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_nested_payload_parameter</span><span class="p">(</span><span class="n">category</span><span class="p">,</span> <span class="n">parameter_name</span><span class="p">,</span> <span class="n">sub_parameter_name</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get nested payload parameter value.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ObservationSequence.get_payload_parameter" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_payload_parameter</span><span class="p">(</span><span class="n">category</span><span class="p">,</span> <span class="n">parameter_name</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Retrieve a payload parameter from the stored XML payload element.</p>
+<h5 id="shortschedule.ObservationSequence.get_payload_parameter--parameters">Parameters</h5>
+<p>category : str
+    Top-level payload category name (e.g. 'AcquireVisCamScienceData').
+parameter_name : str
+    Child element name to retrieve under the category element.
+default : any, optional
+    Value to return if the parameter or category is not present.</p>
+<h5 id="shortschedule.ObservationSequence.get_payload_parameter--returns">Returns</h5>
+<p>str or dict or None
+    - If the element is a leaf with text, a stripped string is returned.
+    - If the element has children, a dict mapping child tag -&gt; value is returned.
+    - If missing, <code>default</code> is returned.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ObservationSequence.set_payload_parameter" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">set_payload_parameter</span><span class="p">(</span><span class="n">category</span><span class="p">,</span> <span class="n">parameter_name</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Set payload parameter value in XML structure.</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="shortschedule.ScheduleProcessor" class="doc doc-heading">
+            <code>ScheduleProcessor</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Main class for processing and adjusting science calendars with updated TLE.</p>
+<h4 id="shortschedule.ScheduleProcessor--public-methods">Public methods</h4>
+<ul>
+<li>process_calendar(calendar, window_start=None, window_duration_days=21, verbose=False)
+    Process a calendar and return an updated ScienceCalendar.</li>
+<li>get_gap_report()
+    Return a structured report summarizing visibility gaps and actions taken.</li>
+</ul>
+<p>The class expects <code>Visibility(tle1, tle2)</code> to offer <code>get_visibility(coord, times)</code>
+returning a boolean array of the same length as <code>times</code>.</p>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.debug_sequence_visibility" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">debug_sequence_visibility</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">sequence_id</span><span class="p">,</span> <span class="n">target_name</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Debug visibility for a specific sequence.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.get_gap_report" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_gap_report</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return comprehensive gap analysis report.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.get_minute_by_minute_assignments" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_minute_by_minute_assignments</span><span class="p">(</span><span class="n">calendar</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Generate assignments using synchronized time grid.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.print_gap_summary" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">print_gap_summary</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Print a human-readable summary of gap analysis.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.print_timing_summary" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">print_timing_summary</span><span class="p">(</span><span class="n">calendar</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Print a quick timing summary.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.process_calendar" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">process_calendar</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">window_start</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">window_duration_days</span><span class="o">=</span><span class="mi">21</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Process a <code>ScienceCalendar</code> and return an updated calendar.</p>
+<p>The processor performs a time-window extraction, computes
+minute-by-minute visibility using the configured TLEs, identifies
+visibility gaps, attempts to fill gaps by extending previous
+sequences (and shrinking following sequences), updates payload
+integration parameters, and produces a <code>gap_report</code> summary.</p>
+<h5 id="shortschedule.ScheduleProcessor.process_calendar--side-effects">Side effects</h5>
+<ul>
+<li>The returned <code>ScienceCalendar</code> will have its <code>.metadata</code> updated
+  to include the TLE lines, a <code>processed_datetime</code> and the
+  generated <code>gap_report</code> to aid downstream writing and analysis.</li>
+</ul>
+<h5 id="shortschedule.ScheduleProcessor.process_calendar--parameters">Parameters</h5>
+<p>calendar : ScienceCalendar
+    Input calendar to process.
+window_start : str or astropy.time.Time, optional
+    ISO string or Time object indicating the window start.
+window_duration_days : int, optional
+    Number of days to include in the processing window.
+verbose : bool, optional
+    Print diagnostics when True.</p>
+<h5 id="shortschedule.ScheduleProcessor.process_calendar--returns">Returns</h5>
+<p>ScienceCalendar
+    Processed calendar with updated sequences and metadata.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.validate_no_overlaps_astropy" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">validate_no_overlaps_astropy</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">report_issues</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Use Astropy's time comparison with proper tolerance.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.validate_payload_exposures" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">validate_payload_exposures</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">report_issues</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Validate that payload exposure times (single exposure and total requested exposure)
+do not exceed the enclosing sequence duration.</p>
+<p>This currently checks the common VIS camera payload category
+<code>AcquireVisCamScienceData</code> for keys:
+  - <code>ExposureTime_us</code> (microseconds per frame)
+  - <code>NumTotalFramesRequested</code> (total frames)
+  - <code>FramesPerCoadd</code> (used when NumTotalFramesRequested is not present)</p>
+<p>It also heuristically scans flattened payload parameters for any key containing
+the string <code>exposure</code> and checks single-exposure values against the sequence
+duration (assumes microseconds when the key ends with <code>_us</code>).</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_payload_exposures--returns">Returns</h5>
+<p>list
+    A list of issue dicts found. Empty list if none.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.validate_sequence_timing" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">validate_sequence_timing</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">report_issues</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Comprehensive timing validation including overlaps, gaps, and minimum durations.</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_sequence_timing--returns">Returns</h5>
+<p>dict
+    Dictionary with different types of timing issues</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.validate_visibility" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">validate_visibility</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">report_issues</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Validate that all sequences have good visibility.</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="shortschedule.ScienceCalendar" class="doc doc-heading">
+            <code>ScienceCalendar</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Represents a complete Science Calendar.</p>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.calendar_span" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">calendar_span</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total span of the calendar from first to last observation.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.calendar_span_days" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">calendar_span_days</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total span of the calendar from first to last observation in days.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.date_range" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">date_range</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Start and end dates of the calendar.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.duty_cycle_percent" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">duty_cycle_percent</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Percentage of calendar span that is actually observing.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.priority_breakdown" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">priority_breakdown</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Breakdown of sequences by priority level.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.total_duration" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_duration</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total duration of all observations in minutes.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.total_duration_days" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_duration_days</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total duration of all observations in days.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.total_duration_hours" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_duration_hours</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total duration of all observations in hours.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.total_duration_minutes" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_duration_minutes</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total duration of all observations in minutes.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.ScienceCalendar.total_sequences" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_sequences</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total number of observation sequences.</p>
+    </div>
+
+</div>
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScienceCalendar.copy" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">copy</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create a complete deep copy of this calendar.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScienceCalendar.get_sequence" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_sequence</span><span class="p">(</span><span class="n">visit_id</span><span class="p">,</span> <span class="n">sequence_id</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get observation sequence by visit ID and sequence ID.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScienceCalendar.get_summary_stats" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_summary_stats</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get comprehensive summary statistics.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScienceCalendar.replace_sequence" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">replace_sequence</span><span class="p">(</span><span class="n">visit_id</span><span class="p">,</span> <span class="n">sequence_id</span><span class="p">,</span> <span class="n">new_sequence</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Replace an existing sequence with a new one.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>visit_id</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>ID of the visit containing the sequence</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>sequence_id</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>ID of the sequence to replace</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>new_sequence</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="shortschedule.models.ObservationSequence" href="#shortschedule.ObservationSequence">ObservationSequence</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>New ObservationSequence object to replace with</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>bool</code></td>            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>True if replacement was successful, False if sequence not found</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScienceCalendar.set_visibility_calculator" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">set_visibility_calculator</span><span class="p">(</span><span class="n">visibility</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Set or update the visibility calculator.</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="shortschedule.Visit" class="doc doc-heading">
+            <code>Visit</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Represents a visit in the science calendar.</p>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.Visit.end_time" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">end_time</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>End time of the last sequence in this visit.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.Visit.start_time" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">start_time</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Start time of the first sequence in this visit.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.Visit.total_duration" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_duration</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total duration of all sequences in this visit.</p>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="shortschedule.Visit.total_duration_minutes" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">total_duration_minutes</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Total duration of all sequences in this visit (minutes).</p>
+    </div>
+
+</div>
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.Visit.copy" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">copy</span><span class="p">(</span><span class="n">sequences</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create a copy of this visit, optionally with different sequences.</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="shortschedule.XMLWriter" class="doc doc-heading">
+            <code>XMLWriter</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Class for writing processed science calendars back to XML format.</p>
+<p>The writer provides <code>write_calendar(calendar, output_path=None, ...)</code> which
+either writes to the provided <code>output_path</code> or generates a filename using
+the PAN naming convention.</p>
+
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.XMLWriter.write_calendar" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">write_calendar</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">output_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">mission_phase</span><span class="o">=</span><span class="s1">&#39;TST&#39;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Write science calendar to XML file with proper naming convention.</p>
+<h5 id="shortschedule.XMLWriter.write_calendar--parameters">Parameters:</h5>
+<p>calendar : ScienceCalendar
+    Calendar to write
+output_path : str, optional
+    Full output path. If None, generates filename automatically
+mission_phase : str
+    Mission phase code: 'TST', 'COM', or 'OPS' (default: 'TST')
+revision : int
+    Revision number (default: 1)
+verbose : bool
+    Print writing details</p>
+<h5 id="shortschedule.XMLWriter.write_calendar--returns">Returns:</h5>
+<p>str
+    Path to written file</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="shortschedule.get_version" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_version</span><span class="p">()</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get package version.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="shortschedule.parse_science_calendar" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">parse_science_calendar</span><span class="p">(</span><span class="n">xml_path</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Parse a PAN-SCICAL Science Calendar XML file into a <code>ScienceCalendar</code> object.</p>
+<h4 id="shortschedule.parse_science_calendar--parameters">Parameters</h4>
+<p>xml_path : str
+    Path to the PAN-SCICAL XML file.
+verbose : bool, optional
+    If True, print progress messages.</p>
+<h4 id="shortschedule.parse_science_calendar--returns">Returns</h4>
+<p>ScienceCalendar
+    In-memory representation of the calendar with visits and observation
+    sequences. Payload parameter XML fragments are preserved as
+    ElementTree elements under each sequence.</p>
+<h4 id="shortschedule.parse_science_calendar--notes">Notes</h4>
+<p>The parser tolerates missing optional sections and returns an empty
+<code>ScienceCalendar</code> when no visits are found. It uses the namespace
+'/pandora/calendar/' expected in PAN-SCICAL files.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="shortschedule.setup_logging" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">setup_logging</span><span class="p">(</span><span class="n">level</span><span class="o">=</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Setup basic logging configuration.</p>
+<h4 id="shortschedule.setup_logging--parameters">Parameters:</h4>
+<p>level : int
+    Logging level (default: logging.INFO)</p>
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "..", "features": ["content.code.copy", "content.code.annotate"], "search": "../assets/javascripts/workers/search.f8cc74c7.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.f1b6f286.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+      
+        <script src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
