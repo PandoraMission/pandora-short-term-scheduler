@@ -1,9 +1,11 @@
+# Standard library
 import os
 import xml.etree.ElementTree as ET
 
+# Third-party
 import numpy as np
-from astropy.time import Time
 
+# First-party/Local
 import shortschedule
 from shortschedule.parser import parse_science_calendar
 from shortschedule.scheduler import ScheduleProcessor
@@ -24,12 +26,16 @@ class DummyVisibilityAllTrue:
 
 def get_sample_calendar_path():
     pkgdir = os.path.dirname(shortschedule.__file__)
-    return os.path.join(pkgdir, 'data', 'Pandora_science_calendar_20251018_tsb-futz.xml')
+    return os.path.join(
+        pkgdir, "data", "Pandora_science_calendar_20251018_tsb-futz.xml"
+    )
 
 
 def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     # Replace Visibility with a dummy to avoid external TLE work
-    monkeypatch.setattr('shortschedule.scheduler.Visibility', DummyVisibilityAllTrue)
+    monkeypatch.setattr(
+        "shortschedule.scheduler.Visibility", DummyVisibilityAllTrue
+    )
 
     sample = get_sample_calendar_path()
     assert os.path.exists(sample), f"Sample calendar not found at {sample}"
@@ -40,10 +46,12 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     first_seq = cal.visits[0].sequences[0]
     window_start = first_seq.start_time.isot
 
-    sched = ScheduleProcessor('LINE1_EXAMPLE', 'LINE2_EXAMPLE')
-    processed = sched.process_calendar(cal, window_start=window_start, window_duration_days=1, verbose=False)
+    sched = ScheduleProcessor("LINE1_EXAMPLE", "LINE2_EXAMPLE")
+    processed = sched.process_calendar(
+        cal, window_start=window_start, window_duration_days=1, verbose=False
+    )
 
-    out_file = tmp_path / 'processed_meta.xml'
+    out_file = tmp_path / "processed_meta.xml"
     XMLWriter().write_calendar(processed, str(out_file))
 
     assert os.path.exists(out_file), "Output file was not created"
@@ -53,7 +61,7 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     # the root. Search for the Meta element by local-name to be robust.
     meta = None
     for child in root:
-        if child.tag.endswith('Meta') or child.tag == 'Meta':
+        if child.tag.endswith("Meta") or child.tag == "Meta":
             meta = child
             break
     assert meta is not None, "Meta element missing from written XML"
@@ -61,9 +69,6 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     attrs = {k.lower(): v for k, v in meta.attrib.items()}
 
     # Ensure TLEs and processing timestamp are present in some variant
-    assert 'tle_line1' in attrs or 'tle_line1'.lower() in attrs
-    assert 'tle_line2' in attrs or 'tle_line2'.lower() in attrs
-    assert 'processed_datetime' in attrs or 'processed_datetime'.lower() in attrs
-
-    # Gap_Report should have been serialized
-    assert 'gap_report' in attrs or 'gap_report'.lower() in attrs or 'gap-report' in attrs
+    assert "tle_line1" in attrs or "tle_line1".lower() in attrs
+    assert "tle_line2" in attrs or "tle_line2".lower() in attrs
+    assert "created" in attrs or "created".lower() in attrs

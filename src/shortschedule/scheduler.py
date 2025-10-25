@@ -16,17 +16,19 @@ The implementation focuses on correctness and traceability: it stores a
 assignments for testing and visualization.
 """
 
-import numpy as np
+# Standard library
 import copy
-from astropy.time import Time, TimeDelta
-from astropy.coordinates import SkyCoord
-from astropy import units as u
-from pandoravisibility import Visibility
-from copy import deepcopy
-import xml.etree.ElementTree as ET
-from .parser import parse_science_calendar
-from .models import ScienceCalendar, Visit, ObservationSequence
 import uuid
+from copy import deepcopy
+
+# Third-party
+import numpy as np
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+from astropy.time import Time, TimeDelta
+from pandoravisibility import Visibility
+
+from .models import ObservationSequence, ScienceCalendar, Visit
 
 
 class ScheduleProcessor:
@@ -160,16 +162,42 @@ class ScheduleProcessor:
         self._finalize_gap_report()
 
         calendar_status = "VALID"
-        if len(self.validate_visibility(processed_calendar, report_issues=False)) > 0:
+        if (
+            len(
+                self.validate_visibility(
+                    processed_calendar, report_issues=False
+                )
+            )
+            > 0
+        ):
             print("Warning: Some visibility gaps remain unfilled.")
             calendar_status = "INVALID"
-        if len(self.validate_payload_exposures(processed_calendar, report_issues=False)) > 0:
+        if (
+            len(
+                self.validate_payload_exposures(
+                    processed_calendar, report_issues=False
+                )
+            )
+            > 0
+        ):
             print("Warning: Some payload exposures are invalid.")
             calendar_status = "INVALID"
-        if len(self.validate_no_overlaps_astropy(processed_calendar, report_issues=False)) > 0:
+        if (
+            len(
+                self.validate_no_overlaps_astropy(
+                    processed_calendar, report_issues=False
+                )
+            )
+            > 0
+        ):
             print("Warning: Some sequence timings are invalid.")
             calendar_status = "INVALID"
-        if self.validate_sequence_timing(processed_calendar, report_issues=False)["timing_summary"]['total_issues'] > 0:
+        if (
+            self.validate_sequence_timing(
+                processed_calendar, report_issues=False
+            )["timing_summary"]["total_issues"]
+            > 0
+        ):
             print("Warning: Some sequence timings are invalid.")
             calendar_status = "INVALID"
 
@@ -183,8 +211,10 @@ class ScheduleProcessor:
                 "created": Time.now().isot,
                 "delivery_id": str(uuid.uuid4()),
                 "total_visits": len(processed_calendar.visits),
-                "total_sequences": sum(len(visit.sequences) for visit in processed_calendar.visits),
-                "calendar_status": calendar_status
+                "total_sequences": sum(
+                    len(visit.sequences) for visit in processed_calendar.visits
+                ),
+                "calendar_status": calendar_status,
             }
         )
 
@@ -619,9 +649,7 @@ class ScheduleProcessor:
             for seq in visit.sequences:
                 sequence_id = seq.id
                 new_sequence = self._update_payload_parameters_sequence(seq)
-                calendar.replace_sequence(
-                    visit_id, sequence_id, new_sequence
-                )
+                calendar.replace_sequence(visit_id, sequence_id, new_sequence)
 
         return calendar
 
@@ -730,25 +758,46 @@ class ScheduleProcessor:
         )
 
         seq_identifier = f"{sequence.id} ({sequence.target} @ {sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
-    
 
         required_params = {
-            'SC_Groups': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_Groups'),
-            'SC_ReadFrames': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_ReadFrames'),
-            'SC_DropFrames1': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_DropFrames1'),
-            'SC_DropFrames2': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_DropFrames2'),
-            'SC_DropFrames3': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_DropFrames3'),
-            'SC_Resets1': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_Resets1'),
-            'SC_Resets2': sequence.get_payload_parameter('AcquireInfCamImages', 'SC_Resets2'),
-            'ROI_SizeX': sequence.get_payload_parameter('AcquireInfCamImages', 'ROI_SizeX'),
-            'ROI_SizeY': sequence.get_payload_parameter('AcquireInfCamImages', 'ROI_SizeY'),
+            "SC_Groups": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Groups"
+            ),
+            "SC_ReadFrames": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_ReadFrames"
+            ),
+            "SC_DropFrames1": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_DropFrames1"
+            ),
+            "SC_DropFrames2": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_DropFrames2"
+            ),
+            "SC_DropFrames3": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_DropFrames3"
+            ),
+            "SC_Resets1": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Resets1"
+            ),
+            "SC_Resets2": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Resets2"
+            ),
+            "ROI_SizeX": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "ROI_SizeX"
+            ),
+            "ROI_SizeY": sequence.get_payload_parameter(
+                "AcquireInfCamImages", "ROI_SizeY"
+            ),
         }
-        
+
         # Check for missing parameters
-        missing_params = [name for name, value in required_params.items() if value is None]
-        
+        missing_params = [
+            name for name, value in required_params.items() if value is None
+        ]
+
         if missing_params:
-            print(f"Warning: Missing NIRDA parameters for sequence {seq_identifier}")
+            print(
+                f"Warning: Missing NIRDA parameters for sequence {seq_identifier}"
+            )
             print(f"Missing parameters: {', '.join(missing_params)}")
             return sequence
 
@@ -951,7 +1000,7 @@ class ScheduleProcessor:
         print("VISIBILITY GAP ANALYSIS SUMMARY")
         print("=" * 60)
 
-        print(f"\nORIGINAL CALENDAR:")
+        print("\nORIGINAL CALENDAR:")
         print(
             f"  Total Sequences: {report['original_calendar_stats']['total_sequences']}"
         )
@@ -962,7 +1011,7 @@ class ScheduleProcessor:
             f"  Duty Cycle: {report['original_calendar_stats']['duty_cycle_percent']:.1f}%"
         )
 
-        print(f"\nPROCESSED CALENDAR:")
+        print("\nPROCESSED CALENDAR:")
         print(
             f"  Total Sequences: {report['processed_calendar_stats']['total_sequences']}"
         )
@@ -973,7 +1022,7 @@ class ScheduleProcessor:
             f"  Duty Cycle: {report['processed_calendar_stats']['duty_cycle_percent']:.1f}%"
         )
 
-        print(f"\nIMPROVEMENTS:")
+        print("\nIMPROVEMENTS:")
         print(
             f"  Duration Gained: {summary.get('duration_improvement_hours', 0):.1f} hours"
         )
@@ -1030,12 +1079,12 @@ class ScheduleProcessor:
 
         vis = self.visibility.get_visibility(target_coord, times)
 
-        print(f"\nMinute-by-minute visibility:")
+        print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):
             status = "✓ VISIBLE" if visible else "✗ NOT VISIBLE"
             print(f"  Minute {i+1}: {time.isot} - {status}")
 
-        print(f"\nVisibility Summary:")
+        print("\nVisibility Summary:")
         print(f"  Total minutes: {len(vis)}")
         print(f"  Visible minutes: {np.sum(vis)}")
         print(f"  Visibility fraction: {np.sum(vis)/len(vis):.3f}")
@@ -1088,7 +1137,7 @@ class ScheduleProcessor:
                 overlaps.append(overlap_issue)
 
                 if report_issues:
-                    print(f"True overlap detected:")
+                    print("True overlap detected:")
                     print(
                         f"  Sequence {seq1.id} ({seq1.target}) ends at {seq1.stop_time}"
                     )
@@ -1273,9 +1322,15 @@ class ScheduleProcessor:
                 seq_duration_sec = seq.duration.sec
 
                 # 1) Check AcquireVisCamScienceData (VDA) - common VIS camera
-                exposure_us = seq.get_payload_parameter('AcquireVisCamScienceData', 'ExposureTime_us')
-                num_frames = seq.get_payload_parameter('AcquireVisCamScienceData', 'NumTotalFramesRequested')
-                frames_per_coadd = seq.get_payload_parameter('AcquireVisCamScienceData', 'FramesPerCoadd')
+                exposure_us = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "ExposureTime_us"
+                )
+                num_frames = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "NumTotalFramesRequested"
+                )
+                frames_per_coadd = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "FramesPerCoadd"
+                )
 
                 if exposure_us is not None:
                     try:
@@ -1287,36 +1342,42 @@ class ScheduleProcessor:
                         single_exp_sec = exposure_us_val / 1e6
                         if single_exp_sec > seq_duration_sec:
                             issue = {
-                                'visit_id': visit.id,
-                                'sequence_id': seq.id,
-                                'target': seq.target,
-                                'problem': 'single_exposure_longer_than_sequence',
-                                'exposure_seconds': single_exp_sec,
-                                'sequence_duration_seconds': seq_duration_sec,
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "single_exposure_longer_than_sequence",
+                                "exposure_seconds": single_exp_sec,
+                                "sequence_duration_seconds": seq_duration_sec,
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(f"PAYLOAD ISSUE: sequence {seq.id} single exposure ({single_exp_sec:.3f}s) "
-                                      f"> sequence duration ({seq_duration_sec:.3f}s)")
+                                print(
+                                    f"PAYLOAD ISSUE: sequence {seq.id} single exposure ({single_exp_sec:.3f}s) "
+                                    f"> sequence duration ({seq_duration_sec:.3f}s)"
+                                )
 
                         # If total frames provided, check total exposure
                         if num_frames is not None:
                             try:
                                 total_frames = int(num_frames)
-                                total_exp_sec = (exposure_us_val * total_frames) / 1e6
+                                total_exp_sec = (
+                                    exposure_us_val * total_frames
+                                ) / 1e6
                                 if total_exp_sec > seq_duration_sec:
                                     issue = {
-                                        'visit_id': visit.id,
-                                        'sequence_id': seq.id,
-                                        'target': seq.target,
-                                        'problem': 'total_exposure_longer_than_sequence',
-                                        'total_exposure_seconds': total_exp_sec,
-                                        'sequence_duration_seconds': seq_duration_sec,
+                                        "visit_id": visit.id,
+                                        "sequence_id": seq.id,
+                                        "target": seq.target,
+                                        "problem": "total_exposure_longer_than_sequence",
+                                        "total_exposure_seconds": total_exp_sec,
+                                        "sequence_duration_seconds": seq_duration_sec,
                                     }
                                     issues.append(issue)
                                     if report_issues:
-                                        print(f"PAYLOAD ISSUE: sequence {seq.id} total exposure ({total_exp_sec:.1f}s) "
-                                              f"> sequence duration ({seq_duration_sec:.1f}s)")
+                                        print(
+                                            f"PAYLOAD ISSUE: sequence {seq.id} total exposure ({total_exp_sec:.1f}s) "
+                                            f"> sequence duration ({seq_duration_sec:.1f}s)"
+                                        )
                             except (ValueError, TypeError):
                                 # ignore parse errors; nothing to validate
                                 pass
@@ -1329,26 +1390,28 @@ class ScheduleProcessor:
                                 total_exp_sec = (exposure_us_val * fpc) / 1e6
                                 if total_exp_sec > seq_duration_sec:
                                     issue = {
-                                        'visit_id': visit.id,
-                                        'sequence_id': seq.id,
-                                        'target': seq.target,
-                                        'problem': 'coadd_exposure_longer_than_sequence',
-                                        'coadd_exposure_seconds': total_exp_sec,
-                                        'sequence_duration_seconds': seq_duration_sec,
+                                        "visit_id": visit.id,
+                                        "sequence_id": seq.id,
+                                        "target": seq.target,
+                                        "problem": "coadd_exposure_longer_than_sequence",
+                                        "coadd_exposure_seconds": total_exp_sec,
+                                        "sequence_duration_seconds": seq_duration_sec,
                                     }
                                     issues.append(issue)
                                     if report_issues:
-                                        print(f"PAYLOAD ISSUE: sequence {seq.id} coadd exposure ({total_exp_sec:.1f}s) "
-                                              f"> sequence duration ({seq_duration_sec:.1f}s)")
+                                        print(
+                                            f"PAYLOAD ISSUE: sequence {seq.id} coadd exposure ({total_exp_sec:.1f}s) "
+                                            f"> sequence duration ({seq_duration_sec:.1f}s)"
+                                        )
                             except (ValueError, TypeError):
                                 pass
 
                 # 2) Heuristic scan: any flattened payload key containing 'exposure'
                 flat = seq.get_flat_payload_parameters()
                 for key, val in flat.items():
-                    if 'exposure' in key.lower() and val is not None:
+                    if "exposure" in key.lower() and val is not None:
                         # skip keys we already handled
-                        if key.startswith('AcquireVisCamScienceData'):
+                        if key.startswith("AcquireVisCamScienceData"):
                             continue
                         try:
                             v = float(val)
@@ -1356,25 +1419,27 @@ class ScheduleProcessor:
                             continue
 
                         # If key ends with _us assume microseconds, else seconds
-                        if key.lower().endswith('_us'):
+                        if key.lower().endswith("_us"):
                             val_sec = v / 1e6
                         else:
                             val_sec = v
 
                         if val_sec > seq_duration_sec:
                             issue = {
-                                'visit_id': visit.id,
-                                'sequence_id': seq.id,
-                                'target': seq.target,
-                                'problem': 'payload_exposure_field_longer_than_sequence',
-                                'field': key,
-                                'value_seconds': val_sec,
-                                'sequence_duration_seconds': seq_duration_sec,
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "payload_exposure_field_longer_than_sequence",
+                                "field": key,
+                                "value_seconds": val_sec,
+                                "sequence_duration_seconds": seq_duration_sec,
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(f"PAYLOAD ISSUE: sequence {seq.id} field {key} ({val_sec:.3f}s) "
-                                      f"> sequence duration ({seq_duration_sec:.3f}s)")
+                                print(
+                                    f"PAYLOAD ISSUE: sequence {seq.id} field {key} ({val_sec:.3f}s) "
+                                    f"> sequence duration ({seq_duration_sec:.3f}s)"
+                                )
 
         return issues
 

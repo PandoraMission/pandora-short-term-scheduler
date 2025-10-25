@@ -12,10 +12,14 @@ payload structure can be modified programmatically and written back to XML
 without losing attributes or nested elements.
 """
 
+# Standard library
 import xml.etree.ElementTree as ET
-from astropy.time import Time
-from .models import ScienceCalendar, Visit, ObservationSequence
+
+# Third-party
 import numpy as np
+from astropy.time import Time
+
+from .models import ObservationSequence, ScienceCalendar, Visit
 
 
 def parse_science_calendar(xml_path, verbose=False):

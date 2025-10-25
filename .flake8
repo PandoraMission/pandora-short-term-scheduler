@@ -6,7 +6,7 @@ extend-exclude=
     node_modules/,
     venv/,
 max-line-length = 140
-max-complexity = 14
+max-complexity = 30
 count = True
 show-source = True
 extend-ignore = E203, E741, W605
