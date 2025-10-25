@@ -1,10 +1,8 @@
 # First-party/Local
-from packagename import __version__
+from shortschedule import __version__
 
 
-def test_example():
-    # This is an example test, you should write your own.
-    # Note that above you have imported from your package *as it is installed*
-    # Do not import functions relative to the test directory.
-
-    assert __version__ == "0.1.0"
+def test_version_is_string():
+    # Ensure package exposes a version string (CI may install a built package)
+    assert isinstance(__version__, str)
+    assert len(__version__) > 0

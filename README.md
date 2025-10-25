@@ -170,94 +170,94 @@ Use
   ```sh
   poetry run jupyter-lab
   ```
+# Pandora Short-Term Scheduler (shortschedule)
 
-For more details, check the [Poetry documentation](https://python-poetry.org/docs/).
+shortschedule is a compact toolkit for parsing, processing, and visualizing Pandora
+science calendars (PAN-SCICAL XML). It was created to help adjust observation
+timing and payload parameters when updated spacecraft TLEs are available.
 
-## Testing the package
+Key features
+------------
 
-The `Makefile` in this repository enables you to run tests, fix import order, lint the code and check for compliance with `isort`, `black`, `flake8`, `pytest`.
+- Parse PAN-SCICAL XML into Python data models (`ScienceCalendar`, `Visit`, `ObservationSequence`).
+- Process calendars with updated TLEs to fill visibility gaps, extend/shrink sequences,
+  and recompute payload integration parameters for VIS/NIR payloads.
+- Export processed calendars back to PAN-compliant XML using `XMLWriter`.
+- Produce Gantt charts and summary visualizations for schedule comparison.
 
-Before you push your updates, run `make` inside the directory and resolve any issues that arise. This repository includes actions that will run these tools on GitHub, and show you if they pass. (See the buttons below).
+Installation
+------------
 
-## Adding documentation
+Recommended: use Poetry to create an isolated environment and install dev dependencies:
 
-You should click the docs folder and read that README to see instructions on how to build docs.
+```bash
+poetry install --with dev
+```
 
-## Updating the package version and publishing to pypi
+If you prefer pip, install the runtime dependencies listed in `pyproject.toml`.
 
-The package version is automaticaly found from the `pyproject.toml` file. This means when you are ready to release a new version you only need to follow these steps:
+Running tests and linters
+-------------------------
 
-1. Update the version number in the `pyproject.toml` file
-2. Build the distribution using
+Use the Makefile targets (these wrap Poetry in CI):
 
-    ```sh
-    poetry build
-    ```
+```bash
+make pytest   # run tests
+make flake8   # lint
+make black    # format (Black line length = 79)
+make isort    # sort imports
+```
 
-3. Publish the package to pypi
+Or run pytest directly if your environment is already prepared:
 
-    ```sh
-    poetry publish
-    ```
+```bash
+pytest -q
+```
 
-You should consider using the industry standard for updating version numbers which is major.minor.patch
+Quick examples
+--------------
 
-- Major version changes indicate breaking changes that may not be backward-compatible.
-- Minor version changes introduce new features in a backward-compatible manner.
-- Patch version changes include bug fixes or small improvements that do not affect compatibility.
+Parse a calendar:
 
-For example, if a package is at version 1.2.3, then:
+```python
+from shortschedule import parse_science_calendar
 
-- Increasing the major version to 2.0.0 means changes were introduced that break the API
-- Increasing the minor version to 1.3.0 means new features were added while maintaining compatibility.
-- Increasing the patch version to 1.2.4 means minor bug fixes or tweaks were made without changing functionality.
+cal = parse_science_calendar('data/PAN-SCICAL-example.xml')
+```
 
-It is ok to release new versions often.
+Process a calendar using updated TLE lines:
 
-### Update repository settings
+```python
+from shortschedule import ScheduleProcessor
 
-To use the actions and docs that are set up here you will need to update your repository settings. One of them is making sure docs are built from the `gh-pages` branch. You can update this in settings:
+proc = ScheduleProcessor(tle_line1, tle_line2)
+processed = proc.process_calendar(cal, window_start='2025-10-01T00:00:00Z')
+```
 
-![gh-pages settings](docs/images/gh-pages.png)
+Write processed calendar to XML:
 
-To make sure that you can update the website automatically, you need to ensure the action has read and write permissions in Settings/Actions:
+```python
+from shortschedule import XMLWriter
+XMLWriter().write_calendar(processed, output_path='processed.xml')
+```
 
-![gh-pages settings](docs/images/read-write.png)
+Developer notes
+---------------
 
-I've set up dependabot in this repository to automatically update the github actions with the most recent versions. This will run every week. To make use of this you will need to add these repo settings
+- Time types use `astropy.time.Time` and `TimeDelta` throughout the codebase — keep times
+  as astropy objects when possible.
+- Visibility checks rely on `pandoravisibility.Visibility`. Tests that exercise visibility
+  should mock this dependency to keep tests deterministic.
+- The models provide XML helpers to read and update payload parameters — prefer those helpers
+  rather than manipulating raw XML strings.
 
-You should make a branch-ruleset for your main branch. Create a ruleset in the settings as shown below
+Contributing
+------------
 
-![gh-pages settings](docs/images/branch-ruleset.png)
+Please run the tests and linters before opening pull requests. Add tests for any new
+behavior and keep changes small and well-documented.
 
-You will then need to go into the ruleset and
+License
+-------
 
-1. Name the ruleset (I called it main)
-2. Make the ruleset active
-3. Add people who can bypass the ruleset. I suggest you add the admins for the repo and organization
-
-![gh-pages settings](docs/images/ruleset1.png)
-
-Make sure you select these options:
-
-1. Branch targeting criteria: Add the `default` branch
-2. Turn on `Restrict deletions`
-3. Turn on `Require a pull request before merging`
-4. Turn off `Block force pushes`
-5. Turn on `Require status checks to pass`
-
-You should add any github actions you want to be required to have users pull requests be merged. I suggest you add flake8, black (`lint`), and the tests (`build 3.X`).
-
-![gh-pages settings](docs/images/ruleset2.png)
-
-## Setting up the README for your package
-
-Your package must include a README document. You should use this file (`README.md`) as your README document. Your can delete all information above this line, and leave the information below as your README file. You should update the URLs in the badges below to be the URLs for your package on github. i.e. replace `https://github.com/pandoramission/pandora-blank/` with `https://github.com/username/reponame/`.
-
-<a href="https://github.com/pandoramission/pandora-blank/actions/workflows/tests.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/tests/badge.svg" alt="Test status"/></a> <a href="https://github.com/pandoramission/pandora-blank/actions/workflows/black.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/black/badge.svg" alt="black status"/></a> <a href="https://github.com/pandoramission/pandora-blank/actions/workflows/flake8.yml"><img src="https://github.com/pandoramission/pandora-blank/workflows/flake8/badge.svg" alt="flake8 status"/></a> [![Generic badge](https://img.shields.io/badge/documentation-live-blue.svg)](https://pandoramission.github.io/pandora-blank/)
-[![PyPI - Version](https://img.shields.io/pypi/v/packagename)](https://pypi.org/project/packagename/)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/packagename)](https://pypi.org/project/packagename/)
-
-# Package Name
-
-Include information about your package here.
+See the repository LICENSE file for terms.

@@ -7,11 +7,13 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.9"
+
 dependencies = [
     "rich (>=13.9.4,<14.0.0)",
     "numpy (>=1.2)",
     "pandas (>=2.2.3,<3.0.0)",
-    "appdirs (>=1.4.4,<2.0.0)"
+    "appdirs (>=1.4.4,<2.0.0)",
+    "pandoravisibility @ git+https://github.com/PandoraMission/pandora-visibility.git"
 ]
 
 [tool.poetry]
