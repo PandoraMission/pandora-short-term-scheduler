@@ -42,9 +42,8 @@ plugins:
   - mkdocs-jupyter:
       execute: false
   - mkdocstrings:
-      watch:
-        - src/shortschedule
-      default_handler: python      
+  - mkdocstrings:
+      default_handler: python
       handlers:
         python:
           options:
