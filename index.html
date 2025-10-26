@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#documentation-guide" class="md-skip">
+        <a href="#pandora-short-term-scheduler" class="md-skip">
           Skip to content
         </a>
       
@@ -272,18 +272,6 @@
         
       
       
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Home
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
       <a href="." class="md-nav__link md-nav__link--active">
         
   
@@ -294,76 +282,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#writing-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Writing Documentation
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#building-and-serving-the-docs-locally" class="md-nav__link">
-    <span class="md-ellipsis">
-      Building and Serving the Docs Locally
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deploying-the-docs" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploying the Docs
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#adding-code-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Adding Code Documentation
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Adding Code Documentation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#documenting-functions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Documenting functions
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
       
     </li>
   
@@ -431,65 +349,6 @@
     
   
   
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#writing-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Writing Documentation
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#building-and-serving-the-docs-locally" class="md-nav__link">
-    <span class="md-ellipsis">
-      Building and Serving the Docs Locally
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deploying-the-docs" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploying the Docs
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#adding-code-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Adding Code Documentation
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Adding Code Documentation">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#documenting-functions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Documenting functions
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
 </nav>
                   </div>
                 </div>
@@ -507,105 +366,9 @@
   
 
 
-<h1 id="documentation-guide">Documentation Guide</h1>
-<p>This folder contains the documentation for the project, built using <a href="https://www.mkdocs.org/">MkDocs</a>. <code>mkdocs</code> and all the required dependencies for building the docs are installed when you install this project with dev dependencies.</p>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>To make this work in your repo you will need to update your repo settings under <code>Settings/Pages/</code> so that docs are deployed from the<code>gh-pages</code> branch.</p>
-</div>
-<div class="admonition info">
-<p class="admonition-title">Info</p>
-<p>If your docs aren't building in the GitHub action, you should make sure your Settings -&gt; Actions -&gt; Workflow permissions are set to read and write.</p>
-</div>
-<h2 id="writing-documentation">Writing Documentation</h2>
-<ul>
-<li>Documentation is written in <strong>Markdown (<code>.md</code>)</strong> files.</li>
-<li>The main configuration file is <code>mkdocs.yml</code>, where you can define site settings, navigation structure, themes, and extensions.</li>
-<li>Place new documentation pages inside this <code>docs/</code> folder and link them in <code>mkdocs.yml</code>.</li>
-</ul>
-<p>You should update the <code>mkdocs.yml</code> file to change the name, icon and URL for your repository, instead of this one.</p>
-<h2 id="building-and-serving-the-docs-locally">Building and Serving the Docs Locally</h2>
-<p>To preview the documentation locally, run:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>poetry<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </span>serve
-</span></code></pre></div>
-<p>or</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>make<span class="w"> </span>serve
-</span></code></pre></div>
-<p>from the main project directory (one above <code>docs/</code>).</p>
-<p>This starts a local web server, typically at <code>http://127.0.0.1:8000/</code>, where you can view the documentation live.</p>
-<h2 id="deploying-the-docs">Deploying the Docs</h2>
-<p>MkDocs is set up to deploy to GitHub Pages via a GitHub Action. On each push to <code>main</code>, the documentation will be built and published to the <code>gh-pages</code> branch.</p>
-<p>To manually deploy, run:</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>poetry<span class="w"> </span>run<span class="w"> </span>mkdocs<span class="w"> </span>gh-deploy<span class="w"> </span>--force
-</span></code></pre></div>
-<p>or</p>
-<div class="language-sh highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>make<span class="w"> </span>deploy
-</span></code></pre></div>
-<p>This will build and push the site to GitHub Pages.</p>
-<h2 id="adding-code-documentation">Adding Code Documentation</h2>
-<p>This project uses <code>mkdocstrings</code> to generate API documentation directly from the source code. To document Python functions and classes:</p>
-<ul>
-<li>Ensure docstrings follow a consistent format (NumPy-style is recommended).</li>
-<li>Use <code>packagename.module</code> syntax inside Markdown to auto-generate API docs.</li>
-</ul>
-<p>For more details, see the <a href="https://www.mkdocs.org/">MkDocs documentation</a> and the <a href="https://mkdocstrings.github.io/">MkDocStrings plugin</a>.</p>
-<h3 id="documenting-functions">Documenting functions</h3>
-<p>You should add docstrings to your functions, and I recommend you use the <code>numpydoc</code> style for docstrings. You should fill out the sections as needed. In addition, I recommend you include type hints to help users understand your functions. This is the example function that is given in the package example module.</p>
-<div class="language-py highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">example_function</span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="n">x</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">npt</span><span class="o">.</span><span class="n">NDArray</span><span class="p">],</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Union</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">npt</span><span class="o">.</span><span class="n">NDArray</span><span class="p">]:</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Squares the input value.</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="sd">    This function computes the square of a given number or NumPy array.</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="sd">    Parameters</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="sd">    ----------</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="sd">    x : int, float, or npt.NDArray</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="sd">        The input value(s) to be squared.</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="sd">    Returns</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="sd">    -------</span>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="sd">    result : int, float, or npt.NDArray</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="sd">        The squared result of `x`.</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a>
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="sd">    Raises</span>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="sd">    ------</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a><span class="sd">    TypeError</span>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="sd">        If `x` is not an int, float, or NumPy array.</span>
-</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="sd">    Notes</span>
-</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="sd">    -----</span>
-</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a><span class="sd">    This function uses `np.square(x)`, which is optimized for NumPy arrays.</span>
-</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>
-</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a><span class="sd">    Examples</span>
-</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a><span class="sd">    --------</span>
-</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a><span class="sd">    Square an integer:</span>
-</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a><span class="sd">    &gt;&gt;&gt; example_function(3)</span>
-</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a><span class="sd">    9</span>
-</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>
-</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a><span class="sd">    Square a float:</span>
-</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a><span class="sd">    &gt;&gt;&gt; example_function(2.5)</span>
-</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a><span class="sd">    6.25</span>
-</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36" href="#__codelineno-4-36"></a>
-</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37" href="#__codelineno-4-37"></a><span class="sd">    Square a NumPy array:</span>
-</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38" href="#__codelineno-4-38"></a><span class="sd">    &gt;&gt;&gt; import numpy as np</span>
-</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39" href="#__codelineno-4-39"></a><span class="sd">    &gt;&gt;&gt; arr = np.array([1, 2, 3])</span>
-</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40" href="#__codelineno-4-40"></a><span class="sd">    &gt;&gt;&gt; example_function(arr)</span>
-</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41" href="#__codelineno-4-41"></a><span class="sd">    array([1, 4, 9])</span>
-</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42" href="#__codelineno-4-42"></a>
-</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43" href="#__codelineno-4-43"></a><span class="sd">    See Also</span>
-</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44" href="#__codelineno-4-44"></a><span class="sd">    --------</span>
-</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45" href="#__codelineno-4-45"></a><span class="sd">    numpy.square : Equivalent NumPy function for squaring elements.</span>
-</span><span id="__span-4-46"><a id="__codelineno-4-46" name="__codelineno-4-46" href="#__codelineno-4-46"></a>
-</span><span id="__span-4-47"><a id="__codelineno-4-47" name="__codelineno-4-47" href="#__codelineno-4-47"></a><span class="sd">    References</span>
-</span><span id="__span-4-48"><a id="__codelineno-4-48" name="__codelineno-4-48" href="#__codelineno-4-48"></a><span class="sd">    ----------</span>
-</span><span id="__span-4-49"><a id="__codelineno-4-49" name="__codelineno-4-49" href="#__codelineno-4-49"></a><span class="sd">    .. [1] NumPy Documentation: https://numpy.org/doc/stable/reference/generated/numpy.square.html</span>
-</span><span id="__span-4-50"><a id="__codelineno-4-50" name="__codelineno-4-50" href="#__codelineno-4-50"></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="__span-4-51"><a id="__codelineno-4-51" name="__codelineno-4-51" href="#__codelineno-4-51"></a>    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)):</span>
-</span><span id="__span-4-52"><a id="__codelineno-4-52" name="__codelineno-4-52" href="#__codelineno-4-52"></a>        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">&quot;Input must be an int, float, or NumPy array.&quot;</span><span class="p">)</span>
-</span><span id="__span-4-53"><a id="__codelineno-4-53" name="__codelineno-4-53" href="#__codelineno-4-53"></a>
-</span><span id="__span-4-54"><a id="__codelineno-4-54" name="__codelineno-4-54" href="#__codelineno-4-54"></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">square</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-</span></code></pre></div>
+<h1 id="pandora-short-term-scheduler">Pandora Short Term Scheduler</h1>
+<p>This software is deisgned to generate a short term science calendar of Pandora observations. This code takes as input a long term calendar and an updated orbital ephemeris and gnerates a new short term calendar for delivery to the Mission Operations Center.</p>
+<p>There is an example notebook included in the example.</p>
 
 
 
