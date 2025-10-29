@@ -24,7 +24,7 @@ optional = true
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
-black = "^25.1.0"
+black = "^25.9.0"
 isort = "^6.0.0"
 flake8 = "^7.3.0"
 ruff = "^0.6.0"
