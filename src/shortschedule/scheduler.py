@@ -1479,6 +1479,61 @@ class ScheduleProcessor:
 
         return issues
 
+    def validate_star_roi_consistency(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Validate that MaxNumStarRois equals numPredefinedStarRois.
+
+        According to flight software requirements, MaxNumStarRois should
+        always equal numPredefinedStarRois in the AcquireVisCamScienceData
+        payload parameters.
+
+        Returns
+        -------
+        list
+            A list of issue dicts found. Empty list if none.
+        """
+        issues = []
+
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                # Check AcquireVisCamScienceData payload
+                num_predefined = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "numPredefinedStarRois"
+                )
+                max_num = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "MaxNumStarRois"
+                )
+
+                # Only check if both values are present
+                if num_predefined is not None and max_num is not None:
+                    try:
+                        num_predefined_val = int(num_predefined)
+                        max_num_val = int(max_num)
+
+                        if num_predefined_val != max_num_val:
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "MaxNumStarRois_not_equal_to_numPredefinedStarRois",
+                                "numPredefinedStarRois": num_predefined_val,
+                                "MaxNumStarRois": max_num_val,
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"MaxNumStarRois ({max_num_val}) != "
+                                    f"numPredefinedStarRois ({num_predefined_val})"
+                                )
+                    except (ValueError, TypeError):
+                        # If we can't parse as integers, skip validation
+                        pass
+
+        return issues
+
     def print_timing_summary(self, calendar: ScienceCalendar) -> None:
         """Print a quick timing summary."""
         issues = self.validate_sequence_timing(calendar, report_issues=False)

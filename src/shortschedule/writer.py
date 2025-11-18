@@ -212,6 +212,9 @@ class XMLWriter:
             if xml_element is not None:
                 # Create a deep copy of the XML element
                 copied_element = self._deep_copy_xml_element(xml_element)
+                # Ensure MaxNumStarRois equals numPredefinedStarRois
+                if param_name == "AcquireVisCamScienceData":
+                    self._ensure_star_roi_consistency(copied_element)
                 payload_elem.append(copied_element)
 
     def _deep_copy_xml_element(self, element):
@@ -230,6 +233,36 @@ class XMLWriter:
             new_elem.append(self._deep_copy_xml_element(child))
 
         return new_elem
+
+    def _ensure_star_roi_consistency(self, element):
+        """
+        Ensure MaxNumStarRois equals numPredefinedStarRois.
+
+        According to flight software requirements, MaxNumStarRois should
+        always equal numPredefinedStarRois. This function modifies the
+        element in-place to enforce this constraint.
+
+        Parameters
+        ----------
+        element : ET.Element
+            The AcquireVisCamScienceData XML element
+        """
+        # Find numPredefinedStarRois and MaxNumStarRois
+        num_predefined_elem = element.find("numPredefinedStarRois")
+        max_num_elem = element.find("MaxNumStarRois")
+
+        # If both elements exist, ensure they match
+        if (
+            num_predefined_elem is not None
+            and num_predefined_elem.text is not None
+        ):
+            # Set MaxNumStarRois to equal numPredefinedStarRois
+            if max_num_elem is not None:
+                max_num_elem.text = num_predefined_elem.text
+            else:
+                # Create MaxNumStarRois if it doesn't exist
+                max_num_elem = ET.SubElement(element, "MaxNumStarRois")
+                max_num_elem.text = num_predefined_elem.text
 
     def _write_formatted_xml(self, root, output_path):
         """Write XML with proper formatting."""
