@@ -236,33 +236,62 @@ class XMLWriter:
 
     def _ensure_star_roi_consistency(self, element):
         """
-        Ensure MaxNumStarRois equals numPredefinedStarRois.
+        Ensure MaxNumStarRois is set correctly based on StarRoiDetMethod.
 
-        According to flight software requirements, MaxNumStarRois should
-        always equal numPredefinedStarRois. This function modifies the
-        element in-place to enforce this constraint.
+        According to flight software requirements:
+        - Method 0, 1, 3: MaxNumStarRois = numPredefinedStarRois
+        - Method 2: MaxNumStarRois = max number of star boxes (keep existing
+          value), numPredefinedStarRois = 0
 
         Parameters
         ----------
         element : ET.Element
             The AcquireVisCamScienceData XML element
         """
-        # Find numPredefinedStarRois and MaxNumStarRois
+        # Find required elements
+        star_roi_det_method_elem = element.find("StarRoiDetMethod")
         num_predefined_elem = element.find("numPredefinedStarRois")
         max_num_elem = element.find("MaxNumStarRois")
 
-        # If both elements exist, ensure they match
+        # Determine StarRoiDetMethod value (default to 1 if not present)
+        star_roi_det_method = 1
         if (
-            num_predefined_elem is not None
-            and num_predefined_elem.text is not None
+            star_roi_det_method_elem is not None
+            and star_roi_det_method_elem.text is not None
         ):
-            # Set MaxNumStarRois to equal numPredefinedStarRois
-            if max_num_elem is not None:
-                max_num_elem.text = num_predefined_elem.text
+            try:
+                star_roi_det_method = int(star_roi_det_method_elem.text)
+            except (ValueError, TypeError):
+                star_roi_det_method = 1
+
+        # Apply rules based on StarRoiDetMethod
+        if star_roi_det_method == 2:
+            # Method 2: UseBrightestStarsInField
+            # MaxNumStarRois should be set to maximum number of star boxes
+            # (keep existing value if present, otherwise don't change)
+            # numPredefinedStarRois should be 0
+            if num_predefined_elem is not None:
+                num_predefined_elem.text = "0"
             else:
-                # Create MaxNumStarRois if it doesn't exist
-                max_num_elem = ET.SubElement(element, "MaxNumStarRois")
-                max_num_elem.text = num_predefined_elem.text
+                # Create numPredefinedStarRois if it doesn't exist
+                num_predefined_elem = ET.SubElement(
+                    element, "numPredefinedStarRois"
+                )
+                num_predefined_elem.text = "0"
+            # MaxNumStarRois keeps its existing value for method 2
+        else:
+            # Methods 0, 1, 3: Set MaxNumStarRois = numPredefinedStarRois
+            if (
+                num_predefined_elem is not None
+                and num_predefined_elem.text is not None
+            ):
+                # Set MaxNumStarRois to equal numPredefinedStarRois
+                if max_num_elem is not None:
+                    max_num_elem.text = num_predefined_elem.text
+                else:
+                    # Create MaxNumStarRois if it doesn't exist
+                    max_num_elem = ET.SubElement(element, "MaxNumStarRois")
+                    max_num_elem.text = num_predefined_elem.text
 
     def _write_formatted_xml(self, root, output_path):
         """Write XML with proper formatting."""

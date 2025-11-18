@@ -3,8 +3,12 @@
 Example script demonstrating the MaxNumStarRois validation and fix.
 
 This script shows how to:
-1. Check for MaxNumStarRois/numPredefinedStarRois mismatches
-2. Automatically fix them when writing calendars
+1. Check for MaxNumStarRois/numPredefinedStarRois consistency
+2. Automatically fix them when writing calendars based on StarRoiDetMethod
+
+Rules applied based on StarRoiDetMethod:
+- Method 0, 1, 3: MaxNumStarRois = numPredefinedStarRois
+- Method 2: numPredefinedStarRois = 0, MaxNumStarRois = max number of star boxes
 """
 
 from shortschedule.parser import parse_science_calendar
@@ -32,18 +36,25 @@ def main():
     sched = ScheduleProcessor(tle1, tle2)
 
     # Validate star ROI consistency
-    print("\nValidating MaxNumStarRois == numPredefinedStarRois...")
+    print("\nValidating star ROI consistency (StarRoiDetMethod-aware)...")
     issues = sched.validate_star_roi_consistency(cal, report_issues=False)
 
     if issues:
         print(f"⚠️  Found {len(issues)} sequences with mismatched values")
         print("\nExample issues:")
         for issue in issues[:3]:
-            print(
-                f"  - Sequence {issue['sequence_id']}: "
-                f"MaxNumStarRois={issue['MaxNumStarRois']}, "
-                f"numPredefinedStarRois={issue['numPredefinedStarRois']}"
-            )
+            if "MaxNumStarRois" in issue:
+                print(
+                    f"  - Sequence {issue['sequence_id']} (Method {issue['StarRoiDetMethod']}): "
+                    f"MaxNumStarRois={issue['MaxNumStarRois']}, "
+                    f"numPredefinedStarRois={issue['numPredefinedStarRois']}"
+                )
+            else:
+                print(
+                    f"  - Sequence {issue['sequence_id']} (Method {issue['StarRoiDetMethod']}): "
+                    f"numPredefinedStarRois={issue['numPredefinedStarRois']} "
+                    f"(should be 0 for method 2)"
+                )
 
         # Write the calendar - this will automatically fix the issues
         print("\nWriting calendar with automatic fix...")
@@ -62,9 +73,7 @@ def main():
         if len(issues2) == 0:
             print("✅ SUCCESS: All issues automatically fixed!")
     else:
-        print(
-            "✅ No issues found - all sequences already have matching values"
-        )
+        print("✅ No issues found - all sequences have correct values")
 
 
 if __name__ == "__main__":
