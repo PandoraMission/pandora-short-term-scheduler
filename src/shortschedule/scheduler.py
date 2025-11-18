@@ -1487,7 +1487,7 @@ class ScheduleProcessor:
 
         According to flight software requirements:
         - Method 0, 1, 3: MaxNumStarRois should equal numPredefinedStarRois
-        - Method 2: numPredefinedStarRois should be 0
+        - Method 2: numPredefinedStarRois should be 0, MaxNumStarRois should be > 0
 
         Returns
         -------
@@ -1520,6 +1520,7 @@ class ScheduleProcessor:
                 # Validate based on method
                 if method == 2:
                     # Method 2: numPredefinedStarRois should be 0
+                    # and MaxNumStarRois should not be 0
                     if num_predefined is not None:
                         try:
                             num_predefined_val = int(num_predefined)
@@ -1538,6 +1539,28 @@ class ScheduleProcessor:
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod=2 but "
                                         f"numPredefinedStarRois={num_predefined_val} (should be 0)"
+                                    )
+                        except (ValueError, TypeError):
+                            pass
+                    # Also check that MaxNumStarRois is not 0 for method 2
+                    if max_num is not None:
+                        try:
+                            max_num_val = int(max_num)
+                            if max_num_val == 0:
+                                issue = {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": "MaxNumStarRois_should_not_be_0_for_method_2",
+                                    "StarRoiDetMethod": method,
+                                    "MaxNumStarRois": max_num_val,
+                                }
+                                issues.append(issue)
+                                if report_issues:
+                                    print(
+                                        f"STAR ROI ISSUE: sequence {seq.id} "
+                                        f"StarRoiDetMethod=2 but "
+                                        f"MaxNumStarRois={max_num_val} (should be > 0)"
                                     )
                         except (ValueError, TypeError):
                             pass

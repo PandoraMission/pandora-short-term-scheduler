@@ -157,6 +157,43 @@ def test_validate_star_roi_consistency_method_2_accepts_zero():
     assert len(issues) == 0
 
 
+def test_validate_star_roi_consistency_method_2_rejects_zero_max():
+    """Test that validation detects when MaxNumStarRois == 0 for method 2."""
+    start = Time("2025-01-01T00:00:00", scale="utc")
+
+    # Create payload with method 2 but MaxNumStarRois = 0
+    payload_xml = ET.Element("AcquireVisCamScienceData")
+    star_roi_det = ET.SubElement(payload_xml, "StarRoiDetMethod")
+    star_roi_det.text = "2"
+    num_predefined = ET.SubElement(payload_xml, "numPredefinedStarRois")
+    num_predefined.text = "0"  # Correct for method 2
+    max_num = ET.SubElement(payload_xml, "MaxNumStarRois")
+    max_num.text = "0"  # Invalid for method 2!
+
+    seq = ObservationSequence(
+        id="seq1",
+        target="TestTarget",
+        priority=1,
+        start_time=start,
+        stop_time=start + TimeDelta(120, format="sec"),
+        ra=0.0,
+        dec=0.0,
+        payload_params={"AcquireVisCamScienceData": payload_xml},
+    )
+
+    visit = Visit(id="v1", sequences=[seq])
+    cal = ScienceCalendar(metadata={}, visits=[visit])
+
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    issues = sched.validate_star_roi_consistency(cal, report_issues=False)
+
+    assert len(issues) == 1
+    assert (
+        issues[0]["problem"] == "MaxNumStarRois_should_not_be_0_for_method_2"
+    )
+    assert issues[0]["MaxNumStarRois"] == 0
+
+
 def test_validate_star_roi_consistency_handles_missing_values():
     """Test that validation handles missing values gracefully."""
     start = Time("2025-01-01T00:00:00", scale="utc")
