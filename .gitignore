@@ -55,4 +55,4 @@ smex2024
 .vscode/
 
 # Ignore test/site builds
-site_test_build/
+site_test_build/fixed_calendar.xml
