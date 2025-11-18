@@ -1541,7 +1541,20 @@ class ScheduleProcessor:
                                         f"numPredefinedStarRois={num_predefined_val} (should be 0)"
                                     )
                         except (ValueError, TypeError):
-                            pass
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "numPredefinedStarRois_not_parseable_as_integer",
+                                "StarRoiDetMethod": method,
+                                "numPredefinedStarRois": str(num_predefined),
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"numPredefinedStarRois='{num_predefined}' cannot be parsed as integer"
+                                )
                     # Also check that MaxNumStarRois is not 0 for method 2
                     if max_num is not None:
                         try:
@@ -1563,7 +1576,20 @@ class ScheduleProcessor:
                                         f"MaxNumStarRois={max_num_val} (should be > 0)"
                                     )
                         except (ValueError, TypeError):
-                            pass
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "MaxNumStarRois_not_parseable_as_integer",
+                                "StarRoiDetMethod": method,
+                                "MaxNumStarRois": str(max_num),
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"MaxNumStarRois='{max_num}' cannot be parsed as integer"
+                                )
                 else:
                     # Methods 0, 1, 3: MaxNumStarRois should equal numPredefinedStarRois
                     if num_predefined is not None and max_num is not None:
@@ -1590,8 +1616,23 @@ class ScheduleProcessor:
                                         f"numPredefinedStarRois ({num_predefined_val})"
                                     )
                         except (ValueError, TypeError):
-                            # If we can't parse as integers, skip validation
-                            pass
+                            # If we can't parse as integers, flag as an issue
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "star_roi_values_not_parseable_as_integers",
+                                "StarRoiDetMethod": method,
+                                "numPredefinedStarRois": str(num_predefined),
+                                "MaxNumStarRois": str(max_num),
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"numPredefinedStarRois='{num_predefined}' or "
+                                    f"MaxNumStarRois='{max_num}' cannot be parsed as integers"
+                                )
 
         return issues
 

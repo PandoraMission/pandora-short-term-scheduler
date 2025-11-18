@@ -426,3 +426,111 @@ def test_writer_creates_max_num_star_rois_if_missing():
 
     # Clean up
     os.unlink(output_path)
+
+
+def test_validate_star_roi_consistency_detects_unparseable_values():
+    """Test that validation detects when values cannot be parsed as integers for methods 0, 1, 3."""
+    start = Time("2025-01-01T00:00:00", scale="utc")
+
+    # Create payload with unparseable values (method 1)
+    payload_xml = ET.Element("AcquireVisCamScienceData")
+    star_roi_det = ET.SubElement(payload_xml, "StarRoiDetMethod")
+    star_roi_det.text = "1"
+    num_predefined = ET.SubElement(payload_xml, "numPredefinedStarRois")
+    num_predefined.text = "not_a_number"  # Unparseable!
+    max_num = ET.SubElement(payload_xml, "MaxNumStarRois")
+    max_num.text = "9"
+
+    seq = ObservationSequence(
+        id="seq1",
+        target="TestTarget",
+        priority=1,
+        start_time=start,
+        stop_time=start + TimeDelta(120, format="sec"),
+        ra=0.0,
+        dec=0.0,
+        payload_params={"AcquireVisCamScienceData": payload_xml},
+    )
+
+    visit = Visit(id="v1", sequences=[seq])
+    cal = ScienceCalendar(metadata={}, visits=[visit])
+
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    issues = sched.validate_star_roi_consistency(cal, report_issues=False)
+
+    assert len(issues) == 1
+    assert issues[0]["problem"] == "star_roi_values_not_parseable_as_integers"
+    assert issues[0]["numPredefinedStarRois"] == "not_a_number"
+
+
+def test_validate_star_roi_consistency_method_2_detects_unparseable_predefined():
+    """Test that validation detects unparseable numPredefinedStarRois for method 2."""
+    start = Time("2025-01-01T00:00:00", scale="utc")
+
+    # Create payload with method 2 and unparseable numPredefinedStarRois
+    payload_xml = ET.Element("AcquireVisCamScienceData")
+    star_roi_det = ET.SubElement(payload_xml, "StarRoiDetMethod")
+    star_roi_det.text = "2"
+    num_predefined = ET.SubElement(payload_xml, "numPredefinedStarRois")
+    num_predefined.text = "invalid"  # Unparseable!
+    max_num = ET.SubElement(payload_xml, "MaxNumStarRois")
+    max_num.text = "10"
+
+    seq = ObservationSequence(
+        id="seq1",
+        target="TestTarget",
+        priority=1,
+        start_time=start,
+        stop_time=start + TimeDelta(120, format="sec"),
+        ra=0.0,
+        dec=0.0,
+        payload_params={"AcquireVisCamScienceData": payload_xml},
+    )
+
+    visit = Visit(id="v1", sequences=[seq])
+    cal = ScienceCalendar(metadata={}, visits=[visit])
+
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    issues = sched.validate_star_roi_consistency(cal, report_issues=False)
+
+    assert len(issues) == 1
+    assert (
+        issues[0]["problem"]
+        == "numPredefinedStarRois_not_parseable_as_integer"
+    )
+    assert issues[0]["numPredefinedStarRois"] == "invalid"
+
+
+def test_validate_star_roi_consistency_method_2_detects_unparseable_max():
+    """Test that validation detects unparseable MaxNumStarRois for method 2."""
+    start = Time("2025-01-01T00:00:00", scale="utc")
+
+    # Create payload with method 2 and unparseable MaxNumStarRois
+    payload_xml = ET.Element("AcquireVisCamScienceData")
+    star_roi_det = ET.SubElement(payload_xml, "StarRoiDetMethod")
+    star_roi_det.text = "2"
+    num_predefined = ET.SubElement(payload_xml, "numPredefinedStarRois")
+    num_predefined.text = "0"  # Correct for method 2
+    max_num = ET.SubElement(payload_xml, "MaxNumStarRois")
+    max_num.text = "bad_value"  # Unparseable!
+
+    seq = ObservationSequence(
+        id="seq1",
+        target="TestTarget",
+        priority=1,
+        start_time=start,
+        stop_time=start + TimeDelta(120, format="sec"),
+        ra=0.0,
+        dec=0.0,
+        payload_params={"AcquireVisCamScienceData": payload_xml},
+    )
+
+    visit = Visit(id="v1", sequences=[seq])
+    cal = ScienceCalendar(metadata={}, visits=[visit])
+
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    issues = sched.validate_star_roi_consistency(cal, report_issues=False)
+
+    assert len(issues) == 1
+    assert issues[0]["problem"] == "MaxNumStarRois_not_parseable_as_integer"
+    assert issues[0]["MaxNumStarRois"] == "bad_value"
