@@ -1504,9 +1504,9 @@ class ScheduleProcessor:
                 - 'visit_id': The visit ID where the issue was found.
                 - 'sequence_id': The sequence ID where the issue was found.
                 - 'problem': A string describing the type of problem.
-                - 'star_roi_det_method': The value of StarRoiDetMethod.
-                - 'num_predefined': The value of numPredefinedStarRois.
-                - 'max_num': The value of MaxNumStarRois.
+                - 'StarRoiDetMethod': The value of StarRoiDetMethod.
+                - 'numPredefinedStarRois': The value of numPredefinedStarRois.
+                - 'MaxNumStarRois': The value of MaxNumStarRois.
             Returns an empty list if no issues are found.
 
         Problem Types
