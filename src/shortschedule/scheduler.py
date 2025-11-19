@@ -1544,13 +1544,13 @@ class ScheduleProcessor:
                     "AcquireVisCamScienceData", "MaxNumStarRois"
                 )
 
-                # Parse StarRoiDetMethod (default to 1 if not present)
-                method = 1
+                # Parse StarRoiDetMethod (default to 2 if not present)
+                method = 2
                 if star_roi_det_method is not None:
                     try:
                         method = int(star_roi_det_method)
                     except (ValueError, TypeError):
-                        method = 1
+                        method = 2
 
                 # Validate based on method
                 if method == 2:
