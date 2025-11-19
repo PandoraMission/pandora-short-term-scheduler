@@ -56,3 +56,8 @@ smex2024
 
 # Ignore test/site builds
 site_test_build/
+
+# Notebook generated files in docs
+docs/PAN-SCICAL-*.xml
+docs/schedule_analysis_*.png
+docs/schedule_analysis_*.csv

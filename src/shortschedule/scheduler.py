@@ -1479,6 +1479,198 @@ class ScheduleProcessor:
 
         return issues
 
+    def validate_star_roi_consistency(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Validate MaxNumStarRois/numPredefinedStarRois consistency.
+
+        According to flight software requirements:
+        - Method 0, 1, 3: MaxNumStarRois should equal numPredefinedStarRois
+        - Method 2: numPredefinedStarRois should be 0, MaxNumStarRois should be > 0
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The science calendar to validate.
+        report_issues : bool, optional
+            If True (default), issues are reported in the returned list. If False,
+            the function still performs validation but does not print or log issues.
+
+        Returns
+        -------
+        list of dict
+            A list of issue dictionaries found. Each dictionary contains:
+                - 'visit_id': The visit ID where the issue was found.
+                - 'sequence_id': The sequence ID where the issue was found.
+                - 'problem': A string describing the type of problem.
+                - 'StarRoiDetMethod': The value of StarRoiDetMethod.
+                - 'numPredefinedStarRois': The value of numPredefinedStarRois.
+                - 'MaxNumStarRois': The value of MaxNumStarRois.
+            Returns an empty list if no issues are found.
+
+        Problem Types
+        -------------
+        The 'problem' key in each issue dict can have values such as:
+            - "MaxNumStarRois != numPredefinedStarRois for method 0/1/3"
+            - "numPredefinedStarRois != 0 for method 2"
+            - "MaxNumStarRois <= 0 for method 2"
+
+        Examples
+        --------
+        >>> issues = processor.validate_star_roi_consistency(calendar)
+        >>> issues[0]
+        {
+            'visit_id': 'V001',
+            'sequence_id': 'S001',
+            'problem': 'MaxNumStarRois != numPredefinedStarRois for method 0/1/3',
+            'star_roi_det_method': 1,
+            'num_predefined': 3,
+            'max_num': 2
+        }
+        """
+        issues = []
+
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                # Check AcquireVisCamScienceData payload
+                star_roi_det_method = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "StarRoiDetMethod"
+                )
+                num_predefined = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "numPredefinedStarRois"
+                )
+                max_num = seq.get_payload_parameter(
+                    "AcquireVisCamScienceData", "MaxNumStarRois"
+                )
+
+                # Parse StarRoiDetMethod (default to 2 if not present)
+                method = 2
+                if star_roi_det_method is not None:
+                    try:
+                        method = int(star_roi_det_method)
+                    except (ValueError, TypeError):
+                        method = 2
+
+                # Validate based on method
+                if method == 2:
+                    # Method 2: numPredefinedStarRois should be 0
+                    # and MaxNumStarRois should not be 0
+                    if num_predefined is not None:
+                        try:
+                            num_predefined_val = int(num_predefined)
+                            if num_predefined_val != 0:
+                                issue = {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": "numPredefinedStarRois_should_be_0_for_method_2",
+                                    "StarRoiDetMethod": method,
+                                    "numPredefinedStarRois": num_predefined_val,
+                                }
+                                issues.append(issue)
+                                if report_issues:
+                                    print(
+                                        f"STAR ROI ISSUE: sequence {seq.id} "
+                                        f"StarRoiDetMethod=2 but "
+                                        f"numPredefinedStarRois={num_predefined_val} (should be 0)"
+                                    )
+                        except (ValueError, TypeError):
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "numPredefinedStarRois_not_parseable_as_integer",
+                                "StarRoiDetMethod": method,
+                                "numPredefinedStarRois": str(num_predefined),
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"numPredefinedStarRois='{num_predefined}' cannot be parsed as integer"
+                                )
+                    # Also check that MaxNumStarRois is not 0 for method 2
+                    if max_num is not None:
+                        try:
+                            max_num_val = int(max_num)
+                            if max_num_val == 0:
+                                issue = {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": "MaxNumStarRois_should_not_be_0_for_method_2",
+                                    "StarRoiDetMethod": method,
+                                    "MaxNumStarRois": max_num_val,
+                                }
+                                issues.append(issue)
+                                if report_issues:
+                                    print(
+                                        f"STAR ROI ISSUE: sequence {seq.id} "
+                                        f"StarRoiDetMethod=2 but "
+                                        f"MaxNumStarRois={max_num_val} (should be > 0)"
+                                    )
+                        except (ValueError, TypeError):
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "MaxNumStarRois_not_parseable_as_integer",
+                                "StarRoiDetMethod": method,
+                                "MaxNumStarRois": str(max_num),
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"MaxNumStarRois='{max_num}' cannot be parsed as integer"
+                                )
+                else:
+                    # Methods 0, 1, 3: MaxNumStarRois should equal numPredefinedStarRois
+                    if num_predefined is not None and max_num is not None:
+                        try:
+                            num_predefined_val = int(num_predefined)
+                            max_num_val = int(max_num)
+
+                            if num_predefined_val != max_num_val:
+                                issue = {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": "MaxNumStarRois_not_equal_to_numPredefinedStarRois",
+                                    "StarRoiDetMethod": method,
+                                    "numPredefinedStarRois": num_predefined_val,
+                                    "MaxNumStarRois": max_num_val,
+                                }
+                                issues.append(issue)
+                                if report_issues:
+                                    print(
+                                        f"STAR ROI ISSUE: sequence {seq.id} "
+                                        f"StarRoiDetMethod={method}, "
+                                        f"MaxNumStarRois ({max_num_val}) != "
+                                        f"numPredefinedStarRois ({num_predefined_val})"
+                                    )
+                        except (ValueError, TypeError):
+                            # If we can't parse as integers, flag as an issue
+                            issue = {
+                                "visit_id": visit.id,
+                                "sequence_id": seq.id,
+                                "target": seq.target,
+                                "problem": "star_roi_values_not_parseable_as_integers",
+                                "StarRoiDetMethod": method,
+                                "numPredefinedStarRois": str(num_predefined),
+                                "MaxNumStarRois": str(max_num),
+                            }
+                            issues.append(issue)
+                            if report_issues:
+                                print(
+                                    f"STAR ROI ISSUE: sequence {seq.id} "
+                                    f"numPredefinedStarRois='{num_predefined}' or "
+                                    f"MaxNumStarRois='{max_num}' cannot be parsed as integers"
+                                )
+
+        return issues
+
     def print_timing_summary(self, calendar: ScienceCalendar) -> None:
         """Print a quick timing summary."""
         issues = self.validate_sequence_timing(calendar, report_issues=False)
