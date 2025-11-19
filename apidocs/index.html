@@ -647,6 +647,57 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_star_roi_consistency
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_star_roi_consistency">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--problem-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      Problem Types
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Examples
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#shortschedule.ScheduleProcessor.validate_visibility" class="md-nav__link">
     <span class="md-ellipsis">
       validate_visibility
@@ -1346,6 +1397,57 @@
   <a href="#shortschedule.ScheduleProcessor.validate_sequence_timing--returns" class="md-nav__link">
     <span class="md-ellipsis">
       Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_star_roi_consistency
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_star_roi_consistency">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--problem-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      Problem Types
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Examples
     </span>
   </a>
   
@@ -2211,6 +2313,64 @@ duration (assumes microseconds when the key ends with <code>_us</code>).</p>
 <h5 id="shortschedule.ScheduleProcessor.validate_sequence_timing--returns">Returns</h5>
 <p>dict
     Dictionary with different types of timing issues</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.validate_star_roi_consistency" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">validate_star_roi_consistency</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">report_issues</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Validate MaxNumStarRois/numPredefinedStarRois consistency.</p>
+<p>According to flight software requirements:
+- Method 0, 1, 3: MaxNumStarRois should equal numPredefinedStarRois
+- Method 2: numPredefinedStarRois should be 0, MaxNumStarRois should be &gt; 0</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_star_roi_consistency--parameters">Parameters</h5>
+<p>calendar : ScienceCalendar
+    The science calendar to validate.
+report_issues : bool, optional
+    If True (default), issues are reported in the returned list. If False,
+    the function still performs validation but does not print or log issues.</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_star_roi_consistency--returns">Returns</h5>
+<p>list of dict
+    A list of issue dictionaries found. Each dictionary contains:
+        - 'visit_id': The visit ID where the issue was found.
+        - 'sequence_id': The sequence ID where the issue was found.
+        - 'problem': A string describing the type of problem.
+        - 'StarRoiDetMethod': The value of StarRoiDetMethod.
+        - 'numPredefinedStarRois': The value of numPredefinedStarRois.
+        - 'MaxNumStarRois': The value of MaxNumStarRois.
+    Returns an empty list if no issues are found.</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_star_roi_consistency--problem-types">Problem Types</h5>
+<p>The 'problem' key in each issue dict can have values such as:
+    - "MaxNumStarRois != numPredefinedStarRois for method 0/1/3"
+    - "numPredefinedStarRois != 0 for method 2"
+    - "MaxNumStarRois &lt;= 0 for method 2"</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_star_roi_consistency--examples">Examples</h5>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>issues = processor.validate_star_roi_consistency(calendar)
+issues[0]
+{
+    'visit_id': 'V001',
+    'sequence_id': 'S001',
+    'problem': 'MaxNumStarRois != numPredefinedStarRois for method 0/1/3',
+    'star_roi_det_method': 1,
+    'num_predefined': 3,
+    'max_num': 2
+}</p>
+</blockquote>
+</blockquote>
+</blockquote>
 
     </div>
 
