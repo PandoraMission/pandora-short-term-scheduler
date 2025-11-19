@@ -1489,10 +1489,45 @@ class ScheduleProcessor:
         - Method 0, 1, 3: MaxNumStarRois should equal numPredefinedStarRois
         - Method 2: numPredefinedStarRois should be 0, MaxNumStarRois should be > 0
 
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The science calendar to validate.
+        report_issues : bool, optional
+            If True (default), issues are reported in the returned list. If False,
+            the function still performs validation but does not print or log issues.
+
         Returns
         -------
-        list
-            A list of issue dicts found. Empty list if none.
+        list of dict
+            A list of issue dictionaries found. Each dictionary contains:
+                - 'visit_id': The visit ID where the issue was found.
+                - 'sequence_id': The sequence ID where the issue was found.
+                - 'problem': A string describing the type of problem.
+                - 'star_roi_det_method': The value of StarRoiDetMethod.
+                - 'num_predefined': The value of numPredefinedStarRois.
+                - 'max_num': The value of MaxNumStarRois.
+            Returns an empty list if no issues are found.
+
+        Problem Types
+        -------------
+        The 'problem' key in each issue dict can have values such as:
+            - "MaxNumStarRois != numPredefinedStarRois for method 0/1/3"
+            - "numPredefinedStarRois != 0 for method 2"
+            - "MaxNumStarRois <= 0 for method 2"
+
+        Examples
+        --------
+        >>> issues = processor.validate_star_roi_consistency(calendar)
+        >>> issues[0]
+        {
+            'visit_id': 'V001',
+            'sequence_id': 'S001',
+            'problem': 'MaxNumStarRois != numPredefinedStarRois for method 0/1/3',
+            'star_roi_det_method': 1,
+            'num_predefined': 3,
+            'max_num': 2
+        }
         """
         issues = []
 
