@@ -253,8 +253,8 @@ class XMLWriter:
         num_predefined_elem = element.find("numPredefinedStarRois")
         max_num_elem = element.find("MaxNumStarRois")
 
-        # Determine StarRoiDetMethod value (default to 1 if not present)
-        star_roi_det_method = 1
+        # Determine StarRoiDetMethod value (default to 2 if not present)
+        star_roi_det_method = 2
         if (
             star_roi_det_method_elem is not None
             and star_roi_det_method_elem.text is not None
@@ -262,7 +262,7 @@ class XMLWriter:
             try:
                 star_roi_det_method = int(star_roi_det_method_elem.text)
             except (ValueError, TypeError):
-                star_roi_det_method = 1
+                star_roi_det_method = 2
 
         # Apply rules based on StarRoiDetMethod
         if star_roi_det_method == 2:
