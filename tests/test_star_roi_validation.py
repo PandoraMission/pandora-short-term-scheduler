@@ -198,8 +198,10 @@ def test_validate_star_roi_consistency_handles_missing_values():
     """Test that validation handles missing values gracefully."""
     start = Time("2025-01-01T00:00:00", scale="utc")
 
-    # Create payload with only numPredefinedStarRois
+    # Create payload with only numPredefinedStarRois and explicit StarRoiDetMethod=1
     payload_xml = ET.Element("AcquireVisCamScienceData")
+    star_roi_det = ET.SubElement(payload_xml, "StarRoiDetMethod")
+    star_roi_det.text = "1"
     num_predefined = ET.SubElement(payload_xml, "numPredefinedStarRois")
     num_predefined.text = "9"
     # MaxNumStarRois is missing
