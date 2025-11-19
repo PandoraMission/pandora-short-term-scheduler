@@ -246,7 +246,12 @@ class XMLWriter:
         Parameters
         ----------
         element : ET.Element
-            The AcquireVisCamScienceData XML element
+            The AcquireVisCamScienceData XML element. This element is modified in place.
+
+        Returns
+        -------
+        None
+            Modifies `element` in place.
         """
         # Find required elements
         star_roi_det_method_elem = element.find("StarRoiDetMethod")
