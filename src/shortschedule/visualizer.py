@@ -1787,7 +1787,7 @@ class ScheduleVisualizer:
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
 
         # Limit number of ticks to prevent overcrowding
-        ax.locator_params(axis="x", nbins=10)
+        # ax.locator_params(axis="x", nbins=10)  # Removed: not supported for date locators
         plt.xticks(rotation=45)
 
     def _create_windowed_priority_plots(
@@ -2262,8 +2262,10 @@ class ScheduleVisualizer:
                     )
 
                     # Create rectangle with NO BORDER for solid color
+                    # Ensure start_time is a scalar datetime
+                    start_num = float(mdates.date2num(start_time))
                     rect = Rectangle(
-                        (mdates.date2num(start_time), y_pos - 0.35),
+                        (start_num, y_pos - 0.35),
                         duration / 24,  # Convert hours to days for matplotlib
                         0.7,
                         facecolor=priority_color,
