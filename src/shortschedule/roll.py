@@ -188,16 +188,18 @@ def calculate_visit_rolls(
 
     # Calculate roll for each unique target
     for target, sequences in target_sequences.items():
+        # Sort sequences by start time to use the earliest one
+        sequences_sorted = sorted(sequences, key=lambda s: s.start_time)
 
-        # Use provided reference time or first sequence start time
+        # Use provided reference time or earliest sequence start time
         if reference_time is not None:
             calc_time = reference_time
         else:
-            calc_time = sequences[0].start_time
+            calc_time = sequences_sorted[0].start_time
 
         # Get coordinates from first sequence (should be same for all)
-        ra = sequences[0].ra
-        dec = sequences[0].dec
+        ra = sequences_sorted[0].ra
+        dec = sequences_sorted[0].dec
 
         # Calculate roll
         roll = calculate_roll(ra, dec, calc_time)

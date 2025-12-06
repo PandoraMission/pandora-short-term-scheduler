@@ -26,7 +26,7 @@ from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
 from .models import ObservationSequence, ScienceCalendar, Visit
-from .roll import calculate_roll
+from .roll import apply_rolls_to_calendar
 
 
 class ScheduleProcessor:
@@ -153,10 +153,10 @@ class ScheduleProcessor:
             windowed_calendar, verbose
         )
 
-        # Calculate roll angle for all sequences
-        for visit in processed_calendar.visits:
-            for seq in visit.sequences:
-                seq.roll = calculate_roll(seq.ra, seq.dec, seq.start_time)
+        # Calculate and apply roll angles to all sequences
+        # This ensures all sequences of the same target within a visit
+        # have the same roll angle
+        apply_rolls_to_calendar(processed_calendar, verbose=verbose)
 
         # Analyze processed calendar
         self._analyze_processed_calendar(processed_calendar)
@@ -241,11 +241,7 @@ class ScheduleProcessor:
             }
         )
 
-        # Attach updated metadata to the processed calendar so writers
-        # and callers can access TLEs, processing timestamp and the
-        # comprehensive gap_report. This was intentionally assigned
-        # here to ensure downstream XML output contains the processing
-        # audit information.
+        # Attach updated metadata to the processed calendar
         processed_calendar.metadata = new_metadata
 
         return processed_calendar
