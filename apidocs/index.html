@@ -731,6 +731,39 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_target_names" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_target_names
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_target_names">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_target_names--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_target_names--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#shortschedule.ScheduleProcessor.validate_visibility" class="md-nav__link">
     <span class="md-ellipsis">
       validate_visibility
@@ -1613,6 +1646,39 @@
   <a href="#shortschedule.ScheduleProcessor.validate_star_roi_consistency--examples" class="md-nav__link">
     <span class="md-ellipsis">
       Examples
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_target_names" class="md-nav__link">
+    <span class="md-ellipsis">
+      validate_target_names
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="validate_target_names">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_target_names--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.validate_target_names--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
     </span>
   </a>
   
@@ -2673,6 +2739,34 @@ issues[0]
 </blockquote>
 </blockquote>
 </blockquote>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="shortschedule.ScheduleProcessor.validate_target_names" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">validate_target_names</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">report_issues</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Validate that all target names do not contain spaces.</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_target_names--parameters">Parameters</h5>
+<p>calendar : ScienceCalendar
+    The calendar to validate.
+report_issues : bool, optional
+    If True, print issues to stdout.</p>
+<h5 id="shortschedule.ScheduleProcessor.validate_target_names--returns">Returns</h5>
+<p>List[Dict[str, Any]]
+    List of issues found. Each issue is a dict with:
+    - sequence_id: str
+    - target: str
+    - visit_id: str</p>
 
     </div>
 
