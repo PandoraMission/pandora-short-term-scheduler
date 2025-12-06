@@ -10,6 +10,7 @@ from importlib.metadata import PackageNotFoundError, version
 # Import core modules (keep imports at top-level)
 from .models import ObservationSequence, ScienceCalendar, Visit
 from .parser import parse_science_calendar
+from .roll import apply_rolls_to_calendar, apply_rolls_to_visit, calculate_roll
 from .scheduler import ScheduleProcessor
 from .writer import XMLWriter
 
@@ -24,6 +25,9 @@ __all__ = [
     "ObservationSequence",
     "ScheduleProcessor",
     "XMLWriter",
+    "calculate_roll",
+    "apply_rolls_to_visit",
+    "apply_rolls_to_calendar",
     "get_version",
     "setup_logging",
 ]

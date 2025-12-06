@@ -38,6 +38,7 @@ class ObservationSequence:
         ra: float,
         dec: float,
         payload_params: Dict[str, Any],
+        roll: Optional[float] = None,
     ):
         self.id = id
         self.target = target
@@ -47,6 +48,7 @@ class ObservationSequence:
         self.ra = ra
         self.dec = dec
         self.payload_params = payload_params
+        self.roll = roll  # Spacecraft roll angle in degrees
 
     @property
     def duration(self) -> TimeDelta:
@@ -80,6 +82,7 @@ class ObservationSequence:
             ra=self.ra,
             dec=self.dec,
             payload_params=payload_copy,
+            roll=self.roll,
         )
 
     def _copy_xml_element(self, element):

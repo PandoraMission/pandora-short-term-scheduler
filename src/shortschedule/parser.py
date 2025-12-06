@@ -183,10 +183,13 @@ def _parse_observation_sequence(
     if boresight_elem is not None:
         ra_elem = boresight_elem.find("pandora:RA", namespace)
         dec_elem = boresight_elem.find("pandora:DEC", namespace)
+        roll_elem = boresight_elem.find("pandora:Roll", namespace)
         ra = float(ra_elem.text) if ra_elem is not None else 0.0
         dec = float(dec_elem.text) if dec_elem is not None else 0.0
+        roll = float(roll_elem.text) if roll_elem is not None else None
     else:
         ra, dec = 0.0, 0.0
+        roll = None
 
     # --- Payload parameters ---
     payload_params_elem = seq_elem.find(
@@ -211,6 +214,7 @@ def _parse_observation_sequence(
         ra=ra,
         dec=dec,
         payload_params=payload_params,
+        roll=roll,
     )
 
 

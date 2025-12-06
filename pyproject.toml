@@ -1,26 +1,20 @@
-[project]
-name = "shortschedule"
-version = "0.1.0"
-description = ""
-authors = [
-    {name = "Tom Barclay",email = "barclay.astro@gmail.com"}
-]
-readme = "README.md"
-requires-python = ">=3.10,<4.0"
-
-dependencies = [
-    "rich (>=13.9.4,<14.0.0)",
-    "numpy (>=1.2)",
-    "pandas (>=2.2.3,<3.0.0)",
-    "appdirs (>=1.4.4,<2.0.0)",
-    "pandoravisibility @ git+https://github.com/PandoraMission/pandora-visibility.git"
-]
-
 [tool.poetry]
+name = "shortschedule"
+version = "0.2.0"
+description = ""
+authors = ["Tom Barclay <barclay.astro@gmail.com>"]
+readme = "README.md"
 packages = [{include = "shortschedule", from = "src"}]
+license = "MIT"
 
-[tool.poetry.group.dev]
-optional = true
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+rich = "^13.9.4"
+numpy = "^2.1.0"
+pandas = "^2.2.3"
+appdirs = "^1.4.4"
+astropy = "^7.1.1"
+pandoravisibility = {git = "https://github.com/PandoraMission/pandora-visibility.git"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
