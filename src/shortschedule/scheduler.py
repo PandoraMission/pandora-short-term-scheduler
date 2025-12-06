@@ -167,6 +167,16 @@ class ScheduleProcessor:
         calendar_status = "VALID"
         if (
             len(
+                self.validate_target_names(
+                    processed_calendar, report_issues=False
+                )
+            )
+            > 0
+        ):
+            print("Warning: Some target names contain spaces.")
+            calendar_status = "INVALID"
+        if (
+            len(
                 self.validate_visibility(
                     processed_calendar, report_issues=False
                 )
@@ -202,6 +212,16 @@ class ScheduleProcessor:
             > 0
         ):
             print("Warning: Some sequence timings are invalid.")
+            calendar_status = "INVALID"
+        if (
+            len(
+                self.validate_roll_consistency(
+                    processed_calendar, report_issues=False
+                )
+            )
+            > 0
+        ):
+            print("Warning: Some roll angles are inconsistent.")
             calendar_status = "INVALID"
 
         new_metadata = copy.deepcopy(processed_calendar.metadata)
@@ -885,6 +905,45 @@ class ScheduleProcessor:
                     if report_issues:
                         print(
                             f"Visibility issue: {seq.target} {seq.start_time} {seq.stop_time} {seq.id}"
+                        )
+
+        return issues
+
+    def validate_target_names(
+        self, calendar: ScienceCalendar, report_issues: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Validate that all target names do not contain spaces.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The calendar to validate.
+        report_issues : bool, optional
+            If True, print issues to stdout.
+
+        Returns
+        -------
+        List[Dict[str, Any]]
+            List of issues found. Each issue is a dict with:
+            - sequence_id: str
+            - target: str
+            - visit_id: str
+        """
+        issues = []
+
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                if seq.target and " " in seq.target:
+                    issue = {
+                        "sequence_id": seq.id,
+                        "target": seq.target,
+                        "visit_id": visit.id,
+                    }
+                    issues.append(issue)
+
+                    if report_issues:
+                        print(
+                            f"Target name issue: '{seq.target}' contains spaces (sequence {seq.id}, visit {visit.id})"
                         )
 
         return issues
