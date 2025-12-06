@@ -196,13 +196,13 @@ class XMLWriter:
         # Boresight
         boresight_elem = ET.SubElement(obs_params, "Boresight")
         ra_elem = ET.SubElement(boresight_elem, "RA")
-        ra_elem.text = str(sequence.ra)
+        ra_elem.text = f"{sequence.ra:.6f}"
         dec_elem = ET.SubElement(boresight_elem, "DEC")
-        dec_elem.text = str(sequence.dec)
+        dec_elem.text = f"{sequence.dec:.6f}"
         # Roll angle (if present)
         if sequence.roll is not None:
             roll_elem = ET.SubElement(boresight_elem, "Roll")
-            roll_elem.text = str(sequence.roll)
+            roll_elem.text = f"{sequence.roll:.6f}"
 
         # Payload Parameters - copy the XML elements directly
         self._add_payload_parameters(seq_elem, sequence.payload_params)

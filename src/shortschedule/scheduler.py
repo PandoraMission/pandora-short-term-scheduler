@@ -10,10 +10,6 @@ are provided. The processor performs these high-level steps:
   shrink following sequences to reduce unobserved time
 - update payload integration parameters (VIS/NIR) to fit the new timing
 - assemble a comprehensive gap/processing report
-
-The implementation focuses on correctness and traceability: it stores a
-`gap_report` with before/after statistics and keeps intermediate
-assignments for testing and visualization.
 """
 
 # Standard library
@@ -30,6 +26,7 @@ from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
 from .models import ObservationSequence, ScienceCalendar, Visit
+from .roll import calculate_roll
 
 
 class ScheduleProcessor:
@@ -155,6 +152,11 @@ class ScheduleProcessor:
         processed_calendar = self._process_all_sequences(
             windowed_calendar, verbose
         )
+
+        # Calculate roll angle for all sequences
+        for visit in processed_calendar.visits:
+            for seq in visit.sequences:
+                seq.roll = calculate_roll(seq.ra, seq.dec, seq.start_time)
 
         # Analyze processed calendar
         self._analyze_processed_calendar(processed_calendar)
@@ -1668,6 +1670,100 @@ class ScheduleProcessor:
                                     f"numPredefinedStarRois='{num_predefined}' or "
                                     f"MaxNumStarRois='{max_num}' cannot be parsed as integers"
                                 )
+
+        return issues
+
+    def validate_roll_consistency(
+        self,
+        calendar: ScienceCalendar,
+        report_issues: bool = True,
+        tolerance_deg: float = 0.001,
+    ) -> List[Dict[str, Any]]:
+        """
+        Validate that all sequences of the same target within a visit have
+        consistent roll angles.
+
+        For each visit, sequences with the same target name should have the
+        same roll angle (within tolerance). This ensures the spacecraft
+        maintains consistent orientation for all observations of the same
+        target during a visit.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The science calendar to validate.
+        report_issues : bool, optional
+            If True (default), print issues found. If False, only return issues.
+        tolerance_deg : float, optional
+            Maximum allowed difference in roll angle (degrees) between
+            sequences of the same target. Default is 0.001 degrees.
+
+        Returns
+        -------
+        list of dict
+            A list of issue dictionaries. Each dictionary contains:
+                - 'visit_id': The visit ID where the issue was found.
+                - 'target': The target name with inconsistent roll.
+                - 'sequence_ids': List of sequence IDs with this target.
+                - 'roll_values': List of roll values for these sequences.
+                - 'max_difference_deg': Maximum difference in roll values.
+        """
+        issues = []
+
+        for visit in calendar.visits:
+            # Group sequences by target
+            target_sequences: Dict[str, List[ObservationSequence]] = {}
+            for seq in visit.sequences:
+                if seq.target not in target_sequences:
+                    target_sequences[seq.target] = []
+                target_sequences[seq.target].append(seq)
+
+            # Check roll consistency for each target
+            for target, sequences in target_sequences.items():
+                # Skip if only one sequence for this target
+                if len(sequences) < 2:
+                    continue
+
+                # Collect roll values (skip None)
+                roll_values = []
+                seq_ids = []
+                for seq in sequences:
+                    if seq.roll is not None:
+                        roll_values.append(seq.roll)
+                        seq_ids.append(seq.id)
+
+                if len(roll_values) < 2:
+                    continue
+
+                # Check if all roll values are within tolerance
+                max_roll = max(roll_values)
+                min_roll = min(roll_values)
+                max_diff = max_roll - min_roll
+
+                # Handle wrap-around at 360 degrees
+                # If difference > 180, we may have wrap-around
+                if max_diff > 180:
+                    # Normalize to check wrap-around
+                    normalized = [r if r < 180 else r - 360 for r in roll_values]
+                    max_diff = max(normalized) - min(normalized)
+
+                if max_diff > tolerance_deg:
+                    issue = {
+                        "visit_id": visit.id,
+                        "target": target,
+                        "sequence_ids": seq_ids,
+                        "roll_values": roll_values,
+                        "max_difference_deg": max_diff,
+                    }
+                    issues.append(issue)
+
+                    if report_issues:
+                        print(
+                            f"Roll inconsistency: Visit {visit.id}, "
+                            f"Target {target}, "
+                            f"Roll values: {[f'{r:.2f}' for r in roll_values]}, "
+                            f"Max diff: {max_diff:.2f} deg"
+                        )
 
         return issues
 
