@@ -1744,7 +1744,9 @@ class ScheduleProcessor:
                 # If difference > 180, we may have wrap-around
                 if max_diff > 180:
                     # Normalize to check wrap-around
-                    normalized = [r if r < 180 else r - 360 for r in roll_values]
+                    normalized = [
+                        r if r < 180 else r - 360 for r in roll_values
+                    ]
                     max_diff = max(normalized) - min(normalized)
 
                 if max_diff > tolerance_deg:

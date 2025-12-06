@@ -15,7 +15,7 @@ solar panels maintain proper sun exposure.
 """
 
 # Standard library
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 # Third-party
 import numpy as np
@@ -60,9 +60,15 @@ def calculate_roll(
         sun_coord = sun_coord.transform_to("icrs")
 
     # Calculate roll angle
-    roll, _ = _spacecraft_roll_from_radec(target_coord.ra.deg, target_coord.dec.deg, sun_coord.ra.deg, sun_coord.dec.deg)
+    roll, _ = _spacecraft_roll_from_radec(
+        target_coord.ra.deg,
+        target_coord.dec.deg,
+        sun_coord.ra.deg,
+        sun_coord.dec.deg,
+    )
     roll = roll % 360.0  # Normalize to [0, 360)
     return roll
+
 
 def _spacecraft_roll_from_radec(target_ra, target_dec, sun_ra, sun_dec):
     """
@@ -76,8 +82,8 @@ def _spacecraft_roll_from_radec(target_ra, target_dec, sun_ra, sun_dec):
     perpendicular to the boresight as the reference for yB.
     """
     # Convert to vectors
-    t = radec_to_vector(target_ra, target_dec)    # boresight
-    s = radec_to_vector(sun_ra, sun_dec)          # Sun direction
+    t = radec_to_vector(target_ra, target_dec)  # boresight
+    s = radec_to_vector(sun_ra, sun_dec)  # Sun direction
 
     # boresight body axes, we define the others later because of edge cases
     zB = normalize(t)
@@ -88,7 +94,7 @@ def _spacecraft_roll_from_radec(target_ra, target_dec, sun_ra, sun_dec):
 
     # catch edge case where boresight is very close to celestial north
     # in practice this should never happen because of Sun constraints
-    if np.linalg.norm(north_proj) < 1.e-8:
+    if np.linalg.norm(north_proj) < 1.0e-8:
         # boresight ≈ celestial north: pick arbitrary east-like vector
         east = np.array([1.0, 0.0, 0.0])
         north_proj = east - np.dot(east, zB) * zB
@@ -110,9 +116,10 @@ def _spacecraft_roll_from_radec(target_ra, target_dec, sun_ra, sun_dec):
     # Compute roll angle x_ref -> xB around zB
     cos_r = np.dot(x_ref, xB)
     sin_r = np.dot(y_ref, xB)
-    roll = np.rad2deg(np.arctan2(sin_r, cos_r))   # degrees
+    roll = np.rad2deg(np.arctan2(sin_r, cos_r))  # degrees
 
     return roll, (xB, yB, zB)
+
 
 def radec_to_vector(ra_deg, dec_deg):
     """Convert RA/Dec (deg) to an Earth-Centered Inertial (ECI) coordinate frame unit vector."""
@@ -123,6 +130,7 @@ def radec_to_vector(ra_deg, dec_deg):
     z = np.sin(dec)
     return np.array([x, y, z])
 
+
 def vector_to_radec(v):
     """Convert an ECI coordinate frame unit vector to RA/Dec (deg)."""
     x, y, z = v
@@ -132,6 +140,7 @@ def vector_to_radec(v):
     ra_deg = np.rad2deg(ra) % 360.0
     dec_deg = np.rad2deg(dec)
     return ra_deg, dec_deg
+
 
 def normalize(v):
     n = np.linalg.norm(v)

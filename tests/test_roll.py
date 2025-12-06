@@ -78,12 +78,16 @@ class TestRadecToVector:
             vec = radec_to_vector(ra, dec)
             ra_out, dec_out = vector_to_radec(vec)
             np.testing.assert_almost_equal(
-                ra_out, ra, decimal=10,
-                err_msg=f"RA roundtrip failed for ({ra}, {dec})"
+                ra_out,
+                ra,
+                decimal=10,
+                err_msg=f"RA roundtrip failed for ({ra}, {dec})",
             )
             np.testing.assert_almost_equal(
-                dec_out, dec, decimal=10,
-                err_msg=f"Dec roundtrip failed for ({ra}, {dec})"
+                dec_out,
+                dec,
+                decimal=10,
+                err_msg=f"Dec roundtrip failed for ({ra}, {dec})",
             )
 
 
@@ -125,7 +129,9 @@ class TestCalculateRoll:
         for ra in [0, 90, 180, 270]:
             for dec in [-45, 0, 45]:
                 roll = calculate_roll(ra=ra, dec=dec, obs_time=obs_time)
-                assert 0.0 <= roll < 360.0, f"Roll {roll} out of range for RA={ra}, Dec={dec}"
+                assert (
+                    0.0 <= roll < 360.0
+                ), f"Roll {roll} out of range for RA={ra}, Dec={dec}"
 
     def test_roll_consistency_same_target(self):
         """Same target at same time should give same roll."""
@@ -371,7 +377,10 @@ class TestRollPhysicalReasonableness:
         obs_time = Time("2026-06-15T12:00:00")
 
         # Calculate same roll multiple times
-        rolls = [calculate_roll(ra=150.0, dec=25.0, obs_time=obs_time) for _ in range(5)]
+        rolls = [
+            calculate_roll(ra=150.0, dec=25.0, obs_time=obs_time)
+            for _ in range(5)
+        ]
 
         # All should be identical
         assert len(set(rolls)) == 1
