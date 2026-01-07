@@ -13,6 +13,7 @@ Notes
 - Payload parameters are stored as ElementTree elements to preserve XML
     structure; helpers are provided to convert to nested dicts or flattened
     dot-notation mappings.
+- Models use Pydantic for data validation and type checking.
 """
 
 # Standard library
@@ -23,32 +24,71 @@ from typing import Any, Dict, List, Optional
 import astropy.units as u
 import numpy as np
 from astropy.time import Time, TimeDelta
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
-class ObservationSequence:
-    """Represents an observation sequence within a visit."""
+class ObservationSequence(BaseModel):
+    """Represents an observation sequence within a visit.
 
-    def __init__(
-        self,
-        id: str,
-        target: str,
-        priority: int,
-        start_time: Time,
-        stop_time: Time,
-        ra: float,
-        dec: float,
-        payload_params: Dict[str, Any],
-        roll: Optional[float] = None,
-    ):
-        self.id = id
-        self.target = target
-        self.priority = priority
-        self.start_time = start_time
-        self.stop_time = stop_time
-        self.ra = ra
-        self.dec = dec
-        self.payload_params = payload_params
-        self.roll = roll  # Spacecraft roll angle in degrees
+    Uses Pydantic for automatic validation of types and constraints.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: str
+    target: str
+    priority: int
+    start_time: Time
+    stop_time: Time
+    ra: float
+    dec: float
+    payload_params: Dict[str, Any]
+    roll: Optional[float] = None
+
+    @field_validator("start_time", "stop_time", mode="before")
+    @classmethod
+    def validate_time(cls, v):
+        """Ensure time fields are astropy Time objects."""
+        if isinstance(v, Time):
+            return v
+        # Allow string ISO format to be parsed
+        if isinstance(v, str):
+            return Time(v, format="isot", scale="utc")
+        raise ValueError(
+            f"start_time and stop_time must be astropy.time.Time objects, got {type(v)}"
+        )
+
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v):
+        """Ensure priority is non-negative."""
+        if v < 0:
+            raise ValueError("priority must be non-negative")
+        return v
+
+    @field_validator("ra")
+    @classmethod
+    def validate_ra(cls, v):
+        """Ensure RA is in valid range [0, 360)."""
+        if not (0 <= v < 360):
+            raise ValueError(f"ra must be in range [0, 360), got {v}")
+        return v
+
+    @field_validator("dec")
+    @classmethod
+    def validate_dec(cls, v):
+        """Ensure Dec is in valid range [-90, 90]."""
+        if not (-90 <= v <= 90):
+            raise ValueError(f"dec must be in range [-90, 90], got {v}")
+        return v
+
+    @field_validator("roll")
+    @classmethod
+    def validate_roll(cls, v):
+        """Ensure roll is in valid range [0, 360) if provided."""
+        if v is not None and not (0 <= v < 360):
+            raise ValueError(f"roll must be in range [0, 360), got {v}")
+        return v
 
     @property
     def duration(self) -> TimeDelta:
@@ -260,12 +300,25 @@ class ObservationSequence:
         return f"<ObservationSequence {self.id}: {self.target} (P{self.priority}, {self.duration.sec / 60:.1f}min)>"
 
 
-class Visit:
-    """Represents a visit in the science calendar."""
+class Visit(BaseModel):
+    """Represents a visit in the science calendar.
 
-    def __init__(self, id, sequences):
-        self.id: str = id
-        self.sequences: List["ObservationSequence"] = sequences
+    Uses Pydantic for automatic validation of types.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: str
+    sequences: List[ObservationSequence]
+
+    @field_validator("sequences")
+    @classmethod
+    def validate_sequences_not_empty(cls, v):
+        """Ensure a visit has at least one sequence (if desired)."""
+        # This is optional - remove if empty visits are valid
+        # if not v:
+        #     raise ValueError("A visit must have at least one sequence")
+        return v
 
     @property
     def total_duration(self):
@@ -303,18 +356,25 @@ class Visit:
         return f"<Visit {self.id}: {len(self.sequences)} sequences, {self.total_duration_minutes:.1f}min>"
 
 
-class ScienceCalendar:
-    """Represents a complete Science Calendar."""
+class ScienceCalendar(BaseModel):
+    """Represents a complete Science Calendar.
 
-    def __init__(
-        self,
-        metadata: Optional[Dict[str, Any]],
-        visits: List[Visit],
-        visibility: Any = None,
-    ):
-        self.metadata: Dict[str, Any] = metadata or {}
-        self.visits: List[Visit] = visits
-        self.visibility = visibility
+    Uses Pydantic for automatic validation of types.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    metadata: Dict[str, Any] = {}
+    visits: List[Visit]
+    visibility: Optional[Any] = None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def ensure_metadata_dict(cls, v):
+        """Ensure metadata is a dictionary."""
+        if v is None:
+            return {}
+        return v
 
     def set_visibility_calculator(self, visibility: Any) -> None:
         """Set or update the visibility calculator."""
