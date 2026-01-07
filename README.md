@@ -27,7 +27,7 @@ The package is organized under `src/shortschedule/` and exposes a small, focused
 
 | Module | Purpose |
 |--------|---------|
-| **`models.py`** | Data classes for the in-memory calendar representation: `ObservationSequence`, `Visit`, and `ScienceCalendar`. Times use `astropy.time.Time`; payload parameters are stored as `ElementTree` elements for lossless XML round-tripping. |
+| **`models.py`** | Data classes for the in-memory calendar representation: `ObservationSequence`, `Visit`, and `ScienceCalendar`. Uses **Pydantic** for data validation and type checking. Times use `astropy.time.Time`; payload parameters are stored as `ElementTree` elements for lossless XML round-tripping. |
 | **`parser.py`** | Parse PAN-SCICAL XML files into `ScienceCalendar` objects. Entry point: `parse_science_calendar(xml_path)`. |
 | **`scheduler.py`** | `ScheduleProcessor` class that adjusts a calendar given new TLE data. It computes minute-by-minute visibility via `pandoravisibility`, fills gaps, updates payload integration parameters, and produces a detailed `gap_report`. |
 | **`writer.py`** | `XMLWriter` class to serialize a `ScienceCalendar` back to PAN-compliant XML, preserving payload structure and attaching processing metadata. |
@@ -54,6 +54,7 @@ PAN-SCICAL XML ──▶ parser.parse_science_calendar() ──▶ ScienceCalend
 
 ### Key Design Decisions
 
+- **Pydantic for data validation**: All data models (`ObservationSequence`, `Visit`, `ScienceCalendar`) use Pydantic for automatic type checking and validation. This ensures data integrity at construction time with clear error messages for invalid inputs.
 - **Astropy for time handling**: All times are `astropy.time.Time` objects; durations are `TimeDelta`. This ensures precision and avoids timezone pitfalls.
 - **Payload preservation**: Payload parameters are stored as raw `ElementTree` elements so nested structures survive round-trip serialization without loss.
 - **Visibility via `pandoravisibility`**: The scheduler delegates visibility calculations to the external `pandoravisibility` package. Tests mock `Visibility.get_visibility()` for determinism.
@@ -71,6 +72,7 @@ Unit tests live in `tests/` and cover:
 | `test_scheduler_validators.py` | Sequence timing and visibility validation |
 | `test_processor_with_mock_visibility.py` | End-to-end processing with mocked visibility |
 | `test_star_roi_validation.py` | Star/ROI parameter validation |
+| `test_pydantic_validation.py` | Pydantic validation for data models |
 | `test_version.py` | Package version accessibility |
 
 Run tests with `make pytest` or `poetry run pytest -q`.

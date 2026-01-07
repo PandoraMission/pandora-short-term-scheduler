@@ -58,6 +58,14 @@ before committing; CI will enforce formatting.
   - `ScienceCalendar`
   - `Visit`
   - `ObservationSequence`
+- Models use **Pydantic** for data validation and type checking.
+- All data models inherit from `pydantic.BaseModel` and include field validators.
+- Validators ensure:
+  - Time fields are `astropy.time.Time` objects (or ISO strings that get converted)
+  - RA is in range [0, 360)
+  - Dec is in range [-90, 90]
+  - Roll is in range [0, 360) if provided
+  - Priority is non-negative
 - Avoid ad-hoc dicts for data interchange unless explicitly required by external code.
 
 ### Visibility
