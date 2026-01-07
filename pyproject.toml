@@ -14,6 +14,7 @@ numpy = "^2.1.0"
 pandas = "^2.2.3"
 appdirs = "^1.4.4"
 astropy = "^7.1.1"
+pydantic = "^2.10.5"
 pandoravisibility = {git = "https://github.com/PandoraMission/pandora-visibility.git"}
 
 [tool.poetry.group.dev.dependencies]
