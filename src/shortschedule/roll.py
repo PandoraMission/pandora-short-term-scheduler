@@ -47,7 +47,7 @@ def calculate_roll(
     Returns
     -------
     float
-        The spacecraft roll angle in degrees, in the range [0, 360).
+        The spacecraft roll angle in degrees, in the range (-180, 180].
     """
 
     # Get target coordinates
@@ -66,7 +66,7 @@ def calculate_roll(
         sun_coord.ra.deg,
         sun_coord.dec.deg,
     )
-    roll = roll % 360.0  # Normalize to [0, 360)
+    roll = (roll + 180.0) % 360.0 - 180.0  # Normalize to (-180, 180]
     return roll
 
 

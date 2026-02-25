@@ -203,6 +203,9 @@ class XMLWriter:
         if sequence.roll is not None:
             roll_elem = ET.SubElement(boresight_elem, "Roll")
             roll_elem.text = f"{sequence.roll:.6f}"
+        # PRI_CMD_DIR (always 10)
+        pri_cmd_dir_elem = ET.SubElement(boresight_elem, "PRI_CMD_DIR")
+        pri_cmd_dir_elem.text = "10"
 
         # Payload Parameters - copy the XML elements directly
         self._add_payload_parameters(seq_elem, sequence.payload_params)

@@ -37,6 +37,32 @@ def test_parse_sample_calendar_and_roundtrip(tmp_path):
     assert total_sequences == total_sequences2
 
 
+def test_boresight_contains_pri_cmd_dir(tmp_path):
+    """Written XML should include PRI_CMD_DIR element in each Boresight."""
+    sample = get_sample_calendar_path()
+    cal = parse_science_calendar(sample)
+
+    out_file = tmp_path / "pri_cmd_dir.xml"
+    writer = XMLWriter()
+    writer.write_calendar(cal, str(out_file))
+
+    tree = ET.parse(str(out_file))
+    root = tree.getroot()
+    ns = (
+        {"pandora": root.tag.split("}")[0].strip("{")}
+        if "}" in root.tag
+        else {}
+    )
+    prefix = "pandora:" if ns else ""
+
+    boresights = root.findall(f".//{prefix}Boresight", ns)
+    assert len(boresights) > 0, "No Boresight elements found in output"
+    for bs in boresights:
+        pri = bs.find(f"{prefix}PRI_CMD_DIR", ns)
+        assert pri is not None, "PRI_CMD_DIR missing from Boresight"
+        assert pri.text == "10", f"PRI_CMD_DIR should be 10, got {pri.text}"
+
+
 def test_payload_element_roundtrip_preserves_tags():
     sample = get_sample_calendar_path()
     cal = parse_science_calendar(sample)
