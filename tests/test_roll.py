@@ -124,13 +124,13 @@ class TestCalculateRoll:
         assert isinstance(roll, float)
 
     def test_roll_in_valid_range(self):
-        """Roll angle should be in [0, 360) range."""
+        """Roll angle should be in (-180, 180] range."""
         obs_time = Time("2026-06-15T12:00:00")
         for ra in [0, 90, 180, 270]:
             for dec in [-45, 0, 45]:
                 roll = calculate_roll(ra=ra, dec=dec, obs_time=obs_time)
                 assert (
-                    0.0 <= roll < 360.0
+                    -180.0 < roll <= 180.0
                 ), f"Roll {roll} out of range for RA={ra}, Dec={dec}"
 
     def test_roll_consistency_same_target(self):
@@ -355,9 +355,9 @@ class TestRollPhysicalReasonableness:
         obs_time = Time("2026-06-01T12:00:00", scale="utc")
         # Point near north celestial pole (Dec = 89.9)
         roll = calculate_roll(ra=0.0, dec=89.9, obs_time=obs_time)
-        # Roll should still be a valid number in [0, 360)
+        # Roll should still be a valid number in (-180, 180]
         assert isinstance(roll, float)
-        assert 0.0 <= roll < 360.0
+        assert -180.0 < roll <= 180.0
         assert not np.isnan(roll)
         assert not np.isinf(roll)
 
