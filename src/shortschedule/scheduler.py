@@ -43,7 +43,15 @@ class ScheduleProcessor:
     returning a boolean array of the same length as `times`.
     """
 
-    def __init__(self, tle_line1: str, tle_line2: str) -> None:
+    def __init__(
+        self,
+        tle_line1: str,
+        tle_line2: str,
+        vda_pre_sequence_overhead=260 * u.s,
+        vda_post_sequence_overhead=60 * u.s,
+        nirda_pre_sequence_overhead=258 * u.s,
+        nirda_post_sequence_overhead=60 * u.s,
+    ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
 
@@ -51,6 +59,14 @@ class ScheduleProcessor:
         -----------
         tle_line1, tle_line2 : str
             TLE lines for satellite
+        vda_pre_sequence_overhead : Quantity, optional
+            VDA pre-sequence overhead (default 260 s).
+        vda_post_sequence_overhead : Quantity, optional
+            VDA post-sequence overhead (default 60 s).
+        nirda_pre_sequence_overhead : Quantity, optional
+            NIRDA pre-sequence overhead (default 258 s).
+        nirda_post_sequence_overhead : Quantity, optional
+            NIRDA post-sequence overhead (default 60 s).
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -62,8 +78,14 @@ class ScheduleProcessor:
 
         self.visibility = Visibility(tle_line1, tle_line2)
 
-        self.min_sequence_duration = TimeDelta(2 * 60 * u.s)
+        self.min_sequence_duration = TimeDelta(5 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
+
+        # Payload overhead budgets
+        self.vda_pre_sequence_overhead = vda_pre_sequence_overhead
+        self.vda_post_sequence_overhead = vda_post_sequence_overhead
+        self.nirda_pre_sequence_overhead = nirda_pre_sequence_overhead
+        self.nirda_post_sequence_overhead = nirda_post_sequence_overhead
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -693,14 +715,30 @@ class ScheduleProcessor:
     ) -> ObservationSequence:
         duration = sequence.duration.to(u.us)
 
-        sequence = self._update_VDA_integrations(sequence, duration)
-        sequence = self._update_NIRDA_integrations(sequence, duration)
+        sequence = self._update_VDA_integrations(
+            sequence,
+            duration,
+            pre_sequence_overhead=self.vda_pre_sequence_overhead,
+            post_sequence_overhead=self.vda_post_sequence_overhead,
+        )
+        sequence = self._update_NIRDA_integrations(
+            sequence,
+            duration,
+            pre_sequence_overhead=self.nirda_pre_sequence_overhead,
+            post_sequence_overhead=self.nirda_post_sequence_overhead,
+        )
 
         return sequence
 
     def _update_VDA_integrations(
-        self, sequence: ObservationSequence, duration: TimeDelta
+        self,
+        sequence: ObservationSequence,
+        duration: TimeDelta,
+        pre_sequence_overhead: TimeDelta = 260 * u.s,
+        post_sequence_overhead: TimeDelta = 60 * u.s,
     ) -> ObservationSequence:
+
+        # we need to include an overhead here of 260 seconds at the beginning of the start time, and 60 seconds at the end
 
         # Get parameters
         exposure_time_str = sequence.get_payload_parameter(
@@ -722,7 +760,20 @@ class ScheduleProcessor:
             frames_per_coadd = int(frames_per_coadd_str)
 
             # Convert duration to microseconds for calculation
-            duration_us = duration.to(u.us)
+            duration_us = (
+                duration.to(u.us)
+                - pre_sequence_overhead.to(u.us)
+                - post_sequence_overhead.to(u.us)
+            )
+
+            # Guard: if overhead exceeds duration, no frames are possible
+            if duration_us.value <= 0:
+                sequence.set_payload_parameter(
+                    "AcquireVisCamScienceData",
+                    "NumTotalFramesRequested",
+                    "0",
+                )
+                return sequence
 
             # Calculate maximum complete coadds that fit in duration
             effective_exposure_time = exposure_time * frames_per_coadd
@@ -758,7 +809,11 @@ class ScheduleProcessor:
             return sequence
 
     def _update_NIRDA_integrations(
-        self, sequence: ObservationSequence, duration: TimeDelta
+        self,
+        sequence: ObservationSequence,
+        duration: TimeDelta,
+        pre_sequence_overhead: TimeDelta = 258 * u.s,
+        post_sequence_overhead: TimeDelta = 60 * u.s,
     ) -> ObservationSequence:
 
         # Get parameters
@@ -859,8 +914,22 @@ class ScheduleProcessor:
 
         integration_time = NumFramesTotal * frame_time
 
+        duration_sequence_seconds = sequence.duration.to(u.s)
+
+        effective_duration_s = (
+            duration_sequence_seconds
+            - pre_sequence_overhead.to(u.s)
+            - post_sequence_overhead.to(u.s)
+        )
+        # Guard: if overhead exceeds duration, no integrations are possible
+        if effective_duration_s.value <= 0:
+            sequence.set_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations", "0"
+            )
+            return sequence
+
         SC_Integrations = int(
-            np.floor(sequence.duration.to(u.s) / integration_time)
+            np.floor(effective_duration_s / integration_time.to(u.s))
         )
         success = sequence.set_payload_parameter(
             "AcquireInfCamImages", "SC_Integrations", str(SC_Integrations)
