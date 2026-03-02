@@ -204,10 +204,16 @@ def compute_solar_power_fraction(
 ) -> float:
     """Solar-panel power fraction for a given target, roll, and time.
 
-    The fraction is computed using Lambert's cosine law applied to the
-    angle between the Sun direction and the solar-panel normal (the
-    spacecraft +Y axis).  The convention matches
-    ``pandoravisibility``'s ``get_visibility_best_roll`` output.
+    On Pandora the solar panels extend along the spacecraft +Y axis
+    (hinge axis), so the panel surface normal lies approximately in
+    the X–Z plane.  When the +Y axis is perpendicular to the Sun the
+    panel faces are illuminated optimally; when +Y is parallel to the
+    Sun the panels are edge-on and receive no flux.
+
+    The formula computes
+    ``sin(arccos(|dot(Y_payload, sun)|))`` which is equivalent to
+    ``cos(π/2 − arccos(|cos_sy|))`` — matching the solar-power
+    calculation in ``pandoravisibility``'s ``get_visibility_best_roll``.
 
     Parameters
     ----------
@@ -221,7 +227,8 @@ def compute_solar_power_fraction(
     Returns
     -------
     float
-        Power fraction in [0, 1].  1.0 = optimal illumination.
+        Power fraction in [0, 1].  1.0 when +Y ⊥ Sun (optimal),
+        0.0 when +Y ∥ Sun (edge-on).
     """
     _, y_payload, _ = _payload_axes_from_roll(ra, dec, roll_deg)
 
@@ -241,6 +248,9 @@ def compute_mean_solar_power(
     times: Time,
 ) -> float:
     """Mean solar-panel power fraction over an array of times.
+
+    See :func:`compute_solar_power_fraction` for the definition of the
+    power fraction (1.0 when +Y ⊥ Sun, 0.0 when +Y ∥ Sun).
 
     Parameters
     ----------
