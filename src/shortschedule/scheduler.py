@@ -111,7 +111,7 @@ class ScheduleProcessor:
             Roll-angle sweep resolution in degrees (default 2.0).
         min_power_frac : float, optional
             Minimum acceptable solar-panel power fraction (0-1).
-            Roll candidates below this are rejected (default 0.8).
+            Roll candidates below this are rejected (default 0.7).
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
