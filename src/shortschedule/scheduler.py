@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # Third-party
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import AltAz, EarthLocation, SkyCoord, get_body
+from astropy.constants import R_earth
 from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
@@ -43,7 +44,15 @@ class ScheduleProcessor:
     returning a boolean array of the same length as `times`.
     """
 
-    def __init__(self, tle_line1: str, tle_line2: str) -> None:
+    def __init__(
+        self,
+        tle_line1: str,
+        tle_line2: str,
+        earthlimb_day_deg: float = 110.0,
+        earthlimb_night_deg: float = 80.0,
+        star_tracker_sun_min_deg: float = 30.0,
+        star_tracker_earth_min_deg: float = 30.0,
+    ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
 
@@ -51,6 +60,21 @@ class ScheduleProcessor:
         -----------
         tle_line1, tle_line2 : str
             TLE lines for satellite
+        earthlimb_day_deg : float, optional
+            Minimum angle from Earth center (nadir direction) required
+            during satellite daylight, in degrees.  Default 110.
+        earthlimb_night_deg : float, optional
+            Minimum angle from Earth center (nadir direction) required
+            while the satellite is in Earth's shadow, in degrees.
+            Default 80.
+        star_tracker_sun_min_deg : float, optional
+            Minimum star tracker boresight separation from the Sun, in
+            degrees.  Applied to both trackers; at least one tracker must
+            satisfy the constraint.  Default 30.
+        star_tracker_earth_min_deg : float, optional
+            Minimum star tracker boresight separation from the Earth center
+            (nadir direction), in degrees.  Applied to both trackers; at
+            least one must satisfy the constraint.  Default 30.
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -60,7 +84,19 @@ class ScheduleProcessor:
         self.tle_line1 = tle_line1
         self.tle_line2 = tle_line2
 
-        self.visibility = Visibility(tle_line1, tle_line2)
+        # Earth-limb keepout angles measured from Earth center (nadir).
+        # The scheduler applies these per-minute based on day/night state;
+        # the pandoravisibility earthlimb constraint is therefore disabled.
+        self.earthlimb_day_deg = earthlimb_day_deg
+        self.earthlimb_night_deg = earthlimb_night_deg
+        self.star_tracker_sun_min_deg = star_tracker_sun_min_deg
+        self.star_tracker_earth_min_deg = star_tracker_earth_min_deg
+
+        # Disable the built-in earth-limb constraint so we can apply the
+        # day/night variant ourselves inside _get_visibility().
+        self.visibility = Visibility(
+            tle_line1, tle_line2, earthlimb_min=0 * u.deg
+        )
 
         self.min_sequence_duration = TimeDelta(2 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
