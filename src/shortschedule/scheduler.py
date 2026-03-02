@@ -26,7 +26,7 @@ from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
 from .models import ObservationSequence, ScienceCalendar, Visit
-from .roll import apply_rolls_to_calendar
+from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
 
 
 class ScheduleProcessor:
@@ -43,14 +43,41 @@ class ScheduleProcessor:
     returning a boolean array of the same length as `times`.
     """
 
+    @staticmethod
+    def _to_deg(
+        value: Optional[float],
+    ) -> Optional[u.Quantity]:
+        """Convert a plain float (degrees) to an astropy Quantity.
+
+        Returns *None* unchanged so callers can use ``None`` to fall back
+        to the ``Visibility`` class default for that constraint.
+        """
+        if value is None:
+            return None
+        return value * u.deg
+
     def __init__(
         self,
         tle_line1: str,
         tle_line2: str,
-        vda_pre_sequence_overhead=260 * u.s,
-        vda_post_sequence_overhead=60 * u.s,
-        nirda_pre_sequence_overhead=258 * u.s,
-        nirda_post_sequence_overhead=60 * u.s,
+        vda_pre_sequence_overhead: u.Quantity = 260 * u.s,
+        vda_post_sequence_overhead: u.Quantity = 60 * u.s,
+        nirda_pre_sequence_overhead: u.Quantity = 258 * u.s,
+        nirda_post_sequence_overhead: u.Quantity = 60 * u.s,
+        moon_min: Optional[float] = 20.0,
+        sun_min: Optional[float] = 91.0,
+        earthlimb_min: Optional[float] = 20.0,
+        earthlimb_day_min: Optional[float] = None,
+        earthlimb_night_min: Optional[float] = None,
+        mars_min: Optional[float] = None,
+        jupiter_min: Optional[float] = None,
+        st_sun_min: Optional[float] = None,
+        st_moon_min: Optional[float] = None,
+        st_earthlimb_min: Optional[float] = None,
+        st1_earthlimb_min: Optional[float] = None,
+        st2_earthlimb_min: Optional[float] = None,
+        roll_step: float = 2.0,
+        min_power_frac: float = 0.7,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -67,6 +94,24 @@ class ScheduleProcessor:
             NIRDA pre-sequence overhead (default 258 s).
         nirda_post_sequence_overhead : Quantity, optional
             NIRDA post-sequence overhead (default 60 s).
+        moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
+            Minimum angular separations (degrees) for visibility constraints.
+        earthlimb_day_min : float, optional
+            Earth-limb keepout angle (degrees) on the **day** side of the
+            terminator.  When ``None`` (default), ``earthlimb_min`` is used
+            for both day and night sides (``Visibility`` default behaviour).
+        earthlimb_night_min : float, optional
+            Earth-limb keepout angle (degrees) on the **night** side of the
+            terminator.  When ``None`` (default), ``earthlimb_min`` is used
+            for both day and night sides (``Visibility`` default behaviour).
+        st_sun_min, st_moon_min, st_earthlimb_min, st1_earthlimb_min,
+        st2_earthlimb_min : float, optional
+            Additional constraints for star trackers.
+        roll_step : float, optional
+            Roll-angle sweep resolution in degrees (default 2.0).
+        min_power_frac : float, optional
+            Minimum acceptable solar-panel power fraction (0-1).
+            Roll candidates below this are rejected (default 0.8).
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -76,10 +121,52 @@ class ScheduleProcessor:
         self.tle_line1 = tle_line1
         self.tle_line2 = tle_line2
 
-        self.visibility = Visibility(tle_line1, tle_line2)
+        _kw: Dict[str, Any] = dict(
+            moon_min=self._to_deg(moon_min),
+            sun_min=self._to_deg(sun_min),
+            earthlimb_min=self._to_deg(earthlimb_min),
+            mars_min=self._to_deg(mars_min),
+            jupiter_min=self._to_deg(jupiter_min),
+            st_sun_min=self._to_deg(st_sun_min),
+            st_moon_min=self._to_deg(st_moon_min),
+            st_earthlimb_min=self._to_deg(st_earthlimb_min),
+            st1_earthlimb_min=self._to_deg(st1_earthlimb_min),
+            st2_earthlimb_min=self._to_deg(st2_earthlimb_min),
+        )
+        # Only forward day/night earthlimb keepouts when explicitly set so that
+        # Visibility falls back to earthlimb_min for whichever side is None.
+        if earthlimb_day_min is not None:
+            _kw["earthlimb_day_min"] = self._to_deg(earthlimb_day_min)
+        if earthlimb_night_min is not None:
+            _kw["earthlimb_night_min"] = self._to_deg(earthlimb_night_min)
+        # Strip None entries so Visibility uses its own class-level defaults
+        # for any constraint the caller left unset.
+        _kw = {k: v for k, v in _kw.items() if v is not None}
+        self.visibility = Visibility(tle_line1, tle_line2, **_kw)
 
         self.min_sequence_duration = TimeDelta(5 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
+
+        # Roll sweep configuration
+        self.roll_step = roll_step
+        self.min_power_frac = min_power_frac
+        # Roll sweep is only meaningful when star-tracker constraints are
+        # active (those constraints depend on roll; boresight constraints
+        # do not).  Disable the sweep when no ST parameters were given so
+        # that vanilla ScheduleProcessor(tle1, tle2) behaves as before.
+        _st_params = (
+            st_sun_min,
+            st_moon_min,
+            st_earthlimb_min,
+            st1_earthlimb_min,
+            st2_earthlimb_min,
+        )
+        self._roll_sweep_enabled: bool = any(p is not None for p in _st_params)
+
+        # Per-visit, per-target precomputed rolls populated during
+        # _process_all_sequences.  Structure:
+        #   { visit_id: { target_name: roll_deg_or_None } }
+        self._computed_target_rolls: Dict[str, Dict[str, Optional[float]]] = {}
 
         # Payload overhead budgets
         self.vda_pre_sequence_overhead = vda_pre_sequence_overhead
@@ -177,8 +264,13 @@ class ScheduleProcessor:
 
         # Calculate and apply roll angles to all sequences
         # This ensures all sequences of the same target within a visit
-        # have the same roll angle
-        apply_rolls_to_calendar(processed_calendar, verbose=verbose)
+        # have the same roll angle.  Precomputed visibility-aware rolls
+        # take precedence over the sun-derived default.
+        apply_rolls_to_calendar(
+            processed_calendar,
+            verbose=verbose,
+            precomputed_rolls=self._computed_target_rolls,
+        )
 
         # Analyze processed calendar
         self._analyze_processed_calendar(processed_calendar)
@@ -343,6 +435,22 @@ class ScheduleProcessor:
 
         working_calendar = deepcopy(calendar)
 
+        # ── Pre-compute best roll per target per visit ──────────
+        # Only run the sweep when star-tracker constraints are active;
+        # boresight-only constraints are roll-independent.
+        if self._roll_sweep_enabled:
+            for visit in working_calendar.visits:
+                visit_rolls = find_best_rolls_for_visit(
+                    self.visibility,
+                    visit,
+                    roll_step=self.roll_step,
+                    min_power_frac=self.min_power_frac,
+                )
+                self._computed_target_rolls[visit.id] = visit_rolls
+                if verbose:
+                    for tgt, r in visit_rolls.items():
+                        print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
+
         # Use initial time grid for processing
         total_minutes, start_time, end_time, time_grid = (
             self._get_synchronized_time_grid(working_calendar)
@@ -353,6 +461,7 @@ class ScheduleProcessor:
         last_stop = deepcopy(start_time)
 
         for visit in working_calendar.visits:
+            visit_rolls = self._computed_target_rolls.get(visit.id, {})
 
             for j, seq in enumerate(visit.sequences):
 
@@ -376,7 +485,16 @@ class ScheduleProcessor:
                 deltas = np.arange(n_mins) * u.min
                 times = seq.start_time + deltas
 
-                vis = self.visibility.get_visibility(target_coord, times)
+                # Use precomputed roll if sweep was enabled and roll found
+                target_roll = visit_rolls.get(seq.target)
+                if self._roll_sweep_enabled and target_roll is not None:
+                    vis = self.visibility.get_visibility(
+                        target_coord,
+                        times,
+                        roll=target_roll * u.deg,
+                    )
+                else:
+                    vis = self.visibility.get_visibility(target_coord, times)
                 end_index = min(i + len(vis), total_minutes)
                 all_minutes_bool[i:end_index] = vis[: end_index - i]
 
@@ -522,11 +640,52 @@ class ScheduleProcessor:
             ra, dec = get_ra_dec(prev_idx)
             target_coord = SkyCoord(ra, dec, frame="icrs", unit="deg")
 
-            # Check visibility of previous target during gap
-            vis = self.visibility.get_visibility(target_coord, Time(gap_times))
+            # Look up precomputed roll for the previous target
+            prev_target = assignments[prev_idx]["target"]
+            prev_visit_id = assignments[prev_idx]["visit_id"]
+            prev_roll = self._computed_target_rolls.get(prev_visit_id, {}).get(
+                prev_target
+            )
 
-            # Extend previous sequence if target is visible
-            if np.any(vis):
+            # Check visibility of previous target during gap
+            if self._roll_sweep_enabled and prev_roll is not None:
+                vis = self.visibility.get_visibility(
+                    target_coord,
+                    Time(gap_times),
+                    roll=prev_roll * u.deg,
+                )
+            else:
+                vis = self.visibility.get_visibility(
+                    target_coord, Time(gap_times)
+                )
+
+            # ── Pre-check: is shrinking the following sequence feasible? ──
+            # We must decide this BEFORE extending the previous sequence so
+            # that an extend followed by a failed shrink cannot create an
+            # overlap between the two adjacent sequences.
+            shrink_feasible = False
+            seq_to_shrink = None
+            current_visit_id = None
+            current_sequence_id = None
+            gap_end_time = None
+
+            if gap_start_idx < len(assignments):
+                cur_asgn = assignments[gap_start_idx]
+                current_visit_id = cur_asgn["visit_id"]
+                current_sequence_id = cur_asgn["sequence_id"]
+                seq_to_shrink = working_cal.get_sequence(
+                    current_visit_id, current_sequence_id
+                )
+                if seq_to_shrink:
+                    gap_end_time = Time(gap_times[-1]) + 1 * u.minute
+                    remaining_duration = seq_to_shrink.stop_time - gap_end_time
+                    shrink_feasible = (
+                        remaining_duration >= self.min_sequence_duration
+                    )
+
+            # Extend previous sequence only when the following sequence can
+            # also be shrunk — keeping extend and shrink atomic.
+            if np.any(vis) and shrink_feasible:
                 visible_times = np.array(gap_times)[vis]
                 if len(visible_times) > 0:
                     last_visible_time = visible_times[-1]
@@ -534,13 +693,11 @@ class ScheduleProcessor:
                     visit_id = prev_assignment["visit_id"]
                     sequence_id = prev_assignment["sequence_id"]
 
-                    # Get and extend the previous sequence
                     seq_to_extend = working_cal.get_sequence(
                         visit_id, sequence_id
                     )
                     if seq_to_extend:
                         new_stop_time = Time(last_visible_time) + 1 * u.minute
-
                         extended_seq = ObservationSequence(
                             id=seq_to_extend.id,
                             target=seq_to_extend.target,
@@ -553,7 +710,6 @@ class ScheduleProcessor:
                                 seq_to_extend.payload_params
                             ),
                         )
-
                         working_cal.replace_sequence(
                             visit_id, sequence_id, extended_seq
                         )
@@ -572,45 +728,21 @@ class ScheduleProcessor:
                         )
                     )
 
-            # Shrink the current sequence to start after the gap
-            if gap_start_idx < len(assignments):
-                current_assignment = assignments[gap_start_idx]
-                current_visit_id = current_assignment["visit_id"]
-                current_sequence_id = current_assignment["sequence_id"]
-
-                seq_to_shrink = working_cal.get_sequence(
-                    current_visit_id, current_sequence_id
+            # Shrink the current sequence (only when pre-check passed above)
+            if shrink_feasible and seq_to_shrink is not None:
+                shrunk_seq = ObservationSequence(
+                    id=seq_to_shrink.id,
+                    target=seq_to_shrink.target,
+                    priority=seq_to_shrink.priority,
+                    start_time=gap_end_time,
+                    stop_time=seq_to_shrink.stop_time,
+                    ra=seq_to_shrink.ra,
+                    dec=seq_to_shrink.dec,
+                    payload_params=deepcopy(seq_to_shrink.payload_params),
                 )
-                if seq_to_shrink:
-                    # Calculate new start time (after the visibility gap)
-                    gap_end_time = Time(gap_times[-1]) + 1 * u.minute
-
-                    # Only shrink if there's still meaningful duration left
-                    remaining_duration = seq_to_shrink.stop_time - gap_end_time
-                    min_duration = self.min_sequence_duration
-
-                    if remaining_duration >= min_duration:
-                        shrunk_seq = ObservationSequence(
-                            id=seq_to_shrink.id,
-                            target=seq_to_shrink.target,
-                            priority=seq_to_shrink.priority,
-                            start_time=gap_end_time,
-                            stop_time=seq_to_shrink.stop_time,
-                            ra=seq_to_shrink.ra,
-                            dec=seq_to_shrink.dec,
-                            payload_params=deepcopy(
-                                seq_to_shrink.payload_params
-                            ),
-                        )
-
-                        working_cal.replace_sequence(
-                            current_visit_id, current_sequence_id, shrunk_seq
-                        )
-                    else:
-                        print("WARNING MINIMUM SEQUENCE DURATION ISSUE WITH")
-                        print(
-                            f"{seq_to_shrink.target}: {gap_end_time}, {seq_to_shrink.stop_time}"
-                        )
+                working_cal.replace_sequence(
+                    current_visit_id, current_sequence_id, shrunk_seq
+                )
 
         # Update gap report
         self.gap_report["visibility_gaps"] = visibility_gaps
@@ -948,6 +1080,7 @@ class ScheduleProcessor:
         issues = []
 
         for visit in calendar.visits:
+            visit_rolls = self._computed_target_rolls.get(visit.id, {})
             for seq in visit.sequences:
                 n_mins = int(np.rint(seq.duration.sec / 60.0))
                 target_coord = SkyCoord(
@@ -956,7 +1089,15 @@ class ScheduleProcessor:
                 deltas = np.arange(n_mins) * u.min
                 times = seq.start_time + deltas
 
-                vis = self.visibility.get_visibility(target_coord, times)
+                target_roll = visit_rolls.get(seq.target)
+                if self._roll_sweep_enabled and target_roll is not None:
+                    vis = self.visibility.get_visibility(
+                        target_coord,
+                        times,
+                        roll=target_roll * u.deg,
+                    )
+                else:
+                    vis = self.visibility.get_visibility(target_coord, times)
                 if not np.all(vis):
                     issue = {
                         "sequence_id": seq.id,

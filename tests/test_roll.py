@@ -14,18 +14,39 @@ from unittest.mock import MagicMock
 # Third-party
 import numpy as np
 import pytest
+from astropy import units as u
 from astropy.time import Time
 
 # First-party/Local
+from shortschedule.models import ObservationSequence, Visit
 from shortschedule.roll import (
     apply_rolls_to_calendar,
     apply_rolls_to_visit,
     calculate_roll,
     calculate_visit_rolls,
+    find_best_roll_for_target,
+    find_best_rolls_for_visit,
     normalize,
     radec_to_vector,
     vector_to_radec,
 )
+
+T0 = Time("2026-01-01T00:00:00", scale="utc")
+
+
+def _make_seq(sid, target, start_min, duration_min, ra=10.0, dec=20.0):
+    start = T0 + start_min * u.min
+    stop = start + duration_min * u.min
+    return ObservationSequence(
+        id=sid,
+        target=target,
+        priority=1,
+        start_time=start,
+        stop_time=stop,
+        ra=ra,
+        dec=dec,
+        payload_params={},
+    )
 
 
 class TestRadecToVector:
@@ -413,3 +434,170 @@ class TestRollPhysicalReasonableness:
         # Should be right-handed: xB × yB = zB
         cross = np.cross(xB, yB)
         np.testing.assert_array_almost_equal(cross, zB, decimal=10)
+
+
+# ================================================================
+# Tests for solar power fraction helpers
+# ================================================================
+
+
+class TestSolarPowerFraction:
+    """Tests for compute_solar_power_fraction and compute_mean_solar_power."""
+
+    def test_power_in_unit_range(self):
+        from shortschedule.roll import compute_solar_power_fraction
+
+        t = Time("2026-01-15T12:00:00", scale="utc")
+        power = compute_solar_power_fraction(
+            ra=100.0, dec=20.0, roll_deg=0.0, obs_time=t
+        )
+        assert 0.0 <= power <= 1.0
+
+    def test_sun_derived_roll_gives_high_power(self):
+        """The sun-derived roll should yield near-optimal power."""
+        from shortschedule.roll import (
+            calculate_roll,
+            compute_solar_power_fraction,
+        )
+
+        t = Time("2026-01-15T12:00:00", scale="utc")
+        sun_roll = calculate_roll(100.0, 20.0, t)
+        power = compute_solar_power_fraction(100.0, 20.0, sun_roll, t)
+        # Sun-derived roll should give high (near 1.0) power
+        assert power > 0.9
+
+    def test_mean_solar_power_scalar_time(self):
+        from shortschedule.roll import compute_mean_solar_power
+
+        t = Time("2026-01-15T12:00:00", scale="utc")
+        power = compute_mean_solar_power(100.0, 20.0, 0.0, t)
+        assert 0.0 <= power <= 1.0
+
+    def test_mean_solar_power_array_time(self):
+        from shortschedule.roll import compute_mean_solar_power
+
+        times = Time("2026-01-15T12:00:00", scale="utc") + np.arange(5) * u.min
+        power = compute_mean_solar_power(100.0, 20.0, 0.0, times)
+        assert 0.0 <= power <= 1.0
+
+
+# ================================================================
+# Tests for roll sweep functions
+# ================================================================
+
+
+class TestFindBestRollForTarget:
+    """Tests for find_best_roll_for_target."""
+
+    def test_selects_roll_with_most_visible_minutes(self):
+        from shortschedule.roll import find_best_roll_for_target
+
+        class MockVis:
+            """Returns True only for roll near 90 deg."""
+
+            def get_visibility(self, coord, times, roll=None):
+                n = len(times)
+                if roll is not None:
+                    val = roll.to(u.deg).value
+                    if 89.0 <= val <= 91.0:
+                        return np.ones(n, dtype=bool)
+                return np.zeros(n, dtype=bool)
+
+        vis = MockVis()
+        times = Time("2026-01-15T12:00:00") + np.arange(10) * u.min
+
+        best = find_best_roll_for_target(
+            vis,
+            ra=100.0,
+            dec=20.0,
+            times=times,
+            roll_step=2.0,
+            min_power_frac=0.0,  # disable power filter
+        )
+        assert best is not None
+        assert abs(best - 90.0) <= 2.0 or abs(best + 270.0) <= 2.0
+
+    def test_returns_none_when_no_roll_visible(self):
+        from shortschedule.roll import find_best_roll_for_target
+
+        class MockVisNone:
+            def get_visibility(self, coord, times, roll=None):
+                return np.zeros(len(times), dtype=bool)
+
+        best = find_best_roll_for_target(
+            MockVisNone(),
+            ra=100.0,
+            dec=20.0,
+            times=Time("2026-01-15T12:00:00") + np.arange(5) * u.min,
+            roll_step=30.0,
+            min_power_frac=0.0,
+        )
+        assert best is None
+
+    def test_rejects_rolls_below_power_threshold(self):
+        from shortschedule.roll import find_best_roll_for_target
+
+        class MockVisAlwaysTrue:
+            def get_visibility(self, coord, times, roll=None):
+                return np.ones(len(times), dtype=bool)
+
+        # With extremely high power threshold, only rolls near sun-derived
+        # should pass.  Using min_power_frac=1.1 means nothing passes.
+        best = find_best_roll_for_target(
+            MockVisAlwaysTrue(),
+            ra=100.0,
+            dec=20.0,
+            times=Time("2026-01-15T12:00:00") + np.arange(5) * u.min,
+            roll_step=30.0,
+            min_power_frac=1.1,
+        )
+        assert best is None
+
+    def test_tiebreaker_prefers_sun_roll(self):
+        class MockVisAll:
+            """All rolls equally visible."""
+
+            def get_visibility(self, coord, times, roll=None):
+                return np.ones(len(times), dtype=bool)
+
+        t = Time("2026-01-15T12:00:00")
+        sun_roll = calculate_roll(100.0, 20.0, t)
+
+        best = find_best_roll_for_target(
+            MockVisAll(),
+            ra=100.0,
+            dec=20.0,
+            times=t + np.arange(5) * u.min,
+            roll_step=2.0,
+            min_power_frac=0.0,
+            sun_roll=sun_roll,
+        )
+        assert best is not None
+        # Should be within one step of the sun-derived roll
+        dist = abs(((best - sun_roll + 180.0) % 360.0) - 180.0)
+        assert dist <= 2.0
+
+
+class TestFindBestRollsForVisit:
+    """Tests for find_best_rolls_for_visit."""
+
+    def test_multi_target_visit(self):
+        class MockVisAllTrue:
+            def get_visibility(self, coord, times, roll=None):
+                return np.ones(len(times), dtype=bool)
+
+        s1 = _make_seq("s1", "TargetA", 0, 10, ra=100.0, dec=20.0)
+        s2 = _make_seq("s2", "TargetB", 10, 10, ra=200.0, dec=-30.0)
+        visit = Visit(id="v1", sequences=[s1, s2])
+
+        result = find_best_rolls_for_visit(
+            MockVisAllTrue(),
+            visit,
+            roll_step=30.0,
+            min_power_frac=0.0,
+        )
+
+        assert "TargetA" in result
+        assert "TargetB" in result
+        assert result["TargetA"] is not None
+        assert result["TargetB"] is not None

@@ -13,10 +13,10 @@ from shortschedule.writer import XMLWriter
 
 
 class DummyVisibilityAllTrue:
-    def __init__(self, l1, l2):
+    def __init__(self, l1, l2, **kwargs):
         pass
 
-    def get_visibility(self, coord, times):
+    def get_visibility(self, coord, times, roll=None):
         try:
             length = len(times)
         except Exception:

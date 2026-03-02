@@ -15,10 +15,11 @@ pandas = "^2.2.3"
 appdirs = "^1.4.4"
 astropy = "^7.1.1"
 pandoravisibility = {git = "https://github.com/PandoraMission/pandora-visibility.git"}
+requests = "^2.32.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
-black = "^25.9.0"
+black = "^26.1.0"
 isort = "^6.0.0"
 flake8 = "^7.3.0"
 ruff = "^0.14.5"
@@ -30,7 +31,7 @@ pytkdocs = {version = "^0.16.5", extras = ["numpy-style"]}
 mkdocs-include-markdown-plugin = "^7.1.4"
 mkdocstrings = {version = "^0.30.1", extras = ["python"]}
 jupyter-contrib-nbextensions = "^0.7.0"
-notebook = ">=6.0.0,<7.0.0"
+notebook = "^7.5.4"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
