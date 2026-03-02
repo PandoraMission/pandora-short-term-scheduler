@@ -495,7 +495,7 @@ def calculate_visit_rolls(
 def apply_rolls_to_visit(
     visit,
     target_rolls: Optional[Dict[str, float]] = None,
-    precomputed_rolls: Optional[Dict[str, float]] = None,
+    precomputed_rolls: Optional[Dict[str, Optional[float]]] = None,
 ) -> None:
     """Apply roll angles to all observation sequences in a visit.
 
@@ -510,9 +510,10 @@ def apply_rolls_to_visit(
         Pre-calculated mapping of target name to roll angle.
         If None, rolls will be calculated using calculate_visit_rolls().
     precomputed_rolls : dict, optional
-        Visibility-aware mapping of target name to roll angle.
-        Entries in this dict take precedence over *target_rolls*.
-        Targets whose value is *None* fall through to
+        Visibility-aware mapping of target name to roll angle
+        (``Dict[str, Optional[float]]``).  Entries with a
+        non-``None`` value take precedence over *target_rolls*.
+        Targets whose value is ``None`` fall through to
         *target_rolls* / ``calculate_roll``.
 
     Returns
@@ -541,7 +542,7 @@ def apply_rolls_to_visit(
 def apply_rolls_to_calendar(
     calendar,
     verbose: bool = False,
-    precomputed_rolls: Optional[Dict[str, Dict[str, float]]] = None,
+    precomputed_rolls: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
 ) -> None:
     """Apply roll angles to all visits in a science calendar.
 
@@ -555,10 +556,11 @@ def apply_rolls_to_calendar(
     verbose : bool, optional
         If True, print progress information.
     precomputed_rolls : dict, optional
-        Nested mapping ``{visit_id: {target: roll_deg}}`` of
-        visibility-aware roll angles.  These override the
-        sun-derived rolls for any target where a valid value was
-        found.  Targets with *None* values fall through to the
+        Nested mapping
+        ``{visit_id: {target: Optional[float]}}`` of
+        visibility-aware roll angles.  Entries with a non-``None``
+        value override the sun-derived roll for that target.
+        Targets with a ``None`` value fall through to the
         sun-derived calculation.
 
     Returns
