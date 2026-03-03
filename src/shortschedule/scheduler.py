@@ -870,7 +870,8 @@ class ScheduleProcessor:
         post_sequence_overhead: TimeDelta = 60 * u.s,
     ) -> ObservationSequence:
 
-        # we need to include an overhead here of 260 seconds at the beginning of the start time, and 60 seconds at the end
+        # we need to include an overhead here of 260 seconds at the
+        # beginning of the start time, and 60 seconds at the end
 
         # Get parameters
         exposure_time_str = sequence.get_payload_parameter(
