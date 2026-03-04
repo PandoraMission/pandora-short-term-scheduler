@@ -1790,19 +1790,17 @@ class ScheduleProcessor:
                 if len(roll_values) < 2:
                     continue
 
-                # Check if all roll values are within tolerance
-                max_roll = max(roll_values)
-                min_roll = min(roll_values)
-                max_diff = max_roll - min_roll
-
-                # Handle wrap-around at 360 degrees
-                # If difference > 180, we may have wrap-around
-                if max_diff > 180:
-                    # Normalize to check wrap-around
-                    normalized = [
-                        r if r < 180 else r - 360 for r in roll_values
-                    ]
-                    max_diff = max(normalized) - min(normalized)
+                # Compute circular range (smallest arc containing
+                # all roll values), which correctly handles the
+                # ±180° wrap-around.
+                sorted_rolls = sorted(roll_values)
+                gaps = [
+                    sorted_rolls[i + 1] - sorted_rolls[i]
+                    for i in range(len(sorted_rolls) - 1)
+                ]
+                # Wrap-around gap from last back to first
+                gaps.append(360.0 - (sorted_rolls[-1] - sorted_rolls[0]))
+                max_diff = 360.0 - max(gaps)
 
                 if max_diff > tolerance_deg:
                     issue = {
