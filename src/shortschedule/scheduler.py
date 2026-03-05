@@ -738,7 +738,8 @@ class ScheduleProcessor:
         post_sequence_overhead: TimeDelta = 60 * u.s,
     ) -> ObservationSequence:
 
-        # we need to include an overhead here of 260 seconds at the beginning of the start time, and 60 seconds at the end
+        # Include VDA overheads at the start and end of the sequence using
+        # pre_sequence_overhead and post_sequence_overhead.
 
         # Get parameters
         exposure_time_str = sequence.get_payload_parameter(
