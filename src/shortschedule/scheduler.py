@@ -144,7 +144,7 @@ class ScheduleProcessor:
         _kw = {k: v for k, v in _kw.items() if v is not None}
         self.visibility = Visibility(tle_line1, tle_line2, **_kw)
 
-        self.min_sequence_duration = TimeDelta(5 * 60 * u.s)
+        self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
 
         # Roll sweep configuration
