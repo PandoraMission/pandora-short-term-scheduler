@@ -78,7 +78,7 @@ class ScheduleProcessor:
 
         self.visibility = Visibility(tle_line1, tle_line2)
 
-        self.min_sequence_duration = TimeDelta(5 * 60 * u.s)
+        self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
 
         # Payload overhead budgets
