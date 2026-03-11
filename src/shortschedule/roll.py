@@ -241,6 +241,76 @@ def compute_solar_power_fraction(
     return float(np.cos(incidence))
 
 
+def _sun_vectors(times: Time) -> np.ndarray:
+    """Return Sun unit vectors for all *times* in a single ephemeris call.
+
+    Calls ``get_sun`` once for the entire time array, avoiding the
+    O(N) repeated ephemeris lookups that arise from iterating over
+    individual time samples.
+
+    Parameters
+    ----------
+    times : Time
+        Scalar or array of observation times.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(3,)`` for a scalar time, ``(N, 3)`` for an array of
+        times.  Each row is a unit vector in ECI pointing toward the Sun.
+    """
+    sun_coord = get_sun(times)
+    ra_deg = sun_coord.ra.deg
+    dec_deg = sun_coord.dec.deg
+    ra_rad = np.deg2rad(ra_deg)
+    dec_rad = np.deg2rad(dec_deg)
+    x = np.cos(dec_rad) * np.cos(ra_rad)
+    y = np.cos(dec_rad) * np.sin(ra_rad)
+    z = np.sin(dec_rad)
+    if times.isscalar:
+        return np.array([x, y, z])
+    return np.stack([x, y, z], axis=-1)  # (N, 3)
+
+
+def _mean_solar_power_from_sun_vecs(
+    ra: float,
+    dec: float,
+    roll_deg: float,
+    sun_vecs: np.ndarray,
+) -> float:
+    """Mean solar-panel power fraction using precomputed Sun vectors.
+
+    Equivalent to :func:`compute_mean_solar_power` but avoids any
+    ``get_sun`` call, making it safe to reuse across many candidate
+    roll angles without repeated ephemeris overhead.
+
+    Parameters
+    ----------
+    ra, dec : float
+        Target RA / Dec in degrees.
+    roll_deg : float
+        Spacecraft roll angle about boresight in degrees.
+    sun_vecs : np.ndarray
+        Shape ``(3,)`` (scalar) or ``(N, 3)`` (array) of Sun unit
+        vectors, as returned by :func:`_sun_vectors`.
+
+    Returns
+    -------
+    float
+        Mean power fraction in [0, 1].
+    """
+    _, y_payload, _ = _payload_axes_from_roll(ra, dec, roll_deg)
+    if sun_vecs.ndim == 1:
+        # Scalar time
+        cos_sy = np.clip(np.dot(y_payload, sun_vecs), -1.0, 1.0)
+        theta_sy = np.arccos(np.abs(cos_sy))
+        return float(np.cos(np.pi / 2 - theta_sy))
+    # Array of times: vectorised dot product
+    cos_sy = np.clip(sun_vecs @ y_payload, -1.0, 1.0)  # (N,)
+    theta_sy = np.arccos(np.abs(cos_sy))
+    return float(np.mean(np.cos(np.pi / 2 - theta_sy)))
+
+
 def compute_mean_solar_power(
     ra: float,
     dec: float,
@@ -259,27 +329,15 @@ def compute_mean_solar_power(
     roll_deg : float
         Spacecraft roll angle about boresight in degrees.
     times : Time
-        Array of observation times.
+        Scalar or array of observation times.
 
     Returns
     -------
     float
         Mean power fraction in [0, 1].
     """
-    if times.isscalar:
-        return compute_solar_power_fraction(ra, dec, roll_deg, times)
-
-    _, y_payload, _ = _payload_axes_from_roll(ra, dec, roll_deg)
-
-    total = 0.0
-    for t in times:
-        sun_coord = get_sun(t)
-        sun_vec = radec_to_vector(sun_coord.ra.deg, sun_coord.dec.deg)
-        cos_sy = np.clip(np.dot(y_payload, sun_vec), -1.0, 1.0)
-        theta_sy = np.arccos(np.abs(cos_sy))
-        incidence = np.pi / 2 - theta_sy
-        total += np.cos(incidence)
-    return float(total / len(times))
+    sun_vecs = _sun_vectors(times)
+    return _mean_solar_power_from_sun_vecs(ra, dec, roll_deg, sun_vecs)
 
 
 # ------------------------------------------------------------------
@@ -336,9 +394,14 @@ def find_best_roll_for_target(
     best_vis_count: int = 0
     best_sun_dist: float = 360.0  # tiebreaker distance
 
+    # Precompute Sun vectors once for all times so the candidate loop
+    # reuses them instead of making O(N_candidates × N_times) ephemeris
+    # calls.
+    sun_vecs = _sun_vectors(times)
+
     for cand in candidates:
         # --- power threshold ---
-        power = compute_mean_solar_power(ra, dec, cand, times)
+        power = _mean_solar_power_from_sun_vecs(ra, dec, cand, sun_vecs)
         if power < min_power_frac:
             continue
 
