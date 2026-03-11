@@ -1,9 +1,11 @@
 # Standard library
 import copy
+import unittest.mock as mock
 import xml.etree.ElementTree as ET
 
 # Third-party
 import numpy as np
+import pytest
 from astropy import units as u
 from astropy.time import Time, TimeDelta
 
@@ -92,7 +94,7 @@ class TestUpdateVDAIntegrations:
             frames_per_coadd=1,
         )
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
 
         seq_no = sched._update_VDA_integrations(
             copy.deepcopy(seq),
@@ -128,7 +130,7 @@ class TestUpdateVDAIntegrations:
             frames_per_coadd=1,
         )
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
@@ -150,7 +152,7 @@ class TestUpdateVDAIntegrations:
             frames_per_coadd=1,
         )
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
@@ -172,7 +174,7 @@ class TestUpdateVDAIntegrations:
             frames_per_coadd=5,
         )
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
@@ -194,7 +196,7 @@ class TestUpdateVDAIntegrations:
             frames_per_coadd=1,
         )
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
@@ -216,7 +218,7 @@ class TestUpdateVDAIntegrations:
             frames_per_coadd=1,
         )
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
 
         # 100 s start + 50 s end = 150 s total → 1650 available
         seq_out = sched._update_VDA_integrations(
@@ -271,7 +273,7 @@ class TestUpdateNIRDAIntegrations:
         """Default 258+60 s overhead should yield fewer integrations than zero."""
         seq = _make_nirda_seq(duration_sec=1800, **_NIRDA_KWARGS)
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
 
         seq_no = sched._update_NIRDA_integrations(
             copy.deepcopy(seq),
@@ -302,7 +304,7 @@ class TestUpdateNIRDAIntegrations:
         """With zero overhead, verifies exact SC_Integrations count."""
         seq = _make_nirda_seq(duration_sec=1800, **_NIRDA_KWARGS)
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
@@ -325,7 +327,7 @@ class TestUpdateNIRDAIntegrations:
         """1800 s - 318 s overhead → verified SC_Integrations count."""
         seq = _make_nirda_seq(duration_sec=1800, **_NIRDA_KWARGS)
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
@@ -348,7 +350,7 @@ class TestUpdateNIRDAIntegrations:
         """Sequence shorter than 318 s overhead budget → 0 integrations."""
         seq = _make_nirda_seq(duration_sec=200, **_NIRDA_KWARGS)
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
@@ -366,7 +368,7 @@ class TestUpdateNIRDAIntegrations:
         """Custom overhead values should produce a deterministic count."""
         seq = _make_nirda_seq(duration_sec=1800, **_NIRDA_KWARGS)
         sched = _sched()
-        duration = seq.duration.to(u.us)
+        duration = seq.duration
 
         start_oh = 100
         end_oh = 50
@@ -387,3 +389,242 @@ class TestUpdateNIRDAIntegrations:
         effective = 1800 - start_oh - end_oh
         expected = int(np.floor(effective / integration_time))
         assert integ == expected
+
+
+# ---------------------------------------------------------------------------
+# _update_payload_parameters_sequence (orchestrating wrapper)
+# ---------------------------------------------------------------------------
+
+
+def _sched_with_overhead(
+    vda_pre=0 * u.s,
+    vda_post=0 * u.s,
+    nirda_pre=0 * u.s,
+    nirda_post=0 * u.s,
+):
+    """ScheduleProcessor instance with only the overhead attributes set."""
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    sched.vda_pre_sequence_overhead = vda_pre
+    sched.vda_post_sequence_overhead = vda_post
+    sched.nirda_pre_sequence_overhead = nirda_pre
+    sched.nirda_post_sequence_overhead = nirda_post
+    return sched
+
+
+class TestUpdatePayloadParametersSequence:
+    """Tests for the _update_payload_parameters_sequence orchestrator.
+
+    These tests exercise the full VDA/NIRDA path through the wrapper,
+    verifying that the *instance* overhead values are applied correctly.
+    """
+
+    # ---- VDA path --------------------------------------------------------
+
+    def test_vda_overhead_reduces_frames(self):
+        """Instance overhead should reduce NumTotalFramesRequested vs zero overhead.
+
+        Verifies requirement (1): overhead reduces the computed frames.
+        """
+        seq_zero = _make_vda_seq(
+            duration_sec=1800,
+            exposure_us=1_000_000,
+            frames_per_coadd=1,
+        )
+        seq_with = copy.deepcopy(seq_zero)
+
+        sched_zero = _sched_with_overhead()
+        sched_with = _sched_with_overhead(vda_pre=260 * u.s, vda_post=60 * u.s)
+
+        seq_zero = sched_zero._update_payload_parameters_sequence(seq_zero)
+        seq_with = sched_with._update_payload_parameters_sequence(seq_with)
+
+        frames_zero = int(
+            seq_zero.get_payload_parameter(
+                "AcquireVisCamScienceData", "NumTotalFramesRequested"
+            )
+        )
+        frames_with = int(
+            seq_with.get_payload_parameter(
+                "AcquireVisCamScienceData", "NumTotalFramesRequested"
+            )
+        )
+        assert frames_with < frames_zero
+
+    def test_vda_exact_frame_count_via_wrapper(self):
+        """1800 s - 320 s overhead = 1480 frames at 1 s/frame (via wrapper)."""
+        seq = _make_vda_seq(
+            duration_sec=1800,
+            exposure_us=1_000_000,
+            frames_per_coadd=1,
+        )
+        sched = _sched_with_overhead(vda_pre=260 * u.s, vda_post=60 * u.s)
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        frames = int(
+            seq_out.get_payload_parameter(
+                "AcquireVisCamScienceData", "NumTotalFramesRequested"
+            )
+        )
+        assert frames == 1480
+
+    def test_vda_overhead_exceeds_duration_yields_zero_frames(self):
+        """Sequence shorter than overhead budget → 0 frames (via wrapper).
+
+        Verifies requirement (2): integrations/frames become 0 when
+        overhead >= sequence duration.
+        """
+        seq = _make_vda_seq(
+            duration_sec=200,  # < 260+60=320 s overhead
+            exposure_us=1_000_000,
+            frames_per_coadd=1,
+        )
+        sched = _sched_with_overhead(vda_pre=260 * u.s, vda_post=60 * u.s)
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        frames = int(
+            seq_out.get_payload_parameter(
+                "AcquireVisCamScienceData", "NumTotalFramesRequested"
+            )
+        )
+        assert frames == 0
+
+    def test_vda_overhead_equals_duration_yields_zero_frames(self):
+        """Sequence duration exactly equal to overhead → 0 frames."""
+        seq = _make_vda_seq(
+            duration_sec=320,  # exactly 260+60 s
+            exposure_us=1_000_000,
+            frames_per_coadd=1,
+        )
+        sched = _sched_with_overhead(vda_pre=260 * u.s, vda_post=60 * u.s)
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        frames = int(
+            seq_out.get_payload_parameter(
+                "AcquireVisCamScienceData", "NumTotalFramesRequested"
+            )
+        )
+        assert frames == 0
+
+    # ---- NIRDA path ------------------------------------------------------
+
+    def test_nirda_overhead_reduces_integrations(self):
+        """Instance NIRDA overhead should reduce SC_Integrations vs zero overhead.
+
+        Verifies requirement (1) for the NIRDA path.
+        """
+        seq_zero = _make_nirda_seq(duration_sec=1800, **_NIRDA_KWARGS)
+        seq_with = copy.deepcopy(seq_zero)
+
+        sched_zero = _sched_with_overhead()
+        sched_with = _sched_with_overhead(
+            nirda_pre=258 * u.s, nirda_post=60 * u.s
+        )
+
+        seq_zero = sched_zero._update_payload_parameters_sequence(seq_zero)
+        seq_with = sched_with._update_payload_parameters_sequence(seq_with)
+
+        integ_zero = int(
+            seq_zero.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        integ_with = int(
+            seq_with.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        assert integ_with < integ_zero
+
+    def test_nirda_exact_integration_count_via_wrapper(self):
+        """1800 s - 318 s overhead: deterministic SC_Integrations (via wrapper)."""
+        seq = _make_nirda_seq(duration_sec=1800, **_NIRDA_KWARGS)
+        sched = _sched_with_overhead(nirda_pre=258 * u.s, nirda_post=60 * u.s)
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        integ = int(
+            seq_out.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        frame_time = (100 + 12) * (256 + 2) * 1e-5
+        num_frames_total = 1 + 0 + 1 * (0 + 2 * (5 + 0) + 5 + 0)
+        integration_time = num_frames_total * frame_time
+        effective = 1800 - 258 - 60
+        expected = int(np.floor(effective / integration_time))
+        assert integ == expected
+
+    def test_nirda_overhead_exceeds_duration_yields_zero_integrations(self):
+        """Sequence shorter than NIRDA overhead budget → 0 integrations (via wrapper).
+
+        Verifies requirement (2) for the NIRDA path.
+        """
+        seq = _make_nirda_seq(
+            duration_sec=200,  # < 258+60=318 s overhead
+            **_NIRDA_KWARGS,
+        )
+        sched = _sched_with_overhead(nirda_pre=258 * u.s, nirda_post=60 * u.s)
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        integ = int(
+            seq_out.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        assert integ == 0
+
+    def test_nirda_overhead_equals_duration_yields_zero_integrations(self):
+        """Sequence duration exactly equal to NIRDA overhead → 0 integrations."""
+        seq = _make_nirda_seq(
+            duration_sec=318,  # exactly 258+60 s
+            **_NIRDA_KWARGS,
+        )
+        sched = _sched_with_overhead(nirda_pre=258 * u.s, nirda_post=60 * u.s)
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        integ = int(
+            seq_out.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        assert integ == 0
+
+
+# ---------------------------------------------------------------------------
+# ScheduleProcessor.__init__ overhead validation
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleProcessorOverheadValidation:
+    """Tests for type/unit validation of overhead parameters in __init__."""
+
+    def test_default_overhead_quantities_accepted(self):
+        """Default overhead values (Quantity with time units) are accepted."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor("L1", "L2")
+        assert proc.vda_pre_sequence_overhead == 260 * u.s
+
+    def test_timedelta_overhead_accepted(self):
+        """TimeDelta overhead values must also be accepted without error."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor(
+                "L1",
+                "L2",
+                vda_pre_sequence_overhead=TimeDelta(300 * u.s),
+            )
+        assert proc.vda_pre_sequence_overhead == TimeDelta(300 * u.s)
+
+    def test_wrong_units_raises_value_error(self):
+        """A Quantity with non-time units must raise ValueError."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            with pytest.raises(ValueError, match="time units"):
+                ScheduleProcessor(
+                    "L1",
+                    "L2",
+                    vda_pre_sequence_overhead=260 * u.meter,
+                )
+
+    def test_plain_number_raises_type_error(self):
+        """A plain number (no units) must raise TypeError."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            with pytest.raises(
+                TypeError, match="astropy Quantity or TimeDelta"
+            ):
+                ScheduleProcessor(
+                    "L1",
+                    "L2",
+                    nirda_pre_sequence_overhead=258,  # bare int, no units
+                )
