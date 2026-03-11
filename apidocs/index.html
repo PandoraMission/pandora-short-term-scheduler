@@ -3444,7 +3444,7 @@ verbose : bool
 
 
 <h2 id="shortschedule.apply_rolls_to_calendar" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">apply_rolls_to_calendar</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+            <code class="highlight language-python"><span class="n">apply_rolls_to_calendar</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">precomputed_rolls</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 </h2>
 
@@ -3458,7 +3458,14 @@ visits in a calendar, ensuring consistency within each visit.</p>
 <p>calendar : ScienceCalendar
     The calendar to update. Modified in place.
 verbose : bool, optional
-    If True, print progress information.</p>
+    If True, print progress information.
+precomputed_rolls : dict, optional
+    Nested mapping
+    <code>{visit_id: {target: Optional[float]}}</code> of
+    visibility-aware roll angles.  Entries with a non-<code>None</code>
+    value override the sun-derived roll for that target.
+    Targets with a <code>None</code> value fall through to the
+    sun-derived calculation.</p>
 <h4 id="shortschedule.apply_rolls_to_calendar--returns">Returns</h4>
 <p>None
     The calendar is modified in place.</p>
@@ -3471,7 +3478,7 @@ verbose : bool, optional
 
 
 <h2 id="shortschedule.apply_rolls_to_visit" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">apply_rolls_to_visit</span><span class="p">(</span><span class="n">visit</span><span class="p">,</span> <span class="n">target_rolls</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+            <code class="highlight language-python"><span class="n">apply_rolls_to_visit</span><span class="p">(</span><span class="n">visit</span><span class="p">,</span> <span class="n">target_rolls</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">precomputed_rolls</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 </h2>
 
@@ -3486,7 +3493,13 @@ the roll attribute on each ObservationSequence.</p>
     The visit to update. Modified in place.
 target_rolls : dict, optional
     Pre-calculated mapping of target name to roll angle.
-    If None, rolls will be calculated using calculate_visit_rolls().</p>
+    If None, rolls will be calculated using calculate_visit_rolls().
+precomputed_rolls : dict, optional
+    Visibility-aware mapping of target name to roll angle
+    (<code>Dict[str, Optional[float]]</code>).  Entries with a
+    non-<code>None</code> value take precedence over <em>target_rolls</em>.
+    Targets whose value is <code>None</code> fall through to
+    <em>target_rolls</em> / <code>calculate_roll</code>.</p>
 <h4 id="shortschedule.apply_rolls_to_visit--returns">Returns</h4>
 <p>None
     The visit is modified in place.</p>
