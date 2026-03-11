@@ -81,7 +81,30 @@ class ScheduleProcessor:
         self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
 
-        # Payload overhead budgets
+        # Payload overhead budgets — validate that each value carries time
+        # units so that downstream .to(u.s) / .to(u.us) calls succeed.
+        _overhead_params = {
+            "vda_pre_sequence_overhead": vda_pre_sequence_overhead,
+            "vda_post_sequence_overhead": vda_post_sequence_overhead,
+            "nirda_pre_sequence_overhead": nirda_pre_sequence_overhead,
+            "nirda_post_sequence_overhead": nirda_post_sequence_overhead,
+        }
+        for _name, _val in _overhead_params.items():
+            if isinstance(_val, TimeDelta):
+                pass
+            elif isinstance(_val, u.Quantity):
+                try:
+                    _val.to(u.s)
+                except u.UnitConversionError:
+                    raise ValueError(
+                        f"{_name} must have time units; "
+                        f"got unit '{_val.unit}'"
+                    )
+            else:
+                raise TypeError(
+                    f"{_name} must be an astropy Quantity or TimeDelta "
+                    f"with time units; got {type(_val).__name__!r}"
+                )
         self.vda_pre_sequence_overhead = vda_pre_sequence_overhead
         self.vda_post_sequence_overhead = vda_post_sequence_overhead
         self.nirda_pre_sequence_overhead = nirda_pre_sequence_overhead
@@ -713,7 +736,9 @@ class ScheduleProcessor:
     def _update_payload_parameters_sequence(
         self, sequence: ObservationSequence
     ) -> ObservationSequence:
-        duration = sequence.duration.to(u.us)
+        # Pass sequence.duration (TimeDelta) so both helpers receive the
+        # correct type and the overhead subtraction uses a consistent unit.
+        duration = sequence.duration
 
         sequence = self._update_VDA_integrations(
             sequence,
@@ -817,86 +842,52 @@ class ScheduleProcessor:
         post_sequence_overhead: TimeDelta = 60 * u.s,
     ) -> ObservationSequence:
 
-        # Get parameters
-        ROI_SizeX = int(
-            sequence.get_payload_parameter("AcquireInfCamImages", "ROI_SizeX")
-        )
-        ROI_SizeY = int(
-            sequence.get_payload_parameter("AcquireInfCamImages", "ROI_SizeY")
-        )
-        SC_Resets1 = int(
-            sequence.get_payload_parameter("AcquireInfCamImages", "SC_Resets1")
-        )
-        SC_Resets2 = int(
-            sequence.get_payload_parameter("AcquireInfCamImages", "SC_Resets2")
-        )
-        SC_DropFrames1 = int(
-            sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_DropFrames1"
-            )
-        )
-        SC_DropFrames2 = int(
-            sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_DropFrames2"
-            )
-        )
-        SC_DropFrames3 = int(
-            sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_DropFrames3"
-            )
-        )
-        SC_ReadFrames = int(
-            sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_ReadFrames"
-            )
-        )
-        SC_Groups = int(
-            sequence.get_payload_parameter("AcquireInfCamImages", "SC_Groups")
+        seq_identifier = (
+            f"{sequence.id} ({sequence.target} @ "
+            f"{sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
         )
 
-        seq_identifier = f"{sequence.id} ({sequence.target} @ {sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
-
+        # Collect raw string values and guard against missing parameters
+        # *before* any int() conversion so that a sequence without NIRDA
+        # payload (e.g. a VDA-only sequence) returns cleanly instead of
+        # raising TypeError.
         required_params = {
-            "SC_Groups": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_Groups"
-            ),
-            "SC_ReadFrames": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_ReadFrames"
-            ),
-            "SC_DropFrames1": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_DropFrames1"
-            ),
-            "SC_DropFrames2": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_DropFrames2"
-            ),
-            "SC_DropFrames3": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_DropFrames3"
-            ),
-            "SC_Resets1": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_Resets1"
-            ),
-            "SC_Resets2": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "SC_Resets2"
-            ),
-            "ROI_SizeX": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "ROI_SizeX"
-            ),
-            "ROI_SizeY": sequence.get_payload_parameter(
-                "AcquireInfCamImages", "ROI_SizeY"
-            ),
+            name: sequence.get_payload_parameter("AcquireInfCamImages", name)
+            for name in (
+                "ROI_SizeX",
+                "ROI_SizeY",
+                "SC_Resets1",
+                "SC_Resets2",
+                "SC_DropFrames1",
+                "SC_DropFrames2",
+                "SC_DropFrames3",
+                "SC_ReadFrames",
+                "SC_Groups",
+            )
         }
 
-        # Check for missing parameters
         missing_params = [
             name for name, value in required_params.items() if value is None
         ]
 
         if missing_params:
             print(
-                f"Warning: Missing NIRDA parameters for sequence {seq_identifier}"
+                f"Warning: Missing NIRDA parameters for sequence "
+                f"{seq_identifier}"
             )
             print(f"Missing parameters: {', '.join(missing_params)}")
             return sequence
+
+        # All parameters are present; convert to int.
+        ROI_SizeX = int(required_params["ROI_SizeX"])
+        ROI_SizeY = int(required_params["ROI_SizeY"])
+        SC_Resets1 = int(required_params["SC_Resets1"])
+        SC_Resets2 = int(required_params["SC_Resets2"])
+        SC_DropFrames1 = int(required_params["SC_DropFrames1"])
+        SC_DropFrames2 = int(required_params["SC_DropFrames2"])
+        SC_DropFrames3 = int(required_params["SC_DropFrames3"])
+        SC_ReadFrames = int(required_params["SC_ReadFrames"])
+        SC_Groups = int(required_params["SC_Groups"])
 
         # per the payload users guide
         frame_time = (ROI_SizeX + 12) * (ROI_SizeY + 2) * 1e-5 * u.s
@@ -915,7 +906,9 @@ class ScheduleProcessor:
 
         integration_time = NumFramesTotal * frame_time
 
-        duration_sequence_seconds = sequence.duration.to(u.s)
+        # Use the duration argument so callers can override the window
+        # (e.g. _update_payload_parameters_sequence passes sequence.duration).
+        duration_sequence_seconds = duration.to(u.s)
 
         effective_duration_s = (
             duration_sequence_seconds
