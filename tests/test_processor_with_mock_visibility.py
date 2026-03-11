@@ -8,10 +8,10 @@ from shortschedule.scheduler import ScheduleProcessor
 
 
 class DummyVisibilityAllTrue:
-    def __init__(self, l1, l2):
+    def __init__(self, l1, l2, **kwargs):
         pass
 
-    def get_visibility(self, coord, times):
+    def get_visibility(self, coord, times, roll=None):
         # times may be an astropy Time or array-like; return True for each entry
         try:
             length = len(times)

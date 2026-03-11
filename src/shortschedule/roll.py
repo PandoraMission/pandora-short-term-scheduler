@@ -8,6 +8,11 @@ required for each observation sequence. The roll angle depends on:
 Roll must remain consistent for all
 observations of the same target within a single visit.
 
+When star-tracker keep-out constraints are active the module can
+sweep candidate roll angles and select the one that maximises
+visible time while respecting a minimum solar-power-fraction
+threshold.
+
 Notes
 -----
 Roll angles are expressed in degrees. The calculation ensures the
@@ -15,7 +20,7 @@ solar panels maintain proper sun exposure.
 """
 
 # Standard library
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Third-party
 import numpy as np
@@ -149,6 +154,348 @@ def normalize(v):
     return v / n
 
 
+# ------------------------------------------------------------------
+# Solar power fraction helpers
+# ------------------------------------------------------------------
+
+
+def _payload_axes_from_roll(ra, dec, roll_deg):
+    """Compute payload X, Y, Z body axes for a target and roll.
+
+    Uses the same celestial-north-projection reference frame as
+    ``_spacecraft_roll_from_radec`` and ``pandoravisibility``'s
+    ``_roll_attitude``.
+
+    Parameters
+    ----------
+    ra, dec : float
+        Target right ascension and declination in degrees.
+    roll_deg : float
+        Spacecraft roll angle about boresight in degrees.
+
+    Returns
+    -------
+    x_payload, y_payload, z_payload : np.ndarray
+        (3,) unit vectors for the payload +X, +Y, +Z axes in ECI.
+    """
+    z_unit = normalize(radec_to_vector(ra, dec))
+
+    north = np.array([0.0, 0.0, 1.0])
+    north_proj = north - np.dot(north, z_unit) * z_unit
+    if np.linalg.norm(north_proj) < 1.0e-8:
+        east = np.array([1.0, 0.0, 0.0])
+        north_proj = east - np.dot(east, z_unit) * z_unit
+    x_ref = normalize(north_proj)
+    y_ref = normalize(np.cross(z_unit, x_ref))
+
+    roll_rad = np.deg2rad(roll_deg)
+    cos_r = np.cos(roll_rad)
+    sin_r = np.sin(roll_rad)
+    x_payload = cos_r * x_ref + sin_r * y_ref
+    y_payload = -sin_r * x_ref + cos_r * y_ref
+    return x_payload, y_payload, z_unit
+
+
+def compute_solar_power_fraction(
+    ra: float,
+    dec: float,
+    roll_deg: float,
+    obs_time: Time,
+) -> float:
+    """Solar-panel power fraction for a given target, roll, and time.
+
+    On Pandora the solar panels extend along the spacecraft +Y axis
+    (hinge axis), so the panel surface normal lies approximately in
+    the X–Z plane.  When the +Y axis is perpendicular to the Sun the
+    panel faces are illuminated optimally; when +Y is parallel to the
+    Sun the panels are edge-on and receive no flux.
+
+    The formula computes
+    ``sin(arccos(|dot(Y_payload, sun)|))`` which is equivalent to
+    ``cos(π/2 − arccos(|cos_sy|))`` — matching the solar-power
+    calculation in ``pandoravisibility``'s ``get_visibility_best_roll``.
+
+    Parameters
+    ----------
+    ra, dec : float
+        Target RA / Dec in degrees.
+    roll_deg : float
+        Spacecraft roll angle about boresight in degrees.
+    obs_time : Time
+        Observation time (scalar).
+
+    Returns
+    -------
+    float
+        Power fraction in [0, 1].  1.0 when +Y ⊥ Sun (optimal),
+        0.0 when +Y ∥ Sun (edge-on).
+    """
+    _, y_payload, _ = _payload_axes_from_roll(ra, dec, roll_deg)
+
+    sun_coord = get_sun(obs_time)
+    sun_vec = radec_to_vector(sun_coord.ra.deg, sun_coord.dec.deg)
+
+    cos_sy = np.clip(np.dot(y_payload, sun_vec), -1.0, 1.0)
+    theta_sy = np.arccos(np.abs(cos_sy))
+    incidence = np.pi / 2 - theta_sy
+    return float(np.cos(incidence))
+
+
+def _sun_vectors(times: Time) -> np.ndarray:
+    """Return Sun unit vectors for all *times* in a single ephemeris call.
+
+    Calls ``get_sun`` once for the entire time array, avoiding the
+    O(N) repeated ephemeris lookups that arise from iterating over
+    individual time samples.
+
+    Parameters
+    ----------
+    times : Time
+        Scalar or array of observation times.
+
+    Returns
+    -------
+    np.ndarray
+        Shape ``(3,)`` for a scalar time, ``(N, 3)`` for an array of
+        times.  Each row is a unit vector in ECI pointing toward the Sun.
+    """
+    sun_coord = get_sun(times)
+    ra_deg = sun_coord.ra.deg
+    dec_deg = sun_coord.dec.deg
+    ra_rad = np.deg2rad(ra_deg)
+    dec_rad = np.deg2rad(dec_deg)
+    x = np.cos(dec_rad) * np.cos(ra_rad)
+    y = np.cos(dec_rad) * np.sin(ra_rad)
+    z = np.sin(dec_rad)
+    if times.isscalar:
+        return np.array([x, y, z])
+    return np.stack([x, y, z], axis=-1)  # (N, 3)
+
+
+def _mean_solar_power_from_sun_vecs(
+    ra: float,
+    dec: float,
+    roll_deg: float,
+    sun_vecs: np.ndarray,
+) -> float:
+    """Mean solar-panel power fraction using precomputed Sun vectors.
+
+    Equivalent to :func:`compute_mean_solar_power` but avoids any
+    ``get_sun`` call, making it safe to reuse across many candidate
+    roll angles without repeated ephemeris overhead.
+
+    Parameters
+    ----------
+    ra, dec : float
+        Target RA / Dec in degrees.
+    roll_deg : float
+        Spacecraft roll angle about boresight in degrees.
+    sun_vecs : np.ndarray
+        Shape ``(3,)`` (scalar) or ``(N, 3)`` (array) of Sun unit
+        vectors, as returned by :func:`_sun_vectors`.
+
+    Returns
+    -------
+    float
+        Mean power fraction in [0, 1].
+    """
+    _, y_payload, _ = _payload_axes_from_roll(ra, dec, roll_deg)
+    if sun_vecs.ndim == 1:
+        # Scalar time
+        cos_sy = np.clip(np.dot(y_payload, sun_vecs), -1.0, 1.0)
+        theta_sy = np.arccos(np.abs(cos_sy))
+        return float(np.cos(np.pi / 2 - theta_sy))
+    # Array of times: vectorised dot product
+    cos_sy = np.clip(sun_vecs @ y_payload, -1.0, 1.0)  # (N,)
+    theta_sy = np.arccos(np.abs(cos_sy))
+    return float(np.mean(np.cos(np.pi / 2 - theta_sy)))
+
+
+def compute_mean_solar_power(
+    ra: float,
+    dec: float,
+    roll_deg: float,
+    times: Time,
+) -> float:
+    """Mean solar-panel power fraction over an array of times.
+
+    See :func:`compute_solar_power_fraction` for the definition of the
+    power fraction (1.0 when +Y ⊥ Sun, 0.0 when +Y ∥ Sun).
+
+    Parameters
+    ----------
+    ra, dec : float
+        Target RA / Dec in degrees.
+    roll_deg : float
+        Spacecraft roll angle about boresight in degrees.
+    times : Time
+        Scalar or array of observation times.
+
+    Returns
+    -------
+    float
+        Mean power fraction in [0, 1].
+    """
+    sun_vecs = _sun_vectors(times)
+    return _mean_solar_power_from_sun_vecs(ra, dec, roll_deg, sun_vecs)
+
+
+# ------------------------------------------------------------------
+# Roll sweep / optimisation
+# ------------------------------------------------------------------
+
+
+def find_best_roll_for_target(
+    visibility: Any,
+    ra: float,
+    dec: float,
+    times: Time,
+    roll_step: float = 2.0,
+    min_power_frac: float = 0.8,
+    sun_roll: Optional[float] = None,
+) -> Optional[float]:
+    """Find the roll angle that maximises visible time for a target.
+
+    Sweeps candidate roll angles from 0° to 360° in *roll_step*
+    increments and, for each candidate that meets the minimum solar
+    power threshold, evaluates visibility via
+    ``visibility.get_visibility(coord, times, roll=...)``.
+
+    Parameters
+    ----------
+    visibility : pandoravisibility.Visibility
+        Visibility instance (must support a ``roll`` keyword in
+        ``get_visibility``).
+    ra, dec : float
+        Target RA / Dec in degrees.
+    times : Time
+        Minute-resolution observation times for this target.
+    roll_step : float, optional
+        Sweep resolution in degrees (default 2.0).
+    min_power_frac : float, optional
+        Minimum acceptable mean solar-panel power fraction.
+        Candidates below this threshold are rejected (default 0.8).
+    sun_roll : float or None, optional
+        Sun-derived roll angle (from ``calculate_roll``) used as a
+        tie-breaker when multiple candidates yield equal visible
+        minutes.  If *None*, the first candidate wins ties.
+
+    Returns
+    -------
+    float or None
+        Best roll angle in degrees (normalised to [-180, 180]), or
+        *None* if no candidate meets the power threshold *and* has at
+        least one visible minute.
+    """
+    target_coord = SkyCoord(ra=ra, dec=dec, unit="deg", frame="icrs")
+    candidates: List[float] = list(np.arange(0, 360, roll_step))
+
+    best_roll: Optional[float] = None
+    best_vis_count: int = 0
+    best_sun_dist: float = 360.0  # tiebreaker distance
+
+    # Precompute Sun vectors once for all times so the candidate loop
+    # reuses them instead of making O(N_candidates × N_times) ephemeris
+    # calls.
+    sun_vecs = _sun_vectors(times)
+
+    for cand in candidates:
+        # --- power threshold ---
+        power = _mean_solar_power_from_sun_vecs(ra, dec, cand, sun_vecs)
+        if power < min_power_frac:
+            continue
+
+        # --- visibility ---
+        vis = visibility.get_visibility(target_coord, times, roll=cand * u.deg)
+        vis_count = int(np.sum(vis))
+
+        if vis_count == 0:
+            continue
+
+        # --- tiebreaker: closeness to sun-derived roll ---
+        if sun_roll is not None:
+            sun_dist = abs(((cand - sun_roll + 180.0) % 360.0) - 180.0)
+        else:
+            sun_dist = 0.0
+
+        if (vis_count > best_vis_count) or (
+            vis_count == best_vis_count and sun_dist < best_sun_dist
+        ):
+            best_vis_count = vis_count
+            best_roll = cand
+            best_sun_dist = sun_dist
+
+    if best_roll is not None:
+        best_roll = (best_roll + 180.0) % 360.0 - 180.0
+    return best_roll
+
+
+def find_best_rolls_for_visit(
+    visibility: Any,
+    visit: Any,
+    roll_step: float = 2.0,
+    min_power_frac: float = 0.8,
+) -> Dict[str, Optional[float]]:
+    """Find the best roll angle for every target in a visit.
+
+    For each unique target, gathers all minute-resolution times across
+    its observation sequences and calls
+    :func:`find_best_roll_for_target`.
+
+    Parameters
+    ----------
+    visibility : pandoravisibility.Visibility
+        Visibility instance.
+    visit : Visit
+        The visit to analyse.
+    roll_step : float, optional
+        Sweep resolution in degrees (default 2.0).
+    min_power_frac : float, optional
+        Minimum acceptable mean solar-panel power fraction.
+
+    Returns
+    -------
+    dict
+        Mapping of target name → optimal roll in degrees, or *None*
+        when no valid roll was found for that target.
+    """
+    # Group sequences by target
+    target_sequences: Dict[str, list] = {}
+    for seq in visit.sequences:
+        target_sequences.setdefault(seq.target, []).append(seq)
+
+    result: Dict[str, Optional[float]] = {}
+    for target, sequences in target_sequences.items():
+        sequences_sorted = sorted(sequences, key=lambda s: s.start_time)
+        ra = sequences_sorted[0].ra
+        dec = sequences_sorted[0].dec
+
+        # Build a combined minute-resolution time array
+        all_times: List[Time] = []
+        for seq in sequences_sorted:
+            n_mins = max(1, int(np.rint(seq.duration.sec / 60.0)))
+            deltas = np.arange(n_mins) * u.min
+            all_times.extend([seq.start_time + dt for dt in deltas])
+        if not all_times:
+            result[target] = None
+            continue
+        combined_times = Time(all_times)
+
+        # Sun-derived roll as tiebreaker reference
+        sun_roll = calculate_roll(ra, dec, sequences_sorted[0].start_time)
+
+        result[target] = find_best_roll_for_target(
+            visibility,
+            ra,
+            dec,
+            combined_times,
+            roll_step=roll_step,
+            min_power_frac=min_power_frac,
+            sun_roll=sun_roll,
+        )
+    return result
+
+
 def calculate_visit_rolls(
     visit,
     reference_time: Optional[Time] = None,
@@ -211,6 +558,7 @@ def calculate_visit_rolls(
 def apply_rolls_to_visit(
     visit,
     target_rolls: Optional[Dict[str, float]] = None,
+    precomputed_rolls: Optional[Dict[str, Optional[float]]] = None,
 ) -> None:
     """Apply roll angles to all observation sequences in a visit.
 
@@ -224,6 +572,12 @@ def apply_rolls_to_visit(
     target_rolls : dict, optional
         Pre-calculated mapping of target name to roll angle.
         If None, rolls will be calculated using calculate_visit_rolls().
+    precomputed_rolls : dict, optional
+        Visibility-aware mapping of target name to roll angle
+        (``Dict[str, Optional[float]]``).  Entries with a
+        non-``None`` value take precedence over *target_rolls*.
+        Targets whose value is ``None`` fall through to
+        *target_rolls* / ``calculate_roll``.
 
     Returns
     -------
@@ -233,9 +587,16 @@ def apply_rolls_to_visit(
     if target_rolls is None:
         target_rolls = calculate_visit_rolls(visit)
 
+    # Merge: precomputed_rolls overrides target_rolls when present
+    merged: Dict[str, float] = dict(target_rolls)
+    if precomputed_rolls is not None:
+        for tgt, roll_val in precomputed_rolls.items():
+            if roll_val is not None:
+                merged[tgt] = roll_val
+
     for seq in visit.sequences:
-        if seq.target in target_rolls:
-            seq.roll = target_rolls[seq.target]
+        if seq.target in merged:
+            seq.roll = merged[seq.target]
         else:
             # Target not found - calculate individually
             seq.roll = calculate_roll(seq.ra, seq.dec, seq.start_time)
@@ -244,6 +605,7 @@ def apply_rolls_to_visit(
 def apply_rolls_to_calendar(
     calendar,
     verbose: bool = False,
+    precomputed_rolls: Optional[Dict[str, Dict[str, Optional[float]]]] = None,
 ) -> None:
     """Apply roll angles to all visits in a science calendar.
 
@@ -256,6 +618,13 @@ def apply_rolls_to_calendar(
         The calendar to update. Modified in place.
     verbose : bool, optional
         If True, print progress information.
+    precomputed_rolls : dict, optional
+        Nested mapping
+        ``{visit_id: {target: Optional[float]}}`` of
+        visibility-aware roll angles.  Entries with a non-``None``
+        value override the sun-derived roll for that target.
+        Targets with a ``None`` value fall through to the
+        sun-derived calculation.
 
     Returns
     -------
@@ -267,8 +636,21 @@ def apply_rolls_to_calendar(
             print(f"Calculating rolls for visit {visit.id}")
 
         target_rolls = calculate_visit_rolls(visit)
-        apply_rolls_to_visit(visit, target_rolls)
+        visit_precomputed = None
+        if precomputed_rolls is not None:
+            visit_precomputed = precomputed_rolls.get(visit.id)
+        apply_rolls_to_visit(
+            visit,
+            target_rolls,
+            precomputed_rolls=visit_precomputed,
+        )
 
         if verbose:
             for target, roll in target_rolls.items():
-                print(f"  {target}: {roll:.2f} deg")
+                final = (
+                    visit_precomputed.get(target)
+                    if visit_precomputed
+                    else None
+                )
+                display = final if final is not None else roll
+                print(f"  {target}: {display:.2f} deg")
