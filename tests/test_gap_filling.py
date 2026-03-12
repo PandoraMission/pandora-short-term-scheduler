@@ -2,7 +2,6 @@
 
 Covers:
 - _find_false_blocks helper
-- _fill_gaps method
 - _fix_visibility integration with mock visibility
 - Roll-aware gap filling (roll kwarg threading)
 - Gap report structure verification
@@ -195,50 +194,6 @@ class TestFindFalseBlocks:
     def test_empty_array(self):
         result = _find_false_blocks(np.array([], dtype=bool), [])
         assert result == []
-
-
-# ================================================================
-# Tests: _fill_gaps
-# ================================================================
-
-
-class TestFillGaps:
-    """Unit tests for ScheduleProcessor._fill_gaps."""
-
-    def _make_processor(self):
-        """Create a bare ScheduleProcessor without Visibility."""
-        proc = ScheduleProcessor.__new__(ScheduleProcessor)
-        proc.min_sequence_duration = TimeDelta(5 * 60 * u.s)
-        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
-        return proc
-
-    def test_gap_shifts_start_backward(self):
-        proc = self._make_processor()
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        original_stop = seq.stop_time
-
-        filled = proc._fill_gaps(seq, gap_length=5)
-
-        assert filled.start_time == seq.start_time - 5 * u.min
-        assert filled.stop_time == original_stop
-
-    def test_gap_zero_is_noop(self):
-        proc = self._make_processor()
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        filled = proc._fill_gaps(seq, gap_length=0)
-        assert filled.start_time == seq.start_time
-
-    def test_payload_params_deep_copied(self):
-        proc = self._make_processor()
-        params = {"key": {"nested": "value"}}
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        seq.payload_params = params
-
-        filled = proc._fill_gaps(seq, gap_length=3)
-
-        # Mutating original should not affect filled copy
-        params["key"]["nested"] = "changed"
-        assert filled.payload_params["key"]["nested"] == "value"
 
 
 # ================================================================

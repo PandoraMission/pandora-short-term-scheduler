@@ -481,25 +481,16 @@ class ScheduleProcessor:
         all_minutes_bool = np.zeros(total_minutes, dtype=bool)
 
         i = 0
-        last_stop = deepcopy(start_time)
 
         for visit in working_calendar.visits:
             visit_rolls = self._computed_target_rolls.get(visit.id, {})
 
             for j, seq in enumerate(visit.sequences):
 
-                # Compute gap since last sequence stop
-                gap_length = int(
-                    np.rint((seq.start_time - last_stop).sec / 60.0)
-                )
-                if gap_length > 0:
-                    if verbose:
-                        print(
-                            f"Filling {gap_length} min gap before sequence {seq.id}"
-                        )
-
-                    seq = self._fill_gaps(seq, gap_length)
-                    visit.sequences[j] = seq  # persist change
+                # Note: Previous versions tried to fill temporal gaps here by 
+                # extending sequences backward. This was removed to prevent 
+                # conflicts with the more sophisticated visibility-aware gap 
+                # filling in _fix_visibility method called below.
 
                 # Evaluate visibility for this sequence
                 n_mins = int(np.rint(seq.duration.sec / 60.0))
@@ -522,7 +513,6 @@ class ScheduleProcessor:
                 all_minutes_bool[i:end_index] = vis[: end_index - i]
 
                 i += len(vis)
-                last_stop = seq.stop_time
 
         # Fill remaining time after last sequence
         if i < total_minutes:
@@ -542,36 +532,6 @@ class ScheduleProcessor:
         working_calendar = self._update_payload_parameters(working_calendar)
 
         return working_calendar
-
-    def _fill_gaps(
-        self, sequence: ObservationSequence, gap_length: int
-    ) -> ObservationSequence:
-        """
-        Extend the start of a sequence backward in time to fill a gap.
-
-        Parameters
-        ----------
-        sequence : ObservationSequence
-            The sequence to adjust.
-        gap_length : int
-            Gap length in minutes.
-
-        Returns
-        -------
-        ObservationSequence
-            A new ObservationSequence with start time shifted earlier.
-        """
-        new_start = sequence.start_time - gap_length * u.min
-        return ObservationSequence(
-            id=sequence.id,
-            target=sequence.target,
-            priority=sequence.priority,
-            start_time=new_start,
-            stop_time=sequence.stop_time,
-            ra=sequence.ra,
-            dec=sequence.dec,
-            payload_params=deepcopy(sequence.payload_params),
-        )
 
     def _get_synchronized_time_grid(
         self, calendar: ScienceCalendar
