@@ -576,3 +576,113 @@ class TestTrimNonVisibleTails:
 
         out = result.visits[0].sequences[0]
         assert out.stop_time == seq.stop_time
+
+    def test_trim_no_gap_when_next_cannot_absorb(self):
+        """Tail trim must not create a gap when next target can't absorb."""
+        # Seq A: minutes 0-19, tail at 15-19 non-visible
+        # Seq B: minutes 20-39, but next target NOT visible for gap
+        # Expected: A should NOT be trimmed (would create gap)
+        pattern_a = np.ones(40, dtype=bool)
+        pattern_a[15:20] = False
+
+        class _NeitherVisibleInGap:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_visibility(self, coord, times, roll=None):
+                n = len(times)
+                if abs(coord.ra.deg - 10.0) < 1.0:
+                    result = np.ones(n, dtype=bool)
+                    for i, t in enumerate(times):
+                        idx = int(np.rint((t - T0).sec / 60.0))
+                        if 0 <= idx < len(pattern_a):
+                            result[i] = pattern_a[idx]
+                    return result
+                # Next target also NOT visible in gap region
+                result = np.ones(n, dtype=bool)
+                for i, t in enumerate(times):
+                    idx = int(np.rint((t - T0).sec / 60.0))
+                    if 15 <= idx < 20:
+                        result[i] = False
+                return result
+
+        proc = self._make_processor(_NeitherVisibleInGap("L1", "L2"))
+        seqA = _make_seq(
+            "sA", "TargetA", start_min=0, duration_min=20, ra=10.0
+        )
+        seqB = _make_seq(
+            "sB", "TargetB", start_min=20, duration_min=20, ra=50.0
+        )
+        cal = _make_calendar([seqA, seqB])
+        result = proc._trim_non_visible_tails(cal)
+
+        outA = result.visits[0].sequences[0]
+        outB = result.visits[0].sequences[1]
+        # No gap: A.stop must equal B.start
+        gap_sec = abs((outB.start_time - outA.stop_time).sec)
+        assert gap_sec < 1, f"Gap of {gap_sec:.0f}s created"
+
+
+# ================================================================
+# Tests: _fix_visibility does not create gaps
+# ================================================================
+
+
+class TestFixVisibilityNoGaps:
+    """Verify _fix_visibility never introduces inter-sequence gaps."""
+
+    def test_no_shrink_when_prev_not_visible(self, monkeypatch):
+        """When prev target is NOT visible in gap, current must not shrink."""
+        # Sequence A: minutes 0-14
+        # Sequence B: minutes 15-34 (minutes 15-19 are non-visible)
+        # Previous target NOT visible in gap either → no extend.
+        # Bug (before fix): B would still shrink → gap from 15 to 20.
+        pattern = np.ones(35, dtype=bool)
+        pattern[15:20] = False  # gap in main visibility
+
+        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=15)
+        seqB = _make_seq("sB", "TargetB", start_min=15, duration_min=20)
+        cal = _make_calendar([seqA, seqB])
+
+        # Visibility returns False for everything (prev not visible)
+        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
+        monkeypatch.setattr(
+            "shortschedule.scheduler.Visibility",
+            lambda l1, l2, **kw: dummy,
+        )
+        proc = ScheduleProcessor("L1", "L2")
+        result = proc._fix_visibility(cal, pattern)
+
+        outA = result.visits[0].sequences[0]
+        outB = result.visits[0].sequences[1]
+        gap_sec = (outB.start_time - outA.stop_time).sec
+        assert abs(gap_sec) < 1, f"Gap of {gap_sec:.0f}s between sequences"
+
+    def test_partial_visibility_no_gap(self, monkeypatch):
+        """Partial prev visibility: shrink matches extend, no gap."""
+        # Sequence A: minutes 0-9
+        # Sequence B: minutes 10-29 (minutes 10-14 non-visible)
+        # Previous target visible at 10-12 only (not 13-14)
+        pattern = np.ones(30, dtype=bool)
+        pattern[10:15] = False
+
+        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
+        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=20)
+        cal = _make_calendar([seqA, seqB])
+
+        # Previous target visible only at 10-12
+        partial_pattern = np.ones(30, dtype=bool)
+        partial_pattern[13:15] = False
+
+        dummy = DummyVisibilityPattern("L1", "L2", pattern=partial_pattern)
+        monkeypatch.setattr(
+            "shortschedule.scheduler.Visibility",
+            lambda l1, l2, **kw: dummy,
+        )
+        proc = ScheduleProcessor("L1", "L2")
+        result = proc._fix_visibility(cal, pattern)
+
+        outA = result.visits[0].sequences[0]
+        outB = result.visits[0].sequences[1]
+        gap_sec = (outB.start_time - outA.stop_time).sec
+        assert abs(gap_sec) < 1, f"Gap of {gap_sec:.0f}s between sequences"

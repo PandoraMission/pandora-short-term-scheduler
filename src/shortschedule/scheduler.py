@@ -76,6 +76,7 @@ class ScheduleProcessor:
         st_earthlimb_min: Optional[float] = None,
         st1_earthlimb_min: Optional[float] = None,
         st2_earthlimb_min: Optional[float] = None,
+        twilight_margin: Optional[float] = None,
         roll_step: float = 2.0,
         min_power_frac: float = 0.7,
     ) -> None:
@@ -107,6 +108,12 @@ class ScheduleProcessor:
         st_sun_min, st_moon_min, st_earthlimb_min, st1_earthlimb_min,
         st2_earthlimb_min : float, optional
             Additional constraints for star trackers.
+        twilight_margin : float, optional
+            Degrees past the geometric terminator to classify as
+            "sunlit" for day/night Earth-limb keepout.  0 (default)
+            gives a sharp terminator; 18 is analogous to astronomical
+            twilight.  Only has an effect when ``earthlimb_day_min``
+            or ``earthlimb_night_min`` is set.
         roll_step : float, optional
             Roll-angle sweep resolution in degrees (default 2.0).
         min_power_frac : float, optional
@@ -139,6 +146,8 @@ class ScheduleProcessor:
             _kw["earthlimb_day_min"] = self._to_deg(earthlimb_day_min)
         if earthlimb_night_min is not None:
             _kw["earthlimb_night_min"] = self._to_deg(earthlimb_night_min)
+        if twilight_margin is not None:
+            _kw["twilight_margin"] = self._to_deg(twilight_margin)
         # Strip None entries so Visibility uses its own class-level defaults
         # for any constraint the caller left unset.
         _kw = {k: v for k, v in _kw.items() if v is not None}
@@ -680,77 +689,103 @@ class ScheduleProcessor:
             if (new_stop - seq.start_time) < self.min_sequence_duration:
                 continue  # trimming would make sequence too short
 
+            # Determine how far the next sequence can extend backward
+            # BEFORE committing the trim, to avoid creating gaps.
+            actual_trim_stop = new_stop  # default: trim to last visible + 1
+
+            if idx + 1 < len(all_sequences):
+                next_visit_id, next_seq = all_sequences[idx + 1]
+                gap_minutes = int(
+                    np.rint((next_seq.start_time - new_stop).sec / 60.0)
+                )
+                if gap_minutes > 0:
+                    next_coord = SkyCoord(
+                        next_seq.ra,
+                        next_seq.dec,
+                        frame="icrs",
+                        unit="deg",
+                    )
+                    gap_deltas = np.arange(gap_minutes) * u.min
+                    gap_times = new_stop + gap_deltas
+
+                    next_roll = self._computed_target_rolls.get(
+                        next_visit_id, {}
+                    ).get(next_seq.target)
+                    if self._roll_sweep_enabled and next_roll is not None:
+                        next_vis = self.visibility.get_visibility(
+                            next_coord,
+                            gap_times,
+                            roll=next_roll * u.deg,
+                        )
+                    else:
+                        next_vis = self.visibility.get_visibility(
+                            next_coord, gap_times
+                        )
+                    next_vis_arr = np.asarray(next_vis)
+
+                    # Walk backward from the original next start to
+                    # find the earliest contiguous visible minute.
+                    last_gap_idx = len(next_vis_arr) - 1
+                    if next_vis_arr[last_gap_idx]:
+                        first_contiguous = last_gap_idx
+                        while (
+                            first_contiguous > 0
+                            and next_vis_arr[first_contiguous - 1]
+                        ):
+                            first_contiguous -= 1
+
+                        new_next_start = gap_times[first_contiguous]
+
+                        # Only trim the current sequence to where the
+                        # next sequence can actually extend — this
+                        # keeps contiguity even when the next target
+                        # cannot absorb the entire freed region.
+                        actual_trim_stop = new_next_start
+
+                        extended_next = ObservationSequence(
+                            id=next_seq.id,
+                            target=next_seq.target,
+                            priority=next_seq.priority,
+                            start_time=new_next_start,
+                            stop_time=next_seq.stop_time,
+                            ra=next_seq.ra,
+                            dec=next_seq.dec,
+                            payload_params=deepcopy(next_seq.payload_params),
+                        )
+                        working_cal.replace_sequence(
+                            next_visit_id, next_seq.id, extended_next
+                        )
+                        # Update local list so subsequent iterations
+                        # see the modified next sequence.
+                        all_sequences[idx + 1] = (
+                            next_visit_id,
+                            extended_next,
+                        )
+                    else:
+                        # Next target not visible at boundary — cannot
+                        # absorb any freed time, so don't trim at all.
+                        continue
+                # gap_minutes <= 0: next seq already abuts, safe to trim
+            # else: no next sequence — tail trim is safe (no
+            # inter-sequence gap to worry about).
+
+            # Only apply the trim if the sequence remains long enough.
+            if (
+                actual_trim_stop - seq.start_time
+            ) < self.min_sequence_duration:
+                continue
+
             trimmed = ObservationSequence(
                 id=seq.id,
                 target=seq.target,
                 priority=seq.priority,
                 start_time=seq.start_time,
-                stop_time=new_stop,
+                stop_time=actual_trim_stop,
                 ra=seq.ra,
                 dec=seq.dec,
                 payload_params=deepcopy(seq.payload_params),
             )
             working_cal.replace_sequence(visit_id, seq.id, trimmed)
-
-            # Try extending the next sequence backward to fill gap
-            if idx + 1 >= len(all_sequences):
-                continue
-
-            next_visit_id, next_seq = all_sequences[idx + 1]
-            gap_minutes = int(
-                np.rint((next_seq.start_time - new_stop).sec / 60.0)
-            )
-            if gap_minutes <= 0:
-                continue
-
-            next_coord = SkyCoord(
-                next_seq.ra, next_seq.dec, frame="icrs", unit="deg"
-            )
-            gap_deltas = np.arange(gap_minutes) * u.min
-            gap_times = new_stop + gap_deltas
-
-            next_roll = self._computed_target_rolls.get(next_visit_id, {}).get(
-                next_seq.target
-            )
-            if self._roll_sweep_enabled and next_roll is not None:
-                next_vis = self.visibility.get_visibility(
-                    next_coord,
-                    gap_times,
-                    roll=next_roll * u.deg,
-                )
-            else:
-                next_vis = self.visibility.get_visibility(
-                    next_coord, gap_times
-                )
-            next_vis_arr = np.asarray(next_vis)
-
-            # Walk backward from the original next start to find the
-            # earliest contiguous visible minute.
-            last_idx = len(next_vis_arr) - 1
-            if not next_vis_arr[last_idx]:
-                continue  # next target also not visible here
-
-            first_contiguous = last_idx
-            while first_contiguous > 0 and next_vis_arr[first_contiguous - 1]:
-                first_contiguous -= 1
-
-            new_next_start = gap_times[first_contiguous]
-            extended_next = ObservationSequence(
-                id=next_seq.id,
-                target=next_seq.target,
-                priority=next_seq.priority,
-                start_time=new_next_start,
-                stop_time=next_seq.stop_time,
-                ra=next_seq.ra,
-                dec=next_seq.dec,
-                payload_params=deepcopy(next_seq.payload_params),
-            )
-            working_cal.replace_sequence(
-                next_visit_id, next_seq.id, extended_next
-            )
-            # Update local list so subsequent iterations see
-            # the modified next sequence.
-            all_sequences[idx + 1] = (next_visit_id, extended_next)
 
         return working_cal
 
@@ -846,9 +881,7 @@ class ScheduleProcessor:
                     break
 
         # Drop visits that have become empty
-        working_cal.visits = [
-            v for v in working_cal.visits if v.sequences
-        ]
+        working_cal.visits = [v for v in working_cal.visits if v.sequences]
 
         return working_cal
 
@@ -958,6 +991,8 @@ class ScheduleProcessor:
 
             # Extend previous sequence only when the following sequence can
             # also be shrunk — keeping extend and shrink atomic.
+            extended = False
+            new_stop_time = None
             if np.any(vis) and shrink_feasible:
                 visible_times = np.array(gap_times)[vis]
                 if len(visible_times) > 0:
@@ -986,6 +1021,7 @@ class ScheduleProcessor:
                         working_cal.replace_sequence(
                             visit_id, sequence_id, extended_seq
                         )
+                        extended = True
                         gaps_filled += 1
 
             # Track remaining visibility gaps
@@ -1001,21 +1037,36 @@ class ScheduleProcessor:
                         )
                     )
 
-            # Shrink the current sequence (only when pre-check passed above)
-            if shrink_feasible and seq_to_shrink is not None:
-                shrunk_seq = ObservationSequence(
-                    id=seq_to_shrink.id,
-                    target=seq_to_shrink.target,
-                    priority=seq_to_shrink.priority,
-                    start_time=gap_end_time,
-                    stop_time=seq_to_shrink.stop_time,
-                    ra=seq_to_shrink.ra,
-                    dec=seq_to_shrink.dec,
-                    payload_params=deepcopy(seq_to_shrink.payload_params),
-                )
-                working_cal.replace_sequence(
-                    current_visit_id, current_sequence_id, shrunk_seq
-                )
+            # Shrink the current sequence only when the previous
+            # sequence was actually extended — this keeps extend and
+            # shrink atomic and avoids creating time gaps.  The new
+            # start is set to where the extension ends (not the end
+            # of the entire false block) so contiguity is preserved
+            # even when the previous target is only partially visible.
+            if (
+                extended
+                and shrink_feasible
+                and seq_to_shrink is not None
+                and new_stop_time is not None
+            ):
+                shrink_start = new_stop_time
+                remaining = seq_to_shrink.stop_time - shrink_start
+                if remaining >= self.min_sequence_duration:
+                    shrunk_seq = ObservationSequence(
+                        id=seq_to_shrink.id,
+                        target=seq_to_shrink.target,
+                        priority=seq_to_shrink.priority,
+                        start_time=shrink_start,
+                        stop_time=seq_to_shrink.stop_time,
+                        ra=seq_to_shrink.ra,
+                        dec=seq_to_shrink.dec,
+                        payload_params=deepcopy(seq_to_shrink.payload_params),
+                    )
+                    working_cal.replace_sequence(
+                        current_visit_id,
+                        current_sequence_id,
+                        shrunk_seq,
+                    )
 
         # Update gap report
         self.gap_report["visibility_gaps"] = visibility_gaps
@@ -2045,12 +2096,9 @@ class ScheduleProcessor:
                                     "sequence_id": seq.id,
                                     "target": seq.target,
                                     "problem": (
-                                        "sequence_shorter_than"
-                                        "_overhead"
+                                        "sequence_shorter_than" "_overhead"
                                     ),
-                                    "sequence_duration_seconds": (
-                                        seq_dur_sec
-                                    ),
+                                    "sequence_duration_seconds": (seq_dur_sec),
                                     "effective_duration_seconds": (
                                         effective_sec
                                     ),
@@ -2114,8 +2162,7 @@ class ScheduleProcessor:
                                 tot_sec = (exp_us_val * tf) / 1e6
                                 if tot_sec > effective_sec:
                                     max_f = int(
-                                        effective_sec
-                                        / (exp_us_val / 1e6)
+                                        effective_sec / (exp_us_val / 1e6)
                                     )
                                     msg = (
                                         f"Seq {seq.id} "
