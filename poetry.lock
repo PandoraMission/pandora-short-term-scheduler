@@ -2104,28 +2104,28 @@ files = [
 
 [[package]]
 name = "pandoravisibility"
-version = "0.1.0"
+version = "1.0.0"
 description = "A tool for calculating the visibility of targets from Pandora"
 optional = false
-python-versions = ">=3.10,<4.0"
+python-versions = ">=3.11,<4.0"
 groups = ["main"]
 files = []
 develop = false
 
 [package.dependencies]
-astropy = ">=6.1"
-numpy = ">=1.26"
-pandas = "^2.2.3"
-sgp4 = "^2.23"
+astropy = ">=7.0"
+numpy = ">=2.0"
+pandas = ">=2.2.3"
+sgp4 = "^2.25"
 
 [package.extras]
-plotting = ["matplotlib (>=3.7,<4.0)"]
+plotting = ["matplotlib (>=3.9,<4.0)"]
 
 [package.source]
 type = "git"
 url = "https://github.com/PandoraMission/pandora-visibility.git"
-reference = "HEAD"
-resolved_reference = "715f9ff5ed44e7331416a025b340e302f437a908"
+reference = "main"
+resolved_reference = "64dce42d8d606106faa5f23cc988d78e8e222262"
 
 [[package]]
 name = "parso"
@@ -3415,4 +3415,4 @@ test = ["websockets"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<4.0"
-content-hash = "1d25bd4731c916ef0e0cc1e2244a5bdb1b284ffad80c23dcd8dd820c7d77842a"
+content-hash = "dbef5277f9bf1dbb9b1cf76e71e3008e39a823b60bfeb00b9ac7b0f5a84c9b18"

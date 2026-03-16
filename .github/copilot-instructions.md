@@ -60,8 +60,10 @@ before committing; CI will enforce formatting.
   - `ObservationSequence`
 - Avoid ad-hoc dicts for data interchange unless explicitly required by external code.
 
+
 ### Visibility
 - `pandoravisibility.Visibility.get_visibility(...)` provides external visibility arrays.
+- **Gaps in the schedule are not acceptable.** Any unfilled time between sequences (gaps) must be flagged as errors and reported in validation output. Automated agents must not propose, accept, or ignore schedules with gaps unless explicitly instructed otherwise.
 - **In tests:** mock this method to return deterministic boolean numpy arrays.
 
 ### Metadata

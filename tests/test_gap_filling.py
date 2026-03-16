@@ -206,10 +206,12 @@ class TestFillGaps:
     """Unit tests for ScheduleProcessor._fill_gaps."""
 
     def _make_processor(self):
-        """Create a bare ScheduleProcessor without Visibility."""
+        """Create a bare ScheduleProcessor without full Visibility."""
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(5 * 60 * u.s)
         proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
+        proc._roll_sweep_enabled = False
+        proc._computed_target_rolls = {}
         return proc
 
     def test_gap_shifts_start_backward(self):
@@ -239,6 +241,15 @@ class TestFillGaps:
         # Mutating original should not affect filled copy
         params["key"]["nested"] = "changed"
         assert filled.payload_params["key"]["nested"] == "value"
+
+    def test_blind_fill_extends_into_non_visible(self):
+        """_fill_gaps is blind — extends regardless of visibility."""
+        proc = self._make_processor()
+        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
+        filled = proc._fill_gaps(seq, gap_length=5)
+
+        # Should extend the full 5 minutes blindly
+        assert filled.start_time == seq.start_time - 5 * u.min
 
 
 # ================================================================
@@ -446,3 +457,122 @@ class TestRollAwareGapFilling:
         for visit in processed.visits:
             for seq in visit.sequences:
                 assert seq.roll is not None
+
+
+# ================================================================
+# Tests: _trim_non_visible_tails
+# ================================================================
+
+
+class TestTrimNonVisibleTails:
+    """Unit tests for ScheduleProcessor._trim_non_visible_tails."""
+
+    def _make_processor(self, visibility_cls):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
+        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
+        proc._roll_sweep_enabled = False
+        proc._computed_target_rolls = {}
+        proc.visibility = visibility_cls
+        proc.gap_report = {
+            "visibility_gaps": [],
+            "processing_summary": {},
+        }
+        return proc
+
+    def test_no_tail_no_change(self):
+        """All-visible sequence is untouched."""
+        dummy = DummyVisibilityAllTrue("L1", "L2")
+        proc = self._make_processor(dummy)
+
+        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
+        cal = _make_calendar([seq])
+        result = proc._trim_non_visible_tails(cal)
+
+        out = result.visits[0].sequences[0]
+        assert out.stop_time == seq.stop_time
+
+    def test_tail_trimmed(self):
+        """Non-visible tail is trimmed to last visible minute +1."""
+        # Minutes 0-17 visible, 18-19 non-visible
+        pattern = np.ones(30, dtype=bool)
+        pattern[18:20] = False
+        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
+        proc = self._make_processor(dummy)
+
+        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
+        cal = _make_calendar([seq])
+        result = proc._trim_non_visible_tails(cal)
+
+        out = result.visits[0].sequences[0]
+        expected_stop = T0 + 18 * u.min
+        assert abs((out.stop_time - expected_stop).sec) < 1
+
+    def test_next_sequence_extended_backward(self):
+        """After trimming, next seq extends backward if visible."""
+        # Seq A: minutes 0-19, RA=10 → tail at 18-19 non-visible
+        # Seq B: minutes 20-39, RA=50 → all visible
+        # Per-target mock: False at 18-19 only for RA≈10
+        pattern_a = np.ones(40, dtype=bool)
+        pattern_a[18:20] = False
+
+        class _PerTargetVis:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_visibility(self, coord, times, roll=None):
+                n = len(times)
+                if abs(coord.ra.deg - 10.0) < 1.0:
+                    result = np.ones(n, dtype=bool)
+                    for i, t in enumerate(times):
+                        idx = int(np.rint((t - T0).sec / 60.0))
+                        if 0 <= idx < len(pattern_a):
+                            result[i] = pattern_a[idx]
+                    return result
+                return np.ones(n, dtype=bool)
+
+        proc = self._make_processor(_PerTargetVis("L1", "L2"))
+
+        seqA = _make_seq(
+            "sA", "TargetA", start_min=0, duration_min=20, ra=10.0
+        )
+        seqB = _make_seq(
+            "sB", "TargetB", start_min=20, duration_min=20, ra=50.0
+        )
+        cal = _make_calendar([seqA, seqB])
+        result = proc._trim_non_visible_tails(cal)
+
+        outB = result.visits[0].sequences[1]
+        # Seq B should extend backward to fill the 2-minute gap
+        expected_start = T0 + 18 * u.min
+        assert abs((outB.start_time - expected_start).sec) < 1
+
+    def test_skip_if_trimming_too_short(self):
+        """Sequence not trimmed if result would be < min_sequence_duration."""
+        # 10-minute seq, minutes 2-9 non-visible (only minutes 0-1 visible)
+        # Trimming would leave 2 minutes < 8 min minimum
+        pattern = np.ones(20, dtype=bool)
+        pattern[2:10] = False
+        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
+        proc = self._make_processor(dummy)
+
+        seq = _make_seq("s1", "T", start_min=0, duration_min=10)
+        cal = _make_calendar([seq])
+        result = proc._trim_non_visible_tails(cal)
+
+        out = result.visits[0].sequences[0]
+        # Should remain unchanged
+        assert out.stop_time == seq.stop_time
+
+    def test_entirely_non_visible_skipped(self):
+        """Entirely non-visible sequence is not modified."""
+        pattern = np.zeros(20, dtype=bool)
+        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
+        proc = self._make_processor(dummy)
+
+        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
+        cal = _make_calendar([seq])
+        result = proc._trim_non_visible_tails(cal)
+
+        out = result.visits[0].sequences[0]
+        assert out.stop_time == seq.stop_time

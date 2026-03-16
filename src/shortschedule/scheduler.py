@@ -302,64 +302,65 @@ class ScheduleProcessor:
         self._finalize_gap_report()
 
         calendar_status = "VALID"
-        if (
-            len(
-                self.validate_target_names(
-                    processed_calendar, report_issues=False
-                )
+        validation_counts: Dict[str, int] = {}
+
+        target_issues = self.validate_target_names(
+            processed_calendar, report_issues=False
+        )
+        if target_issues:
+            validation_counts["target_name"] = len(target_issues)
+            calendar_status = "INVALID"
+
+        vis_issues = self.validate_visibility(
+            processed_calendar, report_issues=False
+        )
+        if vis_issues:
+            validation_counts["visibility"] = len(vis_issues)
+            calendar_status = "INVALID"
+
+        payload_issues = self.validate_payload_exposures(
+            processed_calendar, report_issues=False
+        )
+        if payload_issues:
+            validation_counts["payload_exposure"] = len(payload_issues)
+            calendar_status = "INVALID"
+
+        overlap_issues = self.validate_no_overlaps_astropy(
+            processed_calendar, report_issues=False
+        )
+        if overlap_issues:
+            validation_counts["overlap"] = len(overlap_issues)
+            calendar_status = "INVALID"
+
+        timing_result = self.validate_sequence_timing(
+            processed_calendar, report_issues=False
+        )
+        timing_total = timing_result["timing_summary"]["total_issues"]
+        if timing_total > 0:
+            validation_counts["sequence_timing"] = timing_total
+            calendar_status = "INVALID"
+
+        roll_issues = self.validate_roll_consistency(
+            processed_calendar, report_issues=False
+        )
+        if roll_issues:
+            validation_counts["roll_consistency"] = len(roll_issues)
+            calendar_status = "INVALID"
+
+        # Print compact validation summary
+        if validation_counts:
+            print(
+                f"\n--- Validation: {calendar_status} "
+                f"({sum(validation_counts.values())} issues) ---"
             )
-            > 0
-        ):
-            print("Warning: Some target names contain spaces.")
-            calendar_status = "INVALID"
-        if (
-            len(
-                self.validate_visibility(
-                    processed_calendar, report_issues=False
-                )
+            for cat, cnt in validation_counts.items():
+                print(f"  {cat}: {cnt}")
+            print(
+                "Run print_validation_summary(calendar) "
+                "for actionable details.\n"
             )
-            > 0
-        ):
-            print("Warning: Some visibility gaps remain unfilled.")
-            calendar_status = "INVALID"
-        if (
-            len(
-                self.validate_payload_exposures(
-                    processed_calendar, report_issues=False
-                )
-            )
-            > 0
-        ):
-            print("Warning: Some payload exposures are invalid.")
-            calendar_status = "INVALID"
-        if (
-            len(
-                self.validate_no_overlaps_astropy(
-                    processed_calendar, report_issues=False
-                )
-            )
-            > 0
-        ):
-            print("Warning: Some sequence timings are invalid.")
-            calendar_status = "INVALID"
-        if (
-            self.validate_sequence_timing(
-                processed_calendar, report_issues=False
-            )["timing_summary"]["total_issues"]
-            > 0
-        ):
-            print("Warning: Some sequence timings are invalid.")
-            calendar_status = "INVALID"
-        if (
-            len(
-                self.validate_roll_consistency(
-                    processed_calendar, report_issues=False
-                )
-            )
-            > 0
-        ):
-            print("Warning: Some roll angles are inconsistent.")
-            calendar_status = "INVALID"
+        else:
+            print(f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n")
 
         new_metadata = copy.deepcopy(processed_calendar.metadata)
         new_metadata.update(
@@ -538,16 +539,33 @@ class ScheduleProcessor:
             working_calendar, all_minutes_bool
         )
 
+        # Trim non-visible tails that _fix_visibility cannot handle
+        # (it only shrinks starts forward; tails need stop_time shrunk).
+        working_calendar = self._trim_non_visible_tails(working_calendar)
+
+        # Absorb sequences shorter than the minimum duration into
+        # their immediate neighbours so that all remaining sequences
+        # are long enough for the payload overhead budget.
+        working_calendar = self._merge_short_sequences(working_calendar)
+
         # last thing is to update all the payload parameters
         working_calendar = self._update_payload_parameters(working_calendar)
 
         return working_calendar
 
     def _fill_gaps(
-        self, sequence: ObservationSequence, gap_length: int
+        self,
+        sequence: ObservationSequence,
+        gap_length: int,
     ) -> ObservationSequence:
-        """
-        Extend the start of a sequence backward in time to fill a gap.
+        """Extend the start of a sequence backward in time to fill a gap.
+
+        This extension is intentionally **blind** (no visibility check).
+        Its sole purpose is to maintain schedule contiguity — every
+        minute between the first and last sequence must be assigned.
+        Non-visible minutes introduced here are cleaned up downstream
+        by ``_fix_visibility`` (heads) and ``_trim_non_visible_tails``
+        (tails).
 
         Parameters
         ----------
@@ -603,6 +621,236 @@ class ScheduleProcessor:
         time_grid = start_time + np.arange(total_minutes) * u.min
 
         return total_minutes, start_time, end_time, time_grid
+
+    def _trim_non_visible_tails(
+        self, calendar: ScienceCalendar
+    ) -> ScienceCalendar:
+        """Trim non-visible tails from sequences.
+
+        For each sequence whose last minute(s) are not visible, shrink
+        ``stop_time`` to the last visible minute + 1.  Then attempt to
+        extend the *next* sequence backward to absorb the freed time
+        (only where that target is visible).
+
+        This is the complement of ``_fix_visibility`` which handles
+        non-visible *heads* by extending the previous sequence forward
+        and shrinking the current sequence's start.
+        """
+        working_cal = deepcopy(calendar)
+
+        # Collect all sequences globally, sorted by start_time
+        all_sequences: List[Tuple[str, ObservationSequence]] = []
+        for visit in working_cal.visits:
+            for seq in visit.sequences:
+                all_sequences.append((visit.id, seq))
+        all_sequences.sort(key=lambda x: x[1].start_time)
+
+        for idx, (visit_id, seq) in enumerate(all_sequences):
+            n_mins = int(np.rint(seq.duration.sec / 60.0))
+            if n_mins <= 0:
+                continue
+
+            target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+            deltas = np.arange(n_mins) * u.min
+            times = seq.start_time + deltas
+
+            target_roll = self._computed_target_rolls.get(visit_id, {}).get(
+                seq.target
+            )
+            if self._roll_sweep_enabled and target_roll is not None:
+                vis = self.visibility.get_visibility(
+                    target_coord, times, roll=target_roll * u.deg
+                )
+            else:
+                vis = self.visibility.get_visibility(target_coord, times)
+
+            vis_arr = np.asarray(vis)
+
+            # Nothing to do if last minute is visible
+            if len(vis_arr) == 0 or vis_arr[-1]:
+                continue
+
+            visible_indices = np.where(vis_arr)[0]
+            if len(visible_indices) == 0:
+                continue  # entirely non-visible — skip
+
+            last_visible_idx = visible_indices[-1]
+            new_stop = seq.start_time + (last_visible_idx + 1) * u.min
+
+            if (new_stop - seq.start_time) < self.min_sequence_duration:
+                continue  # trimming would make sequence too short
+
+            trimmed = ObservationSequence(
+                id=seq.id,
+                target=seq.target,
+                priority=seq.priority,
+                start_time=seq.start_time,
+                stop_time=new_stop,
+                ra=seq.ra,
+                dec=seq.dec,
+                payload_params=deepcopy(seq.payload_params),
+            )
+            working_cal.replace_sequence(visit_id, seq.id, trimmed)
+
+            # Try extending the next sequence backward to fill gap
+            if idx + 1 >= len(all_sequences):
+                continue
+
+            next_visit_id, next_seq = all_sequences[idx + 1]
+            gap_minutes = int(
+                np.rint((next_seq.start_time - new_stop).sec / 60.0)
+            )
+            if gap_minutes <= 0:
+                continue
+
+            next_coord = SkyCoord(
+                next_seq.ra, next_seq.dec, frame="icrs", unit="deg"
+            )
+            gap_deltas = np.arange(gap_minutes) * u.min
+            gap_times = new_stop + gap_deltas
+
+            next_roll = self._computed_target_rolls.get(next_visit_id, {}).get(
+                next_seq.target
+            )
+            if self._roll_sweep_enabled and next_roll is not None:
+                next_vis = self.visibility.get_visibility(
+                    next_coord,
+                    gap_times,
+                    roll=next_roll * u.deg,
+                )
+            else:
+                next_vis = self.visibility.get_visibility(
+                    next_coord, gap_times
+                )
+            next_vis_arr = np.asarray(next_vis)
+
+            # Walk backward from the original next start to find the
+            # earliest contiguous visible minute.
+            last_idx = len(next_vis_arr) - 1
+            if not next_vis_arr[last_idx]:
+                continue  # next target also not visible here
+
+            first_contiguous = last_idx
+            while first_contiguous > 0 and next_vis_arr[first_contiguous - 1]:
+                first_contiguous -= 1
+
+            new_next_start = gap_times[first_contiguous]
+            extended_next = ObservationSequence(
+                id=next_seq.id,
+                target=next_seq.target,
+                priority=next_seq.priority,
+                start_time=new_next_start,
+                stop_time=next_seq.stop_time,
+                ra=next_seq.ra,
+                dec=next_seq.dec,
+                payload_params=deepcopy(next_seq.payload_params),
+            )
+            working_cal.replace_sequence(
+                next_visit_id, next_seq.id, extended_next
+            )
+            # Update local list so subsequent iterations see
+            # the modified next sequence.
+            all_sequences[idx + 1] = (next_visit_id, extended_next)
+
+        return working_cal
+
+    def _merge_short_sequences(
+        self, calendar: ScienceCalendar
+    ) -> ScienceCalendar:
+        """Absorb sequences shorter than *min_sequence_duration* into
+        their immediate neighbours.
+
+        For each short sequence the method first tries to extend the
+        **previous** sequence's ``stop_time`` forward.  If there is no
+        previous sequence (e.g. the short sequence is the first in the
+        calendar), the **next** sequence's ``start_time`` is pulled
+        backward instead.  The short sequence is then removed from its
+        visit.
+
+        This guarantees that:
+        * no sequence remains shorter than the payload overhead budget,
+        * schedule contiguity is preserved (no new gaps are introduced),
+        * no sequence is extended beyond **max_sequence_duration**.
+        """
+        working_cal = deepcopy(calendar)
+
+        # Collect all (visit_id, seq) pairs sorted by start_time
+        all_seqs: List[Tuple[str, ObservationSequence]] = []
+        for visit in working_cal.visits:
+            for seq in visit.sequences:
+                all_seqs.append((visit.id, seq))
+        all_seqs.sort(key=lambda x: x[1].start_time)
+
+        to_remove: List[Tuple[str, str]] = []  # (visit_id, seq_id)
+
+        for idx, (vid, seq) in enumerate(all_seqs):
+            if seq.duration >= self.min_sequence_duration:
+                continue
+
+            absorbed = False
+
+            # Try extending the previous sequence forward
+            if idx > 0:
+                prev_vid, prev_seq = all_seqs[idx - 1]
+                new_stop = seq.stop_time
+                new_dur = new_stop - prev_seq.start_time
+                if new_dur <= self.max_sequence_duration:
+                    extended = ObservationSequence(
+                        id=prev_seq.id,
+                        target=prev_seq.target,
+                        priority=prev_seq.priority,
+                        start_time=prev_seq.start_time,
+                        stop_time=new_stop,
+                        ra=prev_seq.ra,
+                        dec=prev_seq.dec,
+                        payload_params=deepcopy(prev_seq.payload_params),
+                    )
+                    working_cal.replace_sequence(
+                        prev_vid, prev_seq.id, extended
+                    )
+                    all_seqs[idx - 1] = (prev_vid, extended)
+                    absorbed = True
+
+            # Fall back: pull the next sequence backward
+            if not absorbed and idx + 1 < len(all_seqs):
+                next_vid, next_seq = all_seqs[idx + 1]
+                new_start = seq.start_time
+                new_dur = next_seq.stop_time - new_start
+                if new_dur <= self.max_sequence_duration:
+                    extended = ObservationSequence(
+                        id=next_seq.id,
+                        target=next_seq.target,
+                        priority=next_seq.priority,
+                        start_time=new_start,
+                        stop_time=next_seq.stop_time,
+                        ra=next_seq.ra,
+                        dec=next_seq.dec,
+                        payload_params=deepcopy(next_seq.payload_params),
+                    )
+                    working_cal.replace_sequence(
+                        next_vid, next_seq.id, extended
+                    )
+                    all_seqs[idx + 1] = (next_vid, extended)
+                    absorbed = True
+
+            if absorbed:
+                to_remove.append((vid, seq.id))
+
+        # Remove absorbed sequences from their visits
+        for vid, sid in to_remove:
+            for visit in working_cal.visits:
+                if visit.id == vid:
+                    visit.sequences = [
+                        s for s in visit.sequences if s.id != sid
+                    ]
+                    break
+
+        # Drop visits that have become empty
+        working_cal.visits = [
+            v for v in working_cal.visits if v.sequences
+        ]
+
+        return working_cal
 
     def _fix_visibility(
         self, calendar: ScienceCalendar, all_minutes_bool: Any
@@ -661,6 +909,8 @@ class ScheduleProcessor:
                 continue
 
             ra, dec = get_ra_dec(prev_idx)
+            if ra is None or dec is None:
+                continue
             target_coord = SkyCoord(ra, dec, frame="icrs", unit="deg")
 
             # Look up precomputed roll for the previous target
@@ -1070,7 +1320,26 @@ class ScheduleProcessor:
     def validate_visibility(
         self, calendar: ScienceCalendar, report_issues: bool = True
     ) -> List[Dict[str, Any]]:
-        """Validate that all sequences have good visibility."""
+        """Validate that all sequences have good visibility.
+
+        Returns a list of issue dicts. Each dict contains:
+
+        - ``sequence_id``, ``visit_id``, ``target``
+        - ``ra``, ``dec`` (degrees)
+        - ``roll`` used (degrees) or *None*
+        - ``start_time``, ``stop_time``
+        - ``total_minutes``, ``non_visible_minutes``
+        - ``visibility_fraction`` (0–1)
+        - ``first_gap_start``, ``last_gap_end`` – Time bounds of
+          non-visible spans
+        - ``constraint_failures`` – dict from
+          ``Visibility.get_all_constraints`` at the first
+          non-visible minute (keys: moon, sun, earthlimb,
+          star_tracker; values: bool)
+        - ``constraint_summary`` – human-readable string
+          listing which constraints failed
+        - ``message`` – one-line actionable description
+        """
         issues = []
 
         for visit in calendar.visits:
@@ -1092,20 +1361,84 @@ class ScheduleProcessor:
                     )
                 else:
                     vis = self.visibility.get_visibility(target_coord, times)
+
                 if not np.all(vis):
+                    vis_arr = np.asarray(vis)
+                    non_vis_mask = ~vis_arr
+                    non_vis_indices = np.where(non_vis_mask)[0]
+                    first_gap_start = times[non_vis_indices[0]]
+                    last_gap_end = times[non_vis_indices[-1]] + 1 * u.min
+                    non_visible_minutes = int(np.sum(non_vis_mask))
+
+                    # Constraint breakdown at first non-visible minute
+                    constraint_failures = {}
+                    constraint_summary = ""
+                    roll_used = (
+                        target_roll
+                        if (
+                            self._roll_sweep_enabled
+                            and target_roll is not None
+                        )
+                        else None
+                    )
+                    try:
+                        constraint_failures = (
+                            self.visibility.get_all_constraints(
+                                target_coord,
+                                times[non_vis_indices[0]],
+                            )
+                        )
+                        failed = [
+                            k for k, v in constraint_failures.items() if not v
+                        ]
+                        if failed:
+                            constraint_summary = ", ".join(failed)
+                        elif roll_used is not None:
+                            # Boresight constraints all pass but
+                            # roll-aware visibility still fails →
+                            # the star-tracker keepout at this
+                            # roll is the culprit.
+                            constraint_summary = (
+                                f"star_tracker at " f"roll={roll_used:.1f}°"
+                            )
+                            constraint_failures["star_tracker_at_roll"] = False
+                        else:
+                            constraint_summary = "unknown"
+                    except Exception:
+                        constraint_summary = "(unable to determine)"
+
+                    vis_frac = float(np.sum(vis_arr) / len(vis_arr))
+
+                    message = (
+                        f"Seq {seq.id} ({seq.target}) in visit "
+                        f"{visit.id}: {vis_frac:.0%} visible "
+                        f"({non_visible_minutes}/{n_mins} min "
+                        f"dark). Failed: {constraint_summary}. "
+                        f"First gap at {first_gap_start.isot}."
+                    )
+
                     issue = {
                         "sequence_id": seq.id,
+                        "visit_id": visit.id,
                         "target": seq.target,
+                        "ra": seq.ra,
+                        "dec": seq.dec,
+                        "roll": roll_used,
                         "start_time": seq.start_time,
                         "stop_time": seq.stop_time,
-                        "visibility_fraction": np.sum(vis) / len(vis),
+                        "total_minutes": n_mins,
+                        "non_visible_minutes": non_visible_minutes,
+                        "visibility_fraction": vis_frac,
+                        "first_gap_start": first_gap_start,
+                        "last_gap_end": last_gap_end,
+                        "constraint_failures": constraint_failures,
+                        "constraint_summary": constraint_summary,
+                        "message": message,
                     }
                     issues.append(issue)
 
                     if report_issues:
-                        print(
-                            f"Visibility issue: {seq.target} {seq.start_time} {seq.stop_time} {seq.id}"
-                        )
+                        print(message)
 
         return issues
 
@@ -1390,8 +1723,17 @@ class ScheduleProcessor:
     def validate_no_overlaps_astropy(
         self, calendar: ScienceCalendar, report_issues: bool = True
     ) -> List[Dict[str, Any]]:
-        """
-        Use Astropy's time comparison with proper tolerance.
+        """Detect overlapping sequences using Astropy time comparison.
+
+        Returns a list of overlap dicts containing:
+
+        - ``sequence1_id``, ``sequence1_target``, ``visit1_id``
+        - ``sequence2_id``, ``sequence2_target``, ``visit2_id``
+        - ``sequence1_start``, ``sequence1_stop``
+        - ``sequence2_start``, ``sequence2_stop``
+        - ``overlap_duration_minutes``
+        - ``suggested_fix`` – actionable string
+        - ``message`` – one-line summary
         """
 
         overlaps = []
@@ -1407,8 +1749,10 @@ class ScheduleProcessor:
 
         # Check for overlaps
         for i in range(len(all_sequences) - 1):
-            seq1 = all_sequences[i]["sequence"]
-            seq2 = all_sequences[i + 1]["sequence"]
+            entry1 = all_sequences[i]
+            entry2 = all_sequences[i + 1]
+            seq1 = entry1["sequence"]
+            seq2 = entry2["sequence"]
 
             # Check if seq1 ends significantly after seq2 starts
             if seq1.stop_time > (seq2.start_time + tolerance):
@@ -1416,53 +1760,66 @@ class ScheduleProcessor:
                     (seq1.stop_time - seq2.start_time).to(u.min).value
                 )
 
+                suggested_fix = (
+                    f"Delay sequence {seq2.id} start to "
+                    f"{seq1.stop_time.isot} or shorten "
+                    f"sequence {seq1.id} stop by "
+                    f"{overlap_duration:.1f} min."
+                )
+                message = (
+                    f"Overlap: seq {seq1.id} ({seq1.target}, "
+                    f"visit {entry1['visit_id']}) ends at "
+                    f"{seq1.stop_time.isot} but seq {seq2.id} "
+                    f"({seq2.target}, visit {entry2['visit_id']}) "
+                    f"starts at {seq2.start_time.isot} "
+                    f"({overlap_duration:.1f} min overlap). "
+                    f"Fix: {suggested_fix}"
+                )
+
                 overlap_issue = {
                     "sequence1_id": seq1.id,
                     "sequence1_target": seq1.target,
+                    "visit1_id": entry1["visit_id"],
                     "sequence1_start": seq1.start_time,
                     "sequence1_stop": seq1.stop_time,
                     "sequence2_id": seq2.id,
                     "sequence2_target": seq2.target,
+                    "visit2_id": entry2["visit_id"],
                     "sequence2_start": seq2.start_time,
                     "sequence2_stop": seq2.stop_time,
                     "overlap_duration_minutes": overlap_duration,
+                    "suggested_fix": suggested_fix,
+                    "message": message,
                 }
                 overlaps.append(overlap_issue)
 
                 if report_issues:
-                    print("True overlap detected:")
-                    print(
-                        f"  Sequence {seq1.id} ({seq1.target}) ends at {seq1.stop_time}"
-                    )
-                    print(
-                        f"  Sequence {seq2.id} ({seq2.target}) starts at {seq2.start_time}"
-                    )
-                    print(
-                        f"  Overlap duration: {overlap_duration:.2f} minutes"
-                    )
-                    print()
+                    print(message)
 
         return overlaps
 
     def validate_sequence_timing(
         self, calendar: ScienceCalendar, report_issues: bool = True
     ) -> Dict[str, Any]:
-        """
-        Comprehensive timing validation including overlaps, gaps, and minimum durations.
+        """Comprehensive timing validation.
+
+        Checks for overlaps, short sequences, and large gaps.
+        Each sub-issue includes a ``message`` with actionable detail.
 
         Returns
         -------
         dict
-            Dictionary with different types of timing issues
+            Keys: ``overlaps``, ``short_sequences``, ``large_gaps``,
+            ``timing_summary``.
         """
-        issues = {
+        issues: Dict[str, Any] = {
             "overlaps": [],
             "short_sequences": [],
             "large_gaps": [],
             "timing_summary": {},
         }
 
-        # Check for overlaps
+        # Check for overlaps (already enhanced with message)
         issues["overlaps"] = self.validate_no_overlaps_astropy(
             calendar, report_issues=False
         )
@@ -1485,36 +1842,67 @@ class ScheduleProcessor:
 
         # Check for sequences shorter than minimum duration
         min_duration = self.min_sequence_duration
+        min_dur_min = min_duration.sec / 60.0
         for seq_info in all_sequences:
+            dur_min = seq_info["duration_minutes"]
             if seq_info["sequence"].duration < min_duration:
+                seq = seq_info["sequence"]
+                message = (
+                    f"Seq {seq.id} ({seq.target}) in visit "
+                    f"{seq_info['visit_id']}: duration "
+                    f"{dur_min:.1f} min < minimum "
+                    f"{min_dur_min:.0f} min. "
+                    f"Extend stop_time to at least "
+                    f"{(seq.start_time + min_duration).isot}."
+                )
                 short_issue = {
-                    "sequence_id": seq_info["sequence"].id,
-                    "target": seq_info["sequence"].target,
+                    "sequence_id": seq.id,
+                    "target": seq.target,
                     "visit_id": seq_info["visit_id"],
                     "start_time": seq_info["start_time"],
                     "stop_time": seq_info["stop_time"],
-                    "duration_minutes": seq_info["duration_minutes"],
-                    "minimum_required": min_duration,
+                    "duration_minutes": dur_min,
+                    "minimum_required_minutes": min_dur_min,
+                    "suggested_fix": (
+                        f"Extend stop_time to "
+                        f"{(seq.start_time + min_duration).isot}"
+                    ),
+                    "message": message,
                 }
                 issues["short_sequences"].append(short_issue)
 
         # Check for large gaps between sequences
         max_acceptable_gap = 2.0 * u.minute  # 2 minutes
         for i in range(len(all_sequences) - 1):
-            seq1 = all_sequences[i]
-            seq2 = all_sequences[i + 1]
+            s1 = all_sequences[i]
+            s2 = all_sequences[i + 1]
+            gap_td = s2["start_time"] - s1["stop_time"]
 
-            gap_duration = seq2["start_time"] - seq1["stop_time"]
-
-            if gap_duration > max_acceptable_gap:
+            if gap_td > max_acceptable_gap:
+                gap_min = gap_td.sec / 60.0
+                message = (
+                    f"Gap of {gap_min:.1f} min between "
+                    f"seq {s1['sequence'].id} ({s1['sequence'].target}, "
+                    f"visit {s1['visit_id']}) and "
+                    f"seq {s2['sequence'].id} ({s2['sequence'].target}, "
+                    f"visit {s2['visit_id']}): "
+                    f"{s1['stop_time'].isot} \u2192 "
+                    f"{s2['start_time'].isot}. "
+                    f"Consider extending seq {s1['sequence'].id} "
+                    f"stop or advancing seq {s2['sequence'].id} "
+                    f"start."
+                )
                 gap_issue = {
-                    "after_sequence": seq1["sequence"].id,
-                    "after_target": seq1["sequence"].target,
-                    "before_sequence": seq2["sequence"].id,
-                    "before_target": seq2["sequence"].target,
-                    "gap_start": seq1["stop_time"],
-                    "gap_end": seq2["start_time"],
-                    "gap_duration_minutes": gap_duration,
+                    "after_sequence": s1["sequence"].id,
+                    "after_target": s1["sequence"].target,
+                    "after_visit_id": s1["visit_id"],
+                    "before_sequence": s2["sequence"].id,
+                    "before_target": s2["sequence"].target,
+                    "before_visit_id": s2["visit_id"],
+                    "gap_start": s1["stop_time"],
+                    "gap_end": s2["start_time"],
+                    "gap_duration_minutes": gap_min,
+                    "message": message,
                 }
                 issues["large_gaps"].append(gap_issue)
 
@@ -1536,94 +1924,95 @@ class ScheduleProcessor:
             print("=" * 60)
 
             summary = issues["timing_summary"]
-            print(f"Total sequences analyzed: {summary['total_sequences']}")
-            print(f"Total timing issues found: {summary['total_issues']}")
+            print(
+                f"Total sequences analyzed: " f"{summary['total_sequences']}"
+            )
+            print(f"Total timing issues found: " f"{summary['total_issues']}")
             print()
 
-            # Report overlaps
             if issues["overlaps"]:
                 print(f"OVERLAPS ({len(issues['overlaps'])} found):")
-                for i, overlap in enumerate(issues["overlaps"]):
-                    print(
-                        f"  {i+1}. Sequences {overlap['sequence1_id']} and {overlap['sequence2_id']}"
-                    )
-                    print(
-                        f"     Overlap: {overlap['overlap_start']} to {overlap['overlap_end']} "
-                        f"({overlap['overlap_duration_minutes']:.1f} min)"
-                    )
+                for i, ov in enumerate(issues["overlaps"]):
+                    print(f"  {i+1}. {ov['message']}")
             else:
-                print("✓ OVERLAPS: None found")
+                print("\u2713 OVERLAPS: None found")
 
             print()
 
-            # Report short sequences
             if issues["short_sequences"]:
                 print(
-                    f"SHORT SEQUENCES ({len(issues['short_sequences'])} found, < {min_duration} min):"
+                    f"SHORT SEQUENCES "
+                    f"({len(issues['short_sequences'])} found, "
+                    f"< {min_dur_min:.0f} min):"
                 )
-                for i, short in enumerate(issues["short_sequences"]):
-                    print(
-                        f"  {i+1}. Sequence {short['sequence_id']} ({short['target']}): "
-                        f"{short['duration_minutes']:.1f} min"
-                    )
+                for i, sh in enumerate(issues["short_sequences"]):
+                    print(f"  {i+1}. {sh['message']}")
             else:
-                print("✓ SHORT SEQUENCES: None found")
+                print("\u2713 SHORT SEQUENCES: None found")
 
             print()
 
-            # Report large gaps
             if issues["large_gaps"]:
                 print(
-                    f"LARGE GAPS ({len(issues['large_gaps'])} found, > {max_acceptable_gap} min):"
+                    f"LARGE GAPS ({len(issues['large_gaps'])} "
+                    f"found, > 2 min):"
                 )
-                for i, gap in enumerate(
-                    issues["large_gaps"][:5]
-                ):  # Show first 5
-                    print(
-                        f"  {i+1}. After sequence {gap['after_sequence']}: "
-                        f"{gap['gap_duration_minutes']:.1f} min gap"
-                    )
+                for i, gap in enumerate(issues["large_gaps"][:5]):
+                    print(f"  {i+1}. {gap['message']}")
                 if len(issues["large_gaps"]) > 5:
-                    print(f"     ... and {len(issues['large_gaps']) - 5} more")
+                    print(
+                        f"     ... and "
+                        f"{len(issues['large_gaps']) - 5} more"
+                    )
             else:
-                print("✓ LARGE GAPS: None found")
+                print("\u2713 LARGE GAPS: None found")
 
         return issues
 
     def validate_payload_exposures(
         self, calendar: ScienceCalendar, report_issues: bool = True
     ) -> List[Dict[str, Any]]:
-        """
-        Validate that payload exposure times (single exposure and total requested exposure)
-        do not exceed the enclosing sequence duration.
+        """Validate payload exposure times against sequence duration.
 
-        This currently checks the common VIS camera payload category
-        `AcquireVisCamScienceData` for keys:
-          - `ExposureTime_us` (microseconds per frame)
-          - `NumTotalFramesRequested` (total frames)
-          - `FramesPerCoadd` (used when NumTotalFramesRequested is not present)
-
-        It also heuristically scans flattened payload parameters for any key containing
-        the string `exposure` and checks single-exposure values against the sequence
-        duration (assumes microseconds when the key ends with `_us`).
+        Checks that single-frame exposure, total-frame exposure, and
+        coadd exposure fit within the sequence duration *after*
+        subtracting pre/post overheads.  Each issue dict includes a
+        ``message`` with actionable detail and a ``suggested_fix``.
 
         Returns
         -------
-        list
-            A list of issue dicts found. Empty list if none.
+        list of dict
+            Issue dicts. Empty list when everything is valid.
         """
         issues = []
 
+        # Compute effective overhead budget (max of VDA/NIRDA)
+        pre_oh_sec = max(
+            getattr(self, "vda_pre_sequence_overhead", 0 * u.s).to(u.s).value,
+            getattr(self, "nirda_pre_sequence_overhead", 0 * u.s)
+            .to(u.s)
+            .value,
+        )
+        post_oh_sec = max(
+            getattr(self, "vda_post_sequence_overhead", 0 * u.s).to(u.s).value,
+            getattr(self, "nirda_post_sequence_overhead", 0 * u.s)
+            .to(u.s)
+            .value,
+        )
+        total_oh_sec = pre_oh_sec + post_oh_sec
+
         for visit in calendar.visits:
             for seq in visit.sequences:
-                seq_duration_sec = seq.duration.sec
+                seq_dur_sec = seq.duration.sec
+                effective_sec = seq_dur_sec - total_oh_sec
 
-                # 1) Check AcquireVisCamScienceData (VDA) - common VIS camera
+                # 1) VDA camera
                 exposure_us = seq.get_payload_parameter(
                     "AcquireVisCamScienceData", "ExposureTime_us"
                 )
                 num_frames = seq.get_payload_parameter(
-                    "AcquireVisCamScienceData", "NumTotalFramesRequested"
+                    "AcquireVisCamScienceData",
+                    "NumTotalFramesRequested",
                 )
                 frames_per_coadd = seq.get_payload_parameter(
                     "AcquireVisCamScienceData", "FramesPerCoadd"
@@ -1631,83 +2020,199 @@ class ScheduleProcessor:
 
                 if exposure_us is not None:
                     try:
-                        exposure_us_val = float(exposure_us)
+                        exp_us_val = float(exposure_us)
                     except (ValueError, TypeError):
-                        exposure_us_val = None
+                        exp_us_val = None
 
-                    if exposure_us_val is not None:
-                        single_exp_sec = exposure_us_val / 1e6
-                        if single_exp_sec > seq_duration_sec:
-                            issue = {
-                                "visit_id": visit.id,
-                                "sequence_id": seq.id,
-                                "target": seq.target,
-                                "problem": "single_exposure_longer_than_sequence",
-                                "exposure_seconds": single_exp_sec,
-                                "sequence_duration_seconds": seq_duration_sec,
-                            }
-                            issues.append(issue)
+                    if exp_us_val is not None:
+                        single_sec = exp_us_val / 1e6
+
+                        # Sequence too short for overhead
+                        if effective_sec <= 0:
+                            msg = (
+                                f"Seq {seq.id} ({seq.target}, "
+                                f"visit {visit.id}): sequence "
+                                f"too short for payload "
+                                f"overhead "
+                                f"({seq_dur_sec:.0f}s < "
+                                f"{total_oh_sec:.0f}s "
+                                f"overhead). No science "
+                                f"exposures possible."
+                            )
+                            issues.append(
+                                {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": (
+                                        "sequence_shorter_than"
+                                        "_overhead"
+                                    ),
+                                    "sequence_duration_seconds": (
+                                        seq_dur_sec
+                                    ),
+                                    "effective_duration_seconds": (
+                                        effective_sec
+                                    ),
+                                    "overhead_seconds": total_oh_sec,
+                                    "suggested_fix": (
+                                        "Extend sequence to at "
+                                        "least "
+                                        f"{int(total_oh_sec)}s "
+                                        "or merge with "
+                                        "adjacent sequence"
+                                    ),
+                                    "message": msg,
+                                }
+                            )
                             if report_issues:
-                                print(
-                                    f"PAYLOAD ISSUE: sequence {seq.id} single exposure ({single_exp_sec:.3f}s) "
-                                    f"> sequence duration ({seq_duration_sec:.3f}s)"
-                                )
+                                print(msg)
+                            # Skip frame-level checks — they
+                            # are meaningless for this sequence
+                            continue
 
-                        # If total frames provided, check total exposure
+                        if single_sec > effective_sec:
+                            msg = (
+                                f"Seq {seq.id} ({seq.target}, "
+                                f"visit {visit.id}): single VDA "
+                                f"exposure {single_sec:.3f}s > "
+                                f"effective duration "
+                                f"{effective_sec:.1f}s "
+                                f"(sequence {seq_dur_sec:.1f}s "
+                                f"- overhead "
+                                f"{total_oh_sec:.0f}s)."
+                            )
+                            issues.append(
+                                {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": (
+                                        "single_exposure_longer"
+                                        "_than_sequence"
+                                    ),
+                                    "exposure_seconds": single_sec,
+                                    "sequence_duration_seconds": (seq_dur_sec),
+                                    "effective_duration_seconds": (
+                                        effective_sec
+                                    ),
+                                    "overhead_seconds": total_oh_sec,
+                                    "suggested_fix": (
+                                        f"Reduce ExposureTime_us "
+                                        f"to <= "
+                                        f"{int(effective_sec*1e6)}"
+                                    ),
+                                    "message": msg,
+                                }
+                            )
+                            if report_issues:
+                                print(msg)
+
                         if num_frames is not None:
                             try:
-                                total_frames = int(num_frames)
-                                total_exp_sec = (
-                                    exposure_us_val * total_frames
-                                ) / 1e6
-                                if total_exp_sec > seq_duration_sec:
-                                    issue = {
-                                        "visit_id": visit.id,
-                                        "sequence_id": seq.id,
-                                        "target": seq.target,
-                                        "problem": "total_exposure_longer_than_sequence",
-                                        "total_exposure_seconds": total_exp_sec,
-                                        "sequence_duration_seconds": seq_duration_sec,
-                                    }
-                                    issues.append(issue)
+                                tf = int(num_frames)
+                                tot_sec = (exp_us_val * tf) / 1e6
+                                if tot_sec > effective_sec:
+                                    max_f = int(
+                                        effective_sec
+                                        / (exp_us_val / 1e6)
+                                    )
+                                    msg = (
+                                        f"Seq {seq.id} "
+                                        f"({seq.target}, visit "
+                                        f"{visit.id}): total VDA "
+                                        f"exposure {tot_sec:.1f}s "
+                                        f"({tf} frames) > "
+                                        f"effective "
+                                        f"{effective_sec:.1f}s. "
+                                        f"Max frames that fit: "
+                                        f"{max_f}."
+                                    )
+                                    issues.append(
+                                        {
+                                            "visit_id": visit.id,
+                                            "sequence_id": seq.id,
+                                            "target": seq.target,
+                                            "problem": (
+                                                "total_exposure_"
+                                                "longer_than_"
+                                                "sequence"
+                                            ),
+                                            "total_exposure_seconds": (
+                                                tot_sec
+                                            ),
+                                            "sequence_duration_seconds": (
+                                                seq_dur_sec
+                                            ),
+                                            "effective_duration_seconds": (
+                                                effective_sec
+                                            ),
+                                            "overhead_seconds": (total_oh_sec),
+                                            "suggested_max_frames": (max_f),
+                                            "suggested_fix": (
+                                                f"Set "
+                                                f"NumTotalFrames"
+                                                f"Requested "
+                                                f"<= {max_f}"
+                                            ),
+                                            "message": msg,
+                                        }
+                                    )
                                     if report_issues:
-                                        print(
-                                            f"PAYLOAD ISSUE: sequence {seq.id} total exposure ({total_exp_sec:.1f}s) "
-                                            f"> sequence duration ({seq_duration_sec:.1f}s)"
-                                        )
+                                        print(msg)
                             except (ValueError, TypeError):
-                                # ignore parse errors; nothing to validate
                                 pass
 
-                        # If NumTotalFramesRequested not present but FramesPerCoadd is,
-                        # check at least the coadd exposure vs duration (heuristic)
                         if num_frames is None and frames_per_coadd is not None:
                             try:
                                 fpc = int(frames_per_coadd)
-                                total_exp_sec = (exposure_us_val * fpc) / 1e6
-                                if total_exp_sec > seq_duration_sec:
-                                    issue = {
-                                        "visit_id": visit.id,
-                                        "sequence_id": seq.id,
-                                        "target": seq.target,
-                                        "problem": "coadd_exposure_longer_than_sequence",
-                                        "coadd_exposure_seconds": total_exp_sec,
-                                        "sequence_duration_seconds": seq_duration_sec,
-                                    }
-                                    issues.append(issue)
+                                tot_sec = (exp_us_val * fpc) / 1e6
+                                if tot_sec > effective_sec:
+                                    msg = (
+                                        f"Seq {seq.id} "
+                                        f"({seq.target}, visit "
+                                        f"{visit.id}): coadd "
+                                        f"exposure {tot_sec:.1f}s "
+                                        f"> effective "
+                                        f"{effective_sec:.1f}s."
+                                    )
+                                    issues.append(
+                                        {
+                                            "visit_id": visit.id,
+                                            "sequence_id": seq.id,
+                                            "target": seq.target,
+                                            "problem": (
+                                                "coadd_exposure_"
+                                                "longer_than_"
+                                                "sequence"
+                                            ),
+                                            "coadd_exposure_seconds": (
+                                                tot_sec
+                                            ),
+                                            "sequence_duration_seconds": (
+                                                seq_dur_sec
+                                            ),
+                                            "effective_duration_seconds": (
+                                                effective_sec
+                                            ),
+                                            "overhead_seconds": (total_oh_sec),
+                                            "suggested_fix": (
+                                                "Reduce "
+                                                "FramesPerCoadd or "
+                                                "ExposureTime_us"
+                                            ),
+                                            "message": msg,
+                                        }
+                                    )
                                     if report_issues:
-                                        print(
-                                            f"PAYLOAD ISSUE: sequence {seq.id} coadd exposure ({total_exp_sec:.1f}s) "
-                                            f"> sequence duration ({seq_duration_sec:.1f}s)"
-                                        )
+                                        print(msg)
                             except (ValueError, TypeError):
                                 pass
 
-                # 2) Heuristic scan: any flattened payload key containing 'exposure'
+                # 2) Heuristic scan: any flattened key with 'exposure'
                 flat = seq.get_flat_payload_parameters()
                 for key, val in flat.items():
                     if "exposure" in key.lower() and val is not None:
-                        # skip keys we already handled
                         if key.startswith("AcquireVisCamScienceData"):
                             continue
                         try:
@@ -1715,28 +2220,42 @@ class ScheduleProcessor:
                         except (ValueError, TypeError):
                             continue
 
-                        # If key ends with _us assume microseconds, else seconds
-                        if key.lower().endswith("_us"):
-                            val_sec = v / 1e6
-                        else:
-                            val_sec = v
+                        val_sec = v / 1e6 if key.lower().endswith("_us") else v
 
-                        if val_sec > seq_duration_sec:
-                            issue = {
-                                "visit_id": visit.id,
-                                "sequence_id": seq.id,
-                                "target": seq.target,
-                                "problem": "payload_exposure_field_longer_than_sequence",
-                                "field": key,
-                                "value_seconds": val_sec,
-                                "sequence_duration_seconds": seq_duration_sec,
-                            }
-                            issues.append(issue)
+                        if val_sec > effective_sec:
+                            msg = (
+                                f"Seq {seq.id} ({seq.target}, "
+                                f"visit {visit.id}): payload "
+                                f"field {key} = {val_sec:.3f}s "
+                                f"> effective "
+                                f"{effective_sec:.1f}s."
+                            )
+                            issues.append(
+                                {
+                                    "visit_id": visit.id,
+                                    "sequence_id": seq.id,
+                                    "target": seq.target,
+                                    "problem": (
+                                        "payload_exposure_field_"
+                                        "longer_than_sequence"
+                                    ),
+                                    "field": key,
+                                    "value_seconds": val_sec,
+                                    "sequence_duration_seconds": (seq_dur_sec),
+                                    "effective_duration_seconds": (
+                                        effective_sec
+                                    ),
+                                    "overhead_seconds": total_oh_sec,
+                                    "suggested_fix": (
+                                        f"Reduce {key} to fit "
+                                        f"within "
+                                        f"{effective_sec:.1f}s"
+                                    ),
+                                    "message": msg,
+                                }
+                            )
                             if report_issues:
-                                print(
-                                    f"PAYLOAD ISSUE: sequence {seq.id} field {key} ({val_sec:.3f}s) "
-                                    f"> sequence duration ({seq_duration_sec:.3f}s)"
-                                )
+                                print(msg)
 
         return issues
 
@@ -1938,93 +2457,191 @@ class ScheduleProcessor:
         report_issues: bool = True,
         tolerance_deg: float = 0.001,
     ) -> List[Dict[str, Any]]:
-        """
-        Validate that all sequences of the same target within a visit have
-        consistent roll angles.
-
-        For each visit, sequences with the same target name should have the
-        same roll angle (within tolerance). This ensures the spacecraft
-        maintains consistent orientation for all observations of the same
-        target during a visit.
-
-        Parameters
-        ----------
-        calendar : ScienceCalendar
-            The science calendar to validate.
-        report_issues : bool, optional
-            If True (default), print issues found. If False, only return issues.
-        tolerance_deg : float, optional
-            Maximum allowed difference in roll angle (degrees) between
-            sequences of the same target. Default is 0.001 degrees.
+        """Validate roll-angle consistency per target within each visit.
 
         Returns
         -------
         list of dict
-            A list of issue dictionaries. Each dictionary contains:
-                - 'visit_id': The visit ID where the issue was found.
-                - 'target': The target name with inconsistent roll.
-                - 'sequence_ids': List of sequence IDs with this target.
-                - 'roll_values': List of roll values for these sequences.
-                - 'max_difference_deg': Maximum difference in roll values.
+            Issue dicts with ``message``, ``suggested_roll``, and
+            per-sequence ``roll_map``.
         """
         issues = []
 
         for visit in calendar.visits:
-            # Group sequences by target
             target_sequences: Dict[str, List[ObservationSequence]] = {}
             for seq in visit.sequences:
                 if seq.target not in target_sequences:
                     target_sequences[seq.target] = []
                 target_sequences[seq.target].append(seq)
 
-            # Check roll consistency for each target
             for target, sequences in target_sequences.items():
-                # Skip if only one sequence for this target
                 if len(sequences) < 2:
                     continue
 
-                # Collect roll values (skip None)
                 roll_values = []
                 seq_ids = []
+                roll_map: Dict[str, float] = {}
                 for seq in sequences:
                     if seq.roll is not None:
                         roll_values.append(seq.roll)
                         seq_ids.append(seq.id)
+                        roll_map[seq.id] = seq.roll
 
                 if len(roll_values) < 2:
                     continue
 
-                # Compute circular range (smallest arc containing
-                # all roll values), which correctly handles the
-                # ±180° wrap-around.
                 sorted_rolls = sorted(roll_values)
                 gaps = [
                     sorted_rolls[i + 1] - sorted_rolls[i]
                     for i in range(len(sorted_rolls) - 1)
                 ]
-                # Wrap-around gap from last back to first
                 gaps.append(360.0 - (sorted_rolls[-1] - sorted_rolls[0]))
                 max_diff = 360.0 - max(gaps)
 
                 if max_diff > tolerance_deg:
-                    issue = {
-                        "visit_id": visit.id,
-                        "target": target,
-                        "sequence_ids": seq_ids,
-                        "roll_values": roll_values,
-                        "max_difference_deg": max_diff,
-                    }
-                    issues.append(issue)
-
+                    suggested = float(np.median(roll_values))
+                    msg = (
+                        f"Visit {visit.id}, target {target}: "
+                        f"roll spread {max_diff:.3f}° across "
+                        f"{len(seq_ids)} sequences. "
+                        f"Values: "
+                        f"{[f'{r:.2f}' for r in roll_values]}. "
+                        f"Suggest setting all to "
+                        f"{suggested:.2f}°."
+                    )
+                    issues.append(
+                        {
+                            "visit_id": visit.id,
+                            "target": target,
+                            "sequence_ids": seq_ids,
+                            "roll_values": roll_values,
+                            "roll_map": roll_map,
+                            "max_difference_deg": max_diff,
+                            "suggested_roll": suggested,
+                            "suggested_fix": (
+                                f"Set roll to {suggested:.2f}° "
+                                f"for all {target} sequences "
+                                f"in visit {visit.id}"
+                            ),
+                            "message": msg,
+                        }
+                    )
                     if report_issues:
-                        print(
-                            f"Roll inconsistency: Visit {visit.id}, "
-                            f"Target {target}, "
-                            f"Roll values: {[f'{r:.2f}' for r in roll_values]}, "
-                            f"Max diff: {max_diff:.2f} deg"
-                        )
+                        print(msg)
 
         return issues
+
+    def print_validation_summary(
+        self, calendar: ScienceCalendar
+    ) -> Dict[str, Any]:
+        """Run all validators and print a unified actionable report.
+
+        Returns
+        -------
+        dict
+            ``{"status": "VALID"|"INVALID", "counts": {...},
+            "details": {...}}`` where *details* maps each category
+            to the raw issue list.
+        """
+        results: Dict[str, Any] = {}
+        counts: Dict[str, int] = {}
+
+        # --- target names ---
+        target_issues = self.validate_target_names(
+            calendar, report_issues=False
+        )
+        if target_issues:
+            results["target_name"] = target_issues
+            counts["target_name"] = len(target_issues)
+
+        # --- visibility ---
+        vis_issues = self.validate_visibility(calendar, report_issues=False)
+        if vis_issues:
+            results["visibility"] = vis_issues
+            counts["visibility"] = len(vis_issues)
+
+        # --- payload exposures ---
+        payload_issues = self.validate_payload_exposures(
+            calendar, report_issues=False
+        )
+        if payload_issues:
+            results["payload_exposure"] = payload_issues
+            counts["payload_exposure"] = len(payload_issues)
+
+        # --- overlaps ---
+        overlap_issues = self.validate_no_overlaps_astropy(
+            calendar, report_issues=False
+        )
+        if overlap_issues:
+            results["overlap"] = overlap_issues
+            counts["overlap"] = len(overlap_issues)
+
+        # --- sequence timing ---
+        timing_result = self.validate_sequence_timing(
+            calendar, report_issues=False
+        )
+        timing_total = timing_result["timing_summary"]["total_issues"]
+        if timing_total > 0:
+            results["sequence_timing"] = timing_result
+            counts["sequence_timing"] = timing_total
+
+        # --- roll consistency ---
+        roll_issues = self.validate_roll_consistency(
+            calendar, report_issues=False
+        )
+        if roll_issues:
+            results["roll_consistency"] = roll_issues
+            counts["roll_consistency"] = len(roll_issues)
+
+        total = sum(counts.values())
+        status = "VALID" if total == 0 else "INVALID"
+
+        # ── Print ──
+        print(
+            f"\n{'=' * 60}\n"
+            f"  VALIDATION SUMMARY: {status} "
+            f"({total} issues)\n"
+            f"{'=' * 60}"
+        )
+
+        if total == 0:
+            print("  All checks passed.\n")
+            return {
+                "status": status,
+                "counts": counts,
+                "details": results,
+            }
+
+        for cat, cnt in counts.items():
+            print(f"\n  [{cat.upper()}] — {cnt} issue(s)")
+            items = results[cat]
+
+            # Sequence timing has a nested structure
+            if cat == "sequence_timing":
+                for sub_key in [
+                    "overlaps",
+                    "short_sequences",
+                    "large_gaps",
+                ]:
+                    for item in items.get(sub_key, []):
+                        msg = item.get("message", "")
+                        if msg:
+                            print(f"    • {msg}")
+                continue
+
+            # All other categories are plain lists
+            if isinstance(items, list):
+                for item in items:
+                    msg = item.get("message", "")
+                    if msg:
+                        print(f"    • {msg}")
+
+        print(f"\n{'=' * 60}\n")
+        return {
+            "status": status,
+            "counts": counts,
+            "details": results,
+        }
 
     def print_timing_summary(self, calendar: ScienceCalendar) -> None:
         """Print a quick timing summary."""
