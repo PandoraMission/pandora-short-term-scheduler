@@ -548,6 +548,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_validation_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      print_validation_summary
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="print_validation_summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_validation_summary--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#shortschedule.ScheduleProcessor.process_calendar" class="md-nav__link">
     <span class="md-ellipsis">
       process_calendar
@@ -631,15 +655,6 @@
   
     <nav class="md-nav" aria-label="validate_roll_consistency">
       <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#shortschedule.ScheduleProcessor.validate_roll_consistency--parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      Parameters
-    </span>
-  </a>
-  
-</li>
         
           <li class="md-nav__item">
   <a href="#shortschedule.ScheduleProcessor.validate_roll_consistency--returns" class="md-nav__link">
@@ -1474,6 +1489,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_validation_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      print_validation_summary
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="print_validation_summary">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#shortschedule.ScheduleProcessor.print_validation_summary--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      Returns
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#shortschedule.ScheduleProcessor.process_calendar" class="md-nav__link">
     <span class="md-ellipsis">
       process_calendar
@@ -1557,15 +1596,6 @@
   
     <nav class="md-nav" aria-label="validate_roll_consistency">
       <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#shortschedule.ScheduleProcessor.validate_roll_consistency--parameters" class="md-nav__link">
-    <span class="md-ellipsis">
-      Parameters
-    </span>
-  </a>
-  
-</li>
         
           <li class="md-nav__item">
   <a href="#shortschedule.ScheduleProcessor.validate_roll_consistency--returns" class="md-nav__link">
@@ -2545,6 +2575,28 @@ returning a boolean array of the same length as <code>times</code>.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="shortschedule.ScheduleProcessor.print_validation_summary" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">print_validation_summary</span><span class="p">(</span><span class="n">calendar</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Run all validators and print a unified actionable report.</p>
+<h5 id="shortschedule.ScheduleProcessor.print_validation_summary--returns">Returns</h5>
+<p>dict
+    <code>{"status": "VALID"|"INVALID", "counts": {...},
+    "details": {...}}</code> where <em>details</em> maps each category
+    to the raw issue list.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="shortschedule.ScheduleProcessor.process_calendar" class="doc doc-heading">
             <code class="highlight language-python"><span class="n">process_calendar</span><span class="p">(</span><span class="n">calendar</span><span class="p">,</span> <span class="n">window_start</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">window_duration_days</span><span class="o">=</span><span class="mi">21</span><span class="p">,</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
 
@@ -2593,7 +2645,17 @@ verbose : bool, optional
 
     <div class="doc doc-contents ">
 
-        <p>Use Astropy's time comparison with proper tolerance.</p>
+        <p>Detect overlapping sequences using Astropy time comparison.</p>
+<p>Returns a list of overlap dicts containing:</p>
+<ul>
+<li><code>sequence1_id</code>, <code>sequence1_target</code>, <code>visit1_id</code></li>
+<li><code>sequence2_id</code>, <code>sequence2_target</code>, <code>visit2_id</code></li>
+<li><code>sequence1_start</code>, <code>sequence1_stop</code></li>
+<li><code>sequence2_start</code>, <code>sequence2_stop</code></li>
+<li><code>overlap_duration_minutes</code></li>
+<li><code>suggested_fix</code> – actionable string</li>
+<li><code>message</code> – one-line summary</li>
+</ul>
 
     </div>
 
@@ -2610,19 +2672,14 @@ verbose : bool, optional
 
     <div class="doc doc-contents ">
 
-        <p>Validate that payload exposure times (single exposure and total requested exposure)
-do not exceed the enclosing sequence duration.</p>
-<p>This currently checks the common VIS camera payload category
-<code>AcquireVisCamScienceData</code> for keys:
-  - <code>ExposureTime_us</code> (microseconds per frame)
-  - <code>NumTotalFramesRequested</code> (total frames)
-  - <code>FramesPerCoadd</code> (used when NumTotalFramesRequested is not present)</p>
-<p>It also heuristically scans flattened payload parameters for any key containing
-the string <code>exposure</code> and checks single-exposure values against the sequence
-duration (assumes microseconds when the key ends with <code>_us</code>).</p>
+        <p>Validate payload exposure times against sequence duration.</p>
+<p>Checks that single-frame exposure, total-frame exposure, and
+coadd exposure fit within the sequence duration <em>after</em>
+subtracting pre/post overheads.  Each issue dict includes a
+<code>message</code> with actionable detail and a <code>suggested_fix</code>.</p>
 <h5 id="shortschedule.ScheduleProcessor.validate_payload_exposures--returns">Returns</h5>
-<p>list
-    A list of issue dicts found. Empty list if none.</p>
+<p>list of dict
+    Issue dicts. Empty list when everything is valid.</p>
 
     </div>
 
@@ -2639,28 +2696,11 @@ duration (assumes microseconds when the key ends with <code>_us</code>).</p>
 
     <div class="doc doc-contents ">
 
-        <p>Validate that all sequences of the same target within a visit have
-consistent roll angles.</p>
-<p>For each visit, sequences with the same target name should have the
-same roll angle (within tolerance). This ensures the spacecraft
-maintains consistent orientation for all observations of the same
-target during a visit.</p>
-<h5 id="shortschedule.ScheduleProcessor.validate_roll_consistency--parameters">Parameters</h5>
-<p>calendar : ScienceCalendar
-    The science calendar to validate.
-report_issues : bool, optional
-    If True (default), print issues found. If False, only return issues.
-tolerance_deg : float, optional
-    Maximum allowed difference in roll angle (degrees) between
-    sequences of the same target. Default is 0.001 degrees.</p>
+        <p>Validate roll-angle consistency per target within each visit.</p>
 <h5 id="shortschedule.ScheduleProcessor.validate_roll_consistency--returns">Returns</h5>
 <p>list of dict
-    A list of issue dictionaries. Each dictionary contains:
-        - 'visit_id': The visit ID where the issue was found.
-        - 'target': The target name with inconsistent roll.
-        - 'sequence_ids': List of sequence IDs with this target.
-        - 'roll_values': List of roll values for these sequences.
-        - 'max_difference_deg': Maximum difference in roll values.</p>
+    Issue dicts with <code>message</code>, <code>suggested_roll</code>, and
+    per-sequence <code>roll_map</code>.</p>
 
     </div>
 
@@ -2677,10 +2717,13 @@ tolerance_deg : float, optional
 
     <div class="doc doc-contents ">
 
-        <p>Comprehensive timing validation including overlaps, gaps, and minimum durations.</p>
+        <p>Comprehensive timing validation.</p>
+<p>Checks for overlaps, short sequences, and large gaps.
+Each sub-issue includes a <code>message</code> with actionable detail.</p>
 <h5 id="shortschedule.ScheduleProcessor.validate_sequence_timing--returns">Returns</h5>
 <p>dict
-    Dictionary with different types of timing issues</p>
+    Keys: <code>overlaps</code>, <code>short_sequences</code>, <code>large_gaps</code>,
+    <code>timing_summary</code>.</p>
 
     </div>
 
@@ -2784,6 +2827,24 @@ report_issues : bool, optional
     <div class="doc doc-contents ">
 
         <p>Validate that all sequences have good visibility.</p>
+<p>Returns a list of issue dicts. Each dict contains:</p>
+<ul>
+<li><code>sequence_id</code>, <code>visit_id</code>, <code>target</code></li>
+<li><code>ra</code>, <code>dec</code> (degrees)</li>
+<li><code>roll</code> used (degrees) or <em>None</em></li>
+<li><code>start_time</code>, <code>stop_time</code></li>
+<li><code>total_minutes</code>, <code>non_visible_minutes</code></li>
+<li><code>visibility_fraction</code> (0–1)</li>
+<li><code>first_gap_start</code>, <code>last_gap_end</code> – Time bounds of
+  non-visible spans</li>
+<li><code>constraint_failures</code> – dict from
+  <code>Visibility.get_all_constraints</code> at the first
+  non-visible minute (keys: moon, sun, earthlimb,
+  star_tracker; values: bool)</li>
+<li><code>constraint_summary</code> – human-readable string
+  listing which constraints failed</li>
+<li><code>message</code> – one-line actionable description</li>
+</ul>
 
     </div>
 
