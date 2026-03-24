@@ -2158,6 +2158,198 @@ class ScheduleVisualizer:
         fig.set_constrained_layout(True)
         return fig
 
+    def plot_gantt_with_visibility(
+        self,
+        calendar,
+        figsize=(14, 8),
+        show_sequence_labels=False,
+        title="Schedule by Priority — Visibility Overlay",
+    ):
+        """Gantt chart colored by priority with non-visible minutes
+        overlaid in red.
+
+        Queries the scheduler's ``Visibility`` object per-sequence to
+        compute minute-by-minute visibility and draws red blocks over
+        any minutes that fail a keepout constraint.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Processed calendar to plot.
+        figsize : tuple
+            Figure size (width, height) in inches.
+        show_sequence_labels : bool
+            Annotate each bar with the sequence ID.
+        title : str
+            Plot title.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+        from matplotlib.patches import Patch
+
+        scheduler = self.scheduler
+        priority_colors = self._get_priority_colors(
+            [1, 2, 3, 4, 5, 6, 7, 8]
+        )
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        # Collect all sequences with per-minute visibility
+        rows = []
+        for visit in sorted(
+            calendar.visits,
+            key=lambda v: (
+                v.sequences[0].start_time
+                if v.sequences
+                else Time("2000-01-01")
+            ),
+        ):
+            visit_rolls = scheduler._computed_target_rolls.get(
+                visit.id, {}
+            )
+            for seq in visit.sequences:
+                n_mins = int(np.rint(seq.duration.sec / 60.0))
+                if n_mins <= 0:
+                    continue
+                coord = SkyCoord(
+                    seq.ra, seq.dec, frame="icrs", unit="deg"
+                )
+                deltas = np.arange(n_mins) * u.min
+                times = seq.start_time + deltas
+
+                roll = visit_rolls.get(seq.target)
+                if (
+                    scheduler._roll_sweep_enabled
+                    and roll is not None
+                ):
+                    vis = scheduler.visibility.get_visibility(
+                        coord, times, roll=roll * u.deg
+                    )
+                else:
+                    vis = scheduler.visibility.get_visibility(
+                        coord, times
+                    )
+                rows.append((visit.id, seq, np.asarray(vis)))
+
+        if not rows:
+            ax.text(
+                0.5, 0.5, "No sequences",
+                ha="center", transform=ax.transAxes,
+            )
+            return fig
+
+        # Build y-axis: one row per (visit, target)
+        seen = {}
+        y_labels = []
+        for vid, seq, _ in rows:
+            key = (vid, seq.target)
+            if key not in seen:
+                seen[key] = len(y_labels)
+                y_labels.append(f"{vid} / {seq.target}")
+
+        # Track x-extent for axis limits
+        x_min = float("inf")
+        x_max = float("-inf")
+        non_vis_total = 0
+        total_mins = 0
+
+        for vid, seq, vis_arr in rows:
+            y = seen[(vid, seq.target)]
+            start_num = float(mdates.date2num(seq.start_time.datetime))
+            stop_num = float(mdates.date2num(seq.stop_time.datetime))
+            dur_days = stop_num - start_num
+
+            x_min = min(x_min, start_num)
+            x_max = max(x_max, stop_num)
+
+            # Background bar: priority color
+            color = priority_colors.get(seq.priority, "lightgray")
+            rect = Rectangle(
+                (start_num, y - 0.35), dur_days, 0.7,
+                facecolor=color, edgecolor="none",
+                alpha=1.0, linewidth=0,
+            )
+            ax.add_patch(rect)
+
+            # Red overlay for non-visible minutes
+            n_mins = len(vis_arr)
+            total_mins += n_mins
+            if n_mins > 0 and not np.all(vis_arr):
+                min_dur = dur_days / n_mins
+                in_block = False
+                block_start = 0
+                for i in range(n_mins + 1):
+                    if i < n_mins and not vis_arr[i]:
+                        if not in_block:
+                            block_start = i
+                            in_block = True
+                    else:
+                        if in_block:
+                            x0 = start_num + block_start * min_dur
+                            width = (i - block_start) * min_dur
+                            r = Rectangle(
+                                (x0, y - 0.35), width, 0.7,
+                                facecolor="hotpink", edgecolor="none",
+                                alpha=0.75, linewidth=0,
+                            )
+                            ax.add_patch(r)
+                            non_vis_total += i - block_start
+                            in_block = False
+
+            if show_sequence_labels:
+                mid = start_num + dur_days / 2
+                ax.text(
+                    mid, y, seq.id, ha="center", va="center",
+                    fontsize=5, clip_on=True,
+                )
+
+        # Axis limits  (patches don't trigger autoscale)
+        padding = (x_max - x_min) * 0.005
+        ax.set_xlim(x_min - padding, x_max + padding)
+
+        ax.set_yticks(range(len(y_labels)))
+        ax.set_yticklabels(y_labels, fontsize=7)
+        ax.set_ylim(-0.5, len(y_labels) - 0.5)
+        ax.invert_yaxis()
+
+        # Time-axis formatting
+        self._format_time_axis_safe(ax, calendar)
+
+        vis_pct = (
+            100.0 * (total_mins - non_vis_total) / total_mins
+            if total_mins > 0
+            else 100.0
+        )
+        ax.set_title(
+            f"{title}\n"
+            f"({non_vis_total} non-visible min / "
+            f"{total_mins} total — {vis_pct:.1f}% visible)",
+            fontsize=12, pad=10,
+        )
+        ax.set_xlabel("Time (UTC)")
+        ax.grid(True, axis="x", alpha=0.3)
+
+        # Legend
+        legend_items = [
+            Patch(facecolor="red", alpha=0.75, label="Non-visible"),
+        ]
+        used_priorities = sorted(
+            set(s.priority for _, s, _ in rows)
+        )
+        for p in used_priorities:
+            c = priority_colors.get(p, "silver")
+            legend_items.append(
+                Patch(facecolor=c, label=f"Priority {p}")
+            )
+        ax.legend(handles=legend_items, loc="upper right", fontsize=7)
+
+        fig.tight_layout()
+        return fig
+
     def _get_priority_colors(self, priorities):
         """Generate better color scheme for priorities with more distinct colors."""
         priority_colors = {}
