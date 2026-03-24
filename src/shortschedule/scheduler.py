@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple
 # Third-party
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import GCRS, SkyCoord
+from astropy.coordinates import get_body
 from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
@@ -548,9 +549,22 @@ class ScheduleProcessor:
             working_calendar, all_minutes_bool
         )
 
+        # Trim non-visible heads that _fix_visibility left behind
+        # (e.g. when the previous target is also not visible during
+        # the gap, or shrinking the current seq would violate the
+        # minimum duration).
+        working_calendar = self._trim_non_visible_heads(working_calendar)
+
         # Trim non-visible tails that _fix_visibility cannot handle
         # (it only shrinks starts forward; tails need stop_time shrunk).
         working_calendar = self._trim_non_visible_tails(working_calendar)
+
+        # Remove sequences that are entirely non-visible (e.g. a target
+        # that violates sun keepout for the entire segment).  Neighbours
+        # absorb the freed time to maintain schedule contiguity.
+        working_calendar = self._drop_fully_non_visible_sequences(
+            working_calendar, verbose
+        )
 
         # Absorb sequences shorter than the minimum duration into
         # their immediate neighbours so that all remaining sequences
@@ -630,6 +644,204 @@ class ScheduleProcessor:
         time_grid = start_time + np.arange(total_minutes) * u.min
 
         return total_minutes, start_time, end_time, time_grid
+
+    def _trim_non_visible_heads(
+        self, calendar: ScienceCalendar
+    ) -> ScienceCalendar:
+        """Trim non-visible heads from sequences.
+
+        For each sequence whose first minute(s) are not visible, move
+        ``start_time`` forward to the first visible minute.  Then
+        attempt to extend the *previous* sequence forward to absorb the
+        freed time (only where that target is visible).
+
+        This complements ``_fix_visibility`` which may leave non-visible
+        heads when the previous target is also not visible during the
+        gap or shrinking the current sequence would violate the minimum
+        duration.
+        """
+        working_cal = deepcopy(calendar)
+
+        all_sequences: List[Tuple[str, ObservationSequence]] = []
+        for visit in working_cal.visits:
+            for seq in visit.sequences:
+                all_sequences.append((visit.id, seq))
+        all_sequences.sort(key=lambda x: x[1].start_time)
+
+        for idx, (visit_id, seq) in enumerate(all_sequences):
+            n_mins = int(np.rint(seq.duration.sec / 60.0))
+            if n_mins <= 0:
+                continue
+
+            target_coord = SkyCoord(
+                seq.ra, seq.dec, frame="icrs", unit="deg"
+            )
+            deltas = np.arange(n_mins) * u.min
+            times = seq.start_time + deltas
+
+            target_roll = self._computed_target_rolls.get(
+                visit_id, {}
+            ).get(seq.target)
+            if self._roll_sweep_enabled and target_roll is not None:
+                vis = self.visibility.get_visibility(
+                    target_coord, times, roll=target_roll * u.deg
+                )
+            else:
+                vis = self.visibility.get_visibility(
+                    target_coord, times
+                )
+
+            vis_arr = np.asarray(vis)
+
+            # Nothing to do if first minute is visible
+            if len(vis_arr) == 0 or vis_arr[0]:
+                continue
+
+            visible_indices = np.where(vis_arr)[0]
+            if len(visible_indices) == 0:
+                continue  # entirely non-visible — handled elsewhere
+
+            first_visible_idx = visible_indices[0]
+            new_start = seq.start_time + first_visible_idx * u.min
+
+            if (seq.stop_time - new_start) < self.min_sequence_duration:
+                continue  # trimming would make sequence too short
+
+            # Determine how far the previous sequence can extend forward
+            # BEFORE committing the trim, to avoid creating gaps.
+            actual_trim_start = new_start
+
+            if idx > 0:
+                prev_visit_id, prev_seq = all_sequences[idx - 1]
+                gap_minutes = int(
+                    np.rint(
+                        (new_start - prev_seq.stop_time).sec / 60.0
+                    )
+                )
+                if gap_minutes > 0:
+                    prev_coord = SkyCoord(
+                        prev_seq.ra,
+                        prev_seq.dec,
+                        frame="icrs",
+                        unit="deg",
+                    )
+                    gap_deltas = np.arange(gap_minutes) * u.min
+                    gap_times = prev_seq.stop_time + gap_deltas
+
+                    prev_roll = self._computed_target_rolls.get(
+                        prev_visit_id, {}
+                    ).get(prev_seq.target)
+                    if (
+                        self._roll_sweep_enabled
+                        and prev_roll is not None
+                    ):
+                        prev_vis = self.visibility.get_visibility(
+                            prev_coord,
+                            gap_times,
+                            roll=prev_roll * u.deg,
+                        )
+                    else:
+                        prev_vis = self.visibility.get_visibility(
+                            prev_coord, gap_times
+                        )
+                    prev_vis_arr = np.asarray(prev_vis)
+
+                    # Walk forward from prev_seq.stop_time to find
+                    # the last contiguous visible minute.
+                    if prev_vis_arr[0]:
+                        last_contiguous = 0
+                        while (
+                            last_contiguous + 1 < len(prev_vis_arr)
+                            and prev_vis_arr[last_contiguous + 1]
+                        ):
+                            last_contiguous += 1
+
+                        new_prev_stop = gap_times[last_contiguous] + 1 * u.min
+
+                        # Only trim current seq to where the prev
+                        # can actually extend.
+                        actual_trim_start = new_prev_stop
+
+                        new_dur = new_prev_stop - prev_seq.start_time
+                        if new_dur <= self.max_sequence_duration:
+                            extended_prev = ObservationSequence(
+                                id=prev_seq.id,
+                                target=prev_seq.target,
+                                priority=prev_seq.priority,
+                                start_time=prev_seq.start_time,
+                                stop_time=new_prev_stop,
+                                ra=prev_seq.ra,
+                                dec=prev_seq.dec,
+                                payload_params=deepcopy(
+                                    prev_seq.payload_params
+                                ),
+                            )
+                            working_cal.replace_sequence(
+                                prev_visit_id,
+                                prev_seq.id,
+                                extended_prev,
+                            )
+                            all_sequences[idx - 1] = (
+                                prev_visit_id,
+                                extended_prev,
+                            )
+                        else:
+                            # Previous at max — cannot absorb gap.
+                            # Don't trim to avoid creating a gap.
+                            continue
+                    else:
+                        # Previous target not visible at boundary —
+                        # extend it forward blindly to maintain
+                        # contiguity (mirrors _fill_gaps behaviour).
+                        actual_trim_start = new_start
+                        new_prev_stop = new_start
+                        new_dur = new_prev_stop - prev_seq.start_time
+                        if new_dur <= self.max_sequence_duration:
+                            extended_prev = ObservationSequence(
+                                id=prev_seq.id,
+                                target=prev_seq.target,
+                                priority=prev_seq.priority,
+                                start_time=prev_seq.start_time,
+                                stop_time=new_prev_stop,
+                                ra=prev_seq.ra,
+                                dec=prev_seq.dec,
+                                payload_params=deepcopy(
+                                    prev_seq.payload_params
+                                ),
+                            )
+                            working_cal.replace_sequence(
+                                prev_visit_id,
+                                prev_seq.id,
+                                extended_prev,
+                            )
+                            all_sequences[idx - 1] = (
+                                prev_visit_id,
+                                extended_prev,
+                            )
+                        else:
+                            # Previous at max — cannot absorb.
+                            continue
+                # gap_minutes <= 0: prev seq already abuts, safe to trim
+
+            if (
+                seq.stop_time - actual_trim_start
+            ) < self.min_sequence_duration:
+                continue
+
+            trimmed = ObservationSequence(
+                id=seq.id,
+                target=seq.target,
+                priority=seq.priority,
+                start_time=actual_trim_start,
+                stop_time=seq.stop_time,
+                ra=seq.ra,
+                dec=seq.dec,
+                payload_params=deepcopy(seq.payload_params),
+            )
+            working_cal.replace_sequence(visit_id, seq.id, trimmed)
+            all_sequences[idx] = (visit_id, trimmed)
+
+        return working_cal
 
     def _trim_non_visible_tails(
         self, calendar: ScienceCalendar
@@ -762,9 +974,29 @@ class ScheduleProcessor:
                             extended_next,
                         )
                     else:
-                        # Next target not visible at boundary — cannot
-                        # absorb any freed time, so don't trim at all.
-                        continue
+                        # Next target not visible at boundary — extend
+                        # it backward blindly to maintain contiguity.
+                        # This mirrors _fill_gaps: the non-visible time
+                        # now belongs to the next target and may be
+                        # cleaned up by subsequent processing passes.
+                        actual_trim_stop = new_stop
+                        extended_next = ObservationSequence(
+                            id=next_seq.id,
+                            target=next_seq.target,
+                            priority=next_seq.priority,
+                            start_time=new_stop,
+                            stop_time=next_seq.stop_time,
+                            ra=next_seq.ra,
+                            dec=next_seq.dec,
+                            payload_params=deepcopy(next_seq.payload_params),
+                        )
+                        working_cal.replace_sequence(
+                            next_visit_id, next_seq.id, extended_next
+                        )
+                        all_sequences[idx + 1] = (
+                            next_visit_id,
+                            extended_next,
+                        )
                 # gap_minutes <= 0: next seq already abuts, safe to trim
             # else: no next sequence — tail trim is safe (no
             # inter-sequence gap to worry about).
@@ -786,6 +1018,135 @@ class ScheduleProcessor:
                 payload_params=deepcopy(seq.payload_params),
             )
             working_cal.replace_sequence(visit_id, seq.id, trimmed)
+
+        return working_cal
+
+    def _drop_fully_non_visible_sequences(
+        self,
+        calendar: ScienceCalendar,
+        verbose: bool = False,
+    ) -> ScienceCalendar:
+        """Remove sequences where **zero** minutes are visible.
+
+        A fully non-visible sequence typically results from an upstream
+        scheduling error (e.g. an occultation target that violates sun
+        keepout for the entire segment).  Keeping it would guarantee a
+        keepout-constraint violation in the output calendar.
+
+        For each removed sequence the method extends a neighbour
+        (previous preferred, else next) to maintain schedule contiguity.
+        If neither neighbour can absorb the time without exceeding
+        ``max_sequence_duration``, the sequence is left in place and a
+        warning is printed so the operator can investigate.
+        """
+        working_cal = deepcopy(calendar)
+
+        all_seqs: List[Tuple[str, ObservationSequence]] = []
+        for visit in working_cal.visits:
+            for seq in visit.sequences:
+                all_seqs.append((visit.id, seq))
+        all_seqs.sort(key=lambda x: x[1].start_time)
+
+        to_remove: List[Tuple[str, str]] = []
+
+        for idx, (vid, seq) in enumerate(all_seqs):
+            n_mins = int(np.rint(seq.duration.sec / 60.0))
+            if n_mins <= 0:
+                continue
+
+            target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+            deltas = np.arange(n_mins) * u.min
+            times = seq.start_time + deltas
+
+            target_roll = self._computed_target_rolls.get(vid, {}).get(
+                seq.target
+            )
+            if self._roll_sweep_enabled and target_roll is not None:
+                vis = self.visibility.get_visibility(
+                    target_coord, times, roll=target_roll * u.deg
+                )
+            else:
+                vis = self.visibility.get_visibility(target_coord, times)
+
+            if np.any(vis):
+                continue  # at least partially visible — keep it
+
+            # Entirely non-visible.
+            if verbose:
+                print(
+                    f"Dropping fully non-visible sequence "
+                    f"{seq.id} ({seq.target}) in visit {vid}"
+                )
+            print(
+                f"WARNING: removing sequence {seq.id} "
+                f"({seq.target}, {seq.start_time.isot}–"
+                f"{seq.stop_time.isot}): 0% visible"
+            )
+
+            absorbed = False
+
+            # Try extending the previous sequence forward
+            if idx > 0:
+                prev_vid, prev_seq = all_seqs[idx - 1]
+                new_stop = seq.stop_time
+                new_dur = new_stop - prev_seq.start_time
+                if new_dur <= self.max_sequence_duration:
+                    extended = ObservationSequence(
+                        id=prev_seq.id,
+                        target=prev_seq.target,
+                        priority=prev_seq.priority,
+                        start_time=prev_seq.start_time,
+                        stop_time=new_stop,
+                        ra=prev_seq.ra,
+                        dec=prev_seq.dec,
+                        payload_params=deepcopy(prev_seq.payload_params),
+                    )
+                    working_cal.replace_sequence(
+                        prev_vid, prev_seq.id, extended
+                    )
+                    all_seqs[idx - 1] = (prev_vid, extended)
+                    absorbed = True
+
+            # Fall back: pull the next sequence backward
+            if not absorbed and idx + 1 < len(all_seqs):
+                next_vid, next_seq = all_seqs[idx + 1]
+                new_start = seq.start_time
+                new_dur = next_seq.stop_time - new_start
+                if new_dur <= self.max_sequence_duration:
+                    extended = ObservationSequence(
+                        id=next_seq.id,
+                        target=next_seq.target,
+                        priority=next_seq.priority,
+                        start_time=new_start,
+                        stop_time=next_seq.stop_time,
+                        ra=next_seq.ra,
+                        dec=next_seq.dec,
+                        payload_params=deepcopy(next_seq.payload_params),
+                    )
+                    working_cal.replace_sequence(
+                        next_vid, next_seq.id, extended
+                    )
+                    all_seqs[idx + 1] = (next_vid, extended)
+                    absorbed = True
+
+            if absorbed:
+                to_remove.append((vid, seq.id))
+            else:
+                print(
+                    f"WARNING: could not absorb non-visible sequence "
+                    f"{seq.id} ({seq.target}) — neighbours at "
+                    f"max duration"
+                )
+
+        for vid, sid in to_remove:
+            for visit in working_cal.visits:
+                if visit.id == vid:
+                    visit.sequences = [
+                        s for s in visit.sequences if s.id != sid
+                    ]
+                    break
+
+        working_cal.visits = [v for v in working_cal.visits if v.sequences]
 
         return working_cal
 
@@ -1432,13 +1793,174 @@ class ScheduleProcessor:
                         )
                         else None
                     )
+                    constraint_details = {}
                     try:
+                        fail_time = times[non_vis_indices[0]]
                         constraint_failures = (
                             self.visibility.get_all_constraints(
                                 target_coord,
-                                times[non_vis_indices[0]],
+                                fail_time,
                             )
                         )
+                        # Capture actual separations and limits
+                        try:
+                            seps = self.visibility.get_separations(
+                                target_coord, fail_time
+                            )
+                            vis_obj = self.visibility
+                            for body in [
+                                "moon",
+                                "sun",
+                                "earthlimb",
+                                "mars",
+                                "jupiter",
+                            ]:
+                                if body not in constraint_failures:
+                                    continue
+                                actual = seps.get(body)
+                                if actual is None:
+                                    continue
+                                # Determine the effective limit
+                                if body == "earthlimb" and (
+                                    vis_obj.earthlimb_day_min is not None
+                                    or vis_obj.earthlimb_night_min is not None
+                                ):
+                                    # Day/night mode: compute
+                                    # effective threshold at this
+                                    # time using the same geometry
+                                    # as the constraint check.
+                                    try:
+                                        obs_loc = (
+                                            vis_obj._get_observer_location(
+                                                fail_time
+                                            )
+                                        )
+                                        obs_gcrs = obs_loc.get_gcrs(
+                                            obstime=fail_time
+                                        )
+                                        obs_xyz = obs_gcrs.cartesian.xyz.to(
+                                            u.m
+                                        ).value
+                                        zenith_u = obs_xyz / np.linalg.norm(
+                                            obs_xyz
+                                        )
+                                        tgt_gcrs = target_coord.transform_to(
+                                            GCRS(obstime=fail_time)
+                                        )
+                                        tgt_u = tgt_gcrs.cartesian.xyz.value
+                                        tgt_u = tgt_u / np.linalg.norm(tgt_u)
+                                        sun_body = get_body(
+                                            "sun",
+                                            time=fail_time,
+                                            location=obs_loc,
+                                        )
+                                        sun_u = sun_body.cartesian.xyz.value
+                                        sun_u = sun_u / np.linalg.norm(sun_u)
+                                        obs_dist = np.linalg.norm(obs_xyz)
+                                        la_rad = np.arccos(
+                                            6371000.0 / obs_dist
+                                        )
+                                        eff_deg = float(
+                                            vis_obj._effective_earthlimb_min_deg(
+                                                tgt_u,
+                                                zenith_u,
+                                                sun_u,
+                                                limb_angle_rad=la_rad,
+                                            )
+                                        )
+                                        is_day = bool(
+                                            eff_deg
+                                            == (
+                                                vis_obj.earthlimb_day_min.to(
+                                                    u.deg
+                                                ).value
+                                                if vis_obj.earthlimb_day_min
+                                                is not None
+                                                else vis_obj.earthlimb_min.to(
+                                                    u.deg
+                                                ).value
+                                            )
+                                        )
+                                        side = "day" if is_day else "night"
+                                        limit_deg = eff_deg
+                                        constraint_details[body] = {
+                                            "passes": bool(
+                                                constraint_failures[body]
+                                            ),
+                                            "required_deg": limit_deg,
+                                            "actual_deg": float(
+                                                actual.to(u.deg).value
+                                            ),
+                                            "side": side,
+                                        }
+                                    except Exception:
+                                        # Fall back to simple limit
+                                        limit = getattr(
+                                            vis_obj,
+                                            "earthlimb_min",
+                                            None,
+                                        )
+                                        if limit is not None:
+                                            constraint_details[body] = {
+                                                "passes": bool(
+                                                    constraint_failures[body]
+                                                ),
+                                                "required_deg": float(
+                                                    limit.to(u.deg).value
+                                                ),
+                                                "actual_deg": float(
+                                                    actual.to(u.deg).value
+                                                ),
+                                            }
+                                else:
+                                    limit = getattr(
+                                        vis_obj,
+                                        f"{body}_min",
+                                        None,
+                                    )
+                                    if limit is not None:
+                                        constraint_details[body] = {
+                                            "passes": bool(
+                                                constraint_failures[body]
+                                            ),
+                                            "required_deg": float(
+                                                limit.to(u.deg).value
+                                            ),
+                                            "actual_deg": float(
+                                                actual.to(u.deg).value
+                                            ),
+                                        }
+                            # Star tracker details
+                            if vis_obj._st_constraint_active:
+                                for tracker in [1, 2]:
+                                    try:
+                                        angles = (
+                                            vis_obj.get_star_tracker_angles(
+                                                target_coord,
+                                                fail_time,
+                                                tracker,
+                                            )
+                                        )
+                                        checks = vis_obj._st_checks_for(
+                                            tracker
+                                        )
+                                        for name, limit, key in checks:
+                                            actual_val = angles[key]
+                                            ok = bool(actual_val >= limit)
+                                            label = f"st{tracker}_{name}"
+                                            constraint_details[label] = {
+                                                "passes": ok,
+                                                "required_deg": float(
+                                                    limit.to(u.deg).value
+                                                ),
+                                                "actual_deg": float(
+                                                    actual_val.to(u.deg).value
+                                                ),
+                                            }
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
                         failed = [
                             k for k, v in constraint_failures.items() if not v
                         ]
@@ -1483,6 +2005,7 @@ class ScheduleProcessor:
                         "first_gap_start": first_gap_start,
                         "last_gap_end": last_gap_end,
                         "constraint_failures": constraint_failures,
+                        "constraint_details": constraint_details,
                         "constraint_summary": constraint_summary,
                         "message": message,
                     }
@@ -2578,6 +3101,129 @@ class ScheduleProcessor:
 
         return issues
 
+    def _print_issue_details(
+        self, category: str, item: Dict[str, Any]
+    ) -> None:
+        """Print structured requirement-vs-actual detail for one issue."""
+        indent = "      "
+
+        if category == "visibility":
+            details = item.get("constraint_details", {})
+            if details:
+                for body, info in details.items():
+                    status = "PASS" if info["passes"] else "FAIL"
+                    side = info.get("side", "")
+                    side_label = f" [{side}]" if side else ""
+                    print(
+                        f"{indent}{body:<12} {status}  "
+                        f"required: >= {info['required_deg']:.1f}°"
+                        f"{side_label}  "
+                        f"actual: {info['actual_deg']:.1f}°"
+                    )
+            frac = item.get("visibility_fraction")
+            nv = item.get("non_visible_minutes")
+            tot = item.get("total_minutes")
+            if frac is not None:
+                print(
+                    f"{indent}{'visibility':<12}       "
+                    f"required: 100%  "
+                    f"actual: {frac:.1%}  "
+                    f"({nv}/{tot} min non-visible)"
+                )
+
+        elif category == "short_sequences":
+            dur = item.get("duration_minutes")
+            req = item.get("minimum_required_minutes")
+            if dur is not None and req is not None:
+                print(
+                    f"{indent}duration     "
+                    f"required: >= {req:.0f} min  "
+                    f"actual: {dur:.1f} min  "
+                    f"(short by {req - dur:.1f} min)"
+                )
+
+        elif category == "large_gaps":
+            gap = item.get("gap_duration_minutes")
+            if gap is not None:
+                print(
+                    f"{indent}gap          "
+                    f"required: <= 2.0 min  "
+                    f"actual: {gap:.1f} min  "
+                    f"(over by {gap - 2.0:.1f} min)"
+                )
+
+        elif category == "overlaps":
+            ov = item.get("overlap_duration_minutes")
+            if ov is not None:
+                print(
+                    f"{indent}overlap      "
+                    f"required: 0.0 min  "
+                    f"actual: {ov:.1f} min"
+                )
+
+        elif category == "payload_exposure":
+            seq_dur = item.get("sequence_duration_seconds")
+            eff_dur = item.get("effective_duration_seconds")
+            oh = item.get("overhead_seconds")
+            if seq_dur is not None:
+                print(
+                    f"{indent}sequence     "
+                    f"{seq_dur:.0f}s total  "
+                    f"- {oh:.0f}s overhead  "
+                    f"= {eff_dur:.0f}s effective"
+                )
+            if "exposure_seconds" in item:
+                exp = item["exposure_seconds"]
+                print(
+                    f"{indent}single exp   "
+                    f"required: <= {eff_dur:.0f}s  "
+                    f"actual: {exp:.3f}s"
+                )
+            if "total_exposure_seconds" in item:
+                tot = item["total_exposure_seconds"]
+                max_f = item.get("suggested_max_frames", "?")
+                print(
+                    f"{indent}total exp    "
+                    f"required: <= {eff_dur:.0f}s  "
+                    f"actual: {tot:.1f}s  "
+                    f"(max frames: {max_f})"
+                )
+            if "coadd_exposure_seconds" in item:
+                coadd = item["coadd_exposure_seconds"]
+                print(
+                    f"{indent}coadd exp    "
+                    f"required: <= {eff_dur:.0f}s  "
+                    f"actual: {coadd:.1f}s"
+                )
+            if "value_seconds" in item:
+                val = item["value_seconds"]
+                field = item.get("field", "?")
+                print(
+                    f"{indent}{field}  "
+                    f"required: <= {eff_dur:.0f}s  "
+                    f"actual: {val:.3f}s"
+                )
+
+        elif category == "roll_consistency":
+            spread = item.get("max_difference_deg")
+            suggested = item.get("suggested_roll")
+            if spread is not None:
+                print(
+                    f"{indent}roll spread  "
+                    f"required: <= 0.001°  "
+                    f"actual: {spread:.3f}°  "
+                    f"(suggest: {suggested:.2f}°)"
+                )
+
+        elif category == "target_name":
+            tgt = item.get("target", "")
+            if tgt:
+                print(
+                    f"{indent}target name  "
+                    f"required: no spaces  "
+                    f"actual: '{tgt}'"
+                )
+
     def print_validation_summary(
         self, calendar: ScienceCalendar
     ) -> Dict[str, Any]:
@@ -2674,6 +3320,7 @@ class ScheduleProcessor:
                         msg = item.get("message", "")
                         if msg:
                             print(f"    • {msg}")
+                        self._print_issue_details(sub_key, item)
                 continue
 
             # All other categories are plain lists
@@ -2682,6 +3329,7 @@ class ScheduleProcessor:
                     msg = item.get("message", "")
                     if msg:
                         print(f"    • {msg}")
+                    self._print_issue_details(cat, item)
 
         print(f"\n{'=' * 60}\n")
         return {
