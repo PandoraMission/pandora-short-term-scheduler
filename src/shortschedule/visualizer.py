@@ -2293,8 +2293,8 @@ class ScheduleVisualizer:
                             width = (i - block_start) * min_dur
                             r = Rectangle(
                                 (x0, y - 0.35), width, 0.7,
-                                facecolor="hotpink", edgecolor="none",
-                                alpha=0.75, linewidth=0,
+                                facecolor="black", edgecolor="none",
+                                alpha=1.00, linewidth=0, zorder=1000
                             )
                             ax.add_patch(r)
                             non_vis_total += i - block_start
