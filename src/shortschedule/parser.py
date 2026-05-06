@@ -159,7 +159,13 @@ def _parse_observation_sequence(
         return None
 
     target_elem = obs_params_elem.find("pandora:Target", namespace)
-    target = target_elem.text if target_elem is not None else "unknown"
+    target = (
+        target_elem.text.strip()
+        if target_elem is not None and target_elem.text
+        else "unknown"
+    )
+    if target.casefold() == "free time":
+        return None
 
     priority_elem = obs_params_elem.find("pandora:Priority", namespace)
     priority = int(priority_elem.text) if priority_elem is not None else 0
