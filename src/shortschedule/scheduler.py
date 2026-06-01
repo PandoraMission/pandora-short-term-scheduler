@@ -1967,20 +1967,16 @@ class ScheduleProcessor:
 
         # per the payload users guide
         frame_time = (ROI_SizeX + 12) * (ROI_SizeY + 2) * 1e-5 * u.s
-        NumIntegrations = 1
-        NumFramesTotal = (
-            SC_Resets1
-            + (NumIntegrations - 1) * SC_Resets2
-            + NumIntegrations
-            * (
-                SC_DropFrames1
-                + (SC_Groups - 1) * (SC_ReadFrames + SC_DropFrames2)
-                + SC_ReadFrames
-                + SC_DropFrames3
-            )
+        NumFramesBase = (
+            SC_DropFrames1
+            + (SC_Groups - 1) * (SC_ReadFrames + SC_DropFrames2)
+            + SC_ReadFrames
+            + SC_DropFrames3
         )
-
-        integration_time = NumFramesTotal * frame_time
+        NumFramesFirst = NumFramesBase + SC_Resets1
+        NumFramesOther = NumFramesBase + SC_Resets2
+        first_integration_time = NumFramesFirst * frame_time
+        other_integration_time = NumFramesOther * frame_time
 
         # Use the duration argument so callers can override the window
         # (e.g. _update_payload_parameters_sequence passes sequence.duration).
@@ -1992,15 +1988,18 @@ class ScheduleProcessor:
             - post_sequence_overhead.to(u.s)
         )
         # Guard: if overhead exceeds duration, no integrations are possible
-        if effective_duration_s.value <= 0:
-            sequence.set_payload_parameter(
-                "AcquireInfCamImages", "SC_Integrations", "0"
-            )
-            return sequence
+        SC_Integrations = 0
+        if (effective_duration_s.value > 0) and (first_integration_time.to(u.s) <= effective_duration_s.to(u.s)):
+            # There is enough time to perform the initial integration
+            effective_duration_s -= first_integration_time.to(u.s)
+            SC_Integrations += 1
 
-        SC_Integrations = int(
-            np.floor(effective_duration_s / integration_time.to(u.s))
-        )
+            # ... and potentially additional integrations.
+            if effective_duration_s > other_integration_time.to(u.s):
+                SC_Integrations += int(
+                    np.floor(effective_duration_s / other_integration_time.to(u.s))
+                )
+
         success = sequence.set_payload_parameter(
             "AcquireInfCamImages", "SC_Integrations", str(SC_Integrations)
         )
