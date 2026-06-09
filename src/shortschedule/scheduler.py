@@ -1150,7 +1150,9 @@ class ScheduleProcessor:
         target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
         deltas = np.arange(n_mins) * u.min
         times = seq.start_time + deltas
-        vis_arr = self._visibility_for_sequence(visit_id, seq, target_coord, times)
+        vis_arr = self._visibility_for_sequence(
+            visit_id, seq, target_coord, times
+        )
         if np.all(vis_arr):
             return None
         return target_coord, times, vis_arr
@@ -1272,7 +1274,9 @@ class ScheduleProcessor:
         if freed_mins <= 0:
             return
 
-        prev_coord = SkyCoord(prev_seq.ra, prev_seq.dec, frame="icrs", unit="deg")
+        prev_coord = SkyCoord(
+            prev_seq.ra, prev_seq.dec, frame="icrs", unit="deg"
+        )
         gap_deltas = np.arange(freed_mins) * u.min
         gap_times = prev_seq.stop_time + gap_deltas
         prev_vis_arr = self._visibility_for_sequence(
@@ -1320,7 +1324,9 @@ class ScheduleProcessor:
         if freed_mins <= 0:
             return
 
-        next_coord = SkyCoord(next_seq.ra, next_seq.dec, frame="icrs", unit="deg")
+        next_coord = SkyCoord(
+            next_seq.ra, next_seq.dec, frame="icrs", unit="deg"
+        )
         gap_deltas = np.arange(freed_mins) * u.min
         gap_times = new_stop + gap_deltas
         next_vis_arr = self._visibility_for_sequence(
