@@ -62,9 +62,9 @@ class ScheduleProcessor:
         tle_line1: str,
         tle_line2: str,
         vda_pre_sequence_overhead: u.Quantity = 260 * u.s,
-        vda_post_sequence_overhead: u.Quantity = 120 * u.s,
+        vda_post_sequence_overhead: u.Quantity = 102 * u.s,
         nirda_pre_sequence_overhead: u.Quantity = 258 * u.s,
-        nirda_post_sequence_overhead: u.Quantity = 120 * u.s,
+        nirda_post_sequence_overhead: u.Quantity = 102 * u.s,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -94,11 +94,11 @@ class ScheduleProcessor:
         vda_pre_sequence_overhead : Quantity, optional
             VDA pre-sequence overhead (default 260 s).
         vda_post_sequence_overhead : Quantity, optional
-            VDA post-sequence overhead (default 120 s).
+            VDA post-sequence overhead (default 102 s).
         nirda_pre_sequence_overhead : Quantity, optional
             NIRDA pre-sequence overhead (default 258 s).
         nirda_post_sequence_overhead : Quantity, optional
-            NIRDA post-sequence overhead (default 120 s).
+            NIRDA post-sequence overhead (default 102 s).
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
