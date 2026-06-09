@@ -243,21 +243,18 @@ class TestUpdateVDAIntegrations:
 # ---
 # ROI_SizeX=100, ROI_SizeY=256
 # frame_time = (100+12)*(256+2)*1e-5 = 112*258*1e-5 = 0.28896 s
-# SC_Resets1=1, SC_Resets2=1
+# SC_Resets1=2, SC_Resets2=1
 # SC_DropFrames1=0, SC_DropFrames2=0, SC_DropFrames3=0
 # SC_ReadFrames=5, SC_Groups=3
 #
-# NumIntegrations (hardcoded) = 1
-# NumFramesTotal = 1 + 0 + 1*(0 + 2*(5+0) + 5 + 0) = 16
-# integration_time = 16 * 0.28896 = 4.62336 s
-#
-# 1800 s, no overhead:  floor(1800 / 4.62336) = 389
-# 1800 s, 318 s overhead: floor(1482 / 4.62336) = 320
+# NumFramesBase = 0 + 2*(5+0) + 5 + 0 = 15
+# first_integration_time = (15 + 2) * 0.28896 = 4.91232 s
+# other_integration_time = (15 + 1) * 0.28896 = 4.62336 s
 
 _NIRDA_KWARGS = dict(
     roi_x=100,
     roi_y=256,
-    sc_resets1=1,
+    sc_resets1=2,
     sc_resets2=1,
     sc_drop1=0,
     sc_drop2=0,
@@ -265,6 +262,46 @@ _NIRDA_KWARGS = dict(
     sc_read=5,
     sc_groups=3,
 )
+
+
+def _expected_nirda_integrations(
+    duration_sec,
+    *,
+    pre_sequence_overhead_sec=0,
+    post_sequence_overhead_sec=0,
+    **kwargs,
+):
+    """Match the scheduler's first-integration and later-integration math."""
+    roi_x = kwargs["roi_x"]
+    roi_y = kwargs["roi_y"]
+    sc_resets1 = kwargs["sc_resets1"]
+    sc_resets2 = kwargs["sc_resets2"]
+    sc_drop1 = kwargs["sc_drop1"]
+    sc_drop2 = kwargs["sc_drop2"]
+    sc_drop3 = kwargs["sc_drop3"]
+    sc_read = kwargs["sc_read"]
+    sc_groups = kwargs["sc_groups"]
+
+    frame_time = (roi_x + 12) * (roi_y + 2) * 1e-5
+    num_frames_base = (
+        sc_drop1 + (sc_groups - 1) * (sc_read + sc_drop2) + sc_read + sc_drop3
+    )
+    first_integration_time = (num_frames_base + sc_resets1) * frame_time
+    other_integration_time = (num_frames_base + sc_resets2) * frame_time
+
+    effective_duration = (
+        duration_sec - pre_sequence_overhead_sec - post_sequence_overhead_sec
+    )
+    if effective_duration <= 0 or first_integration_time > effective_duration:
+        return 0
+
+    integrations = 1
+    effective_duration -= first_integration_time
+    if effective_duration > other_integration_time:
+        integrations += int(
+            np.floor(effective_duration / other_integration_time)
+        )
+    return integrations
 
 
 class TestUpdateNIRDAIntegrations:
@@ -339,11 +376,12 @@ class TestUpdateNIRDAIntegrations:
                 "AcquireInfCamImages", "SC_Integrations"
             )
         )
-        frame_time = (100 + 12) * (256 + 2) * 1e-5
-        num_frames_total = 1 + 0 + 1 * (0 + 2 * (5 + 0) + 5 + 0)
-        integration_time = num_frames_total * frame_time
-        effective_duration = 1800 - 258 - 60  # seconds
-        expected = int(np.floor(effective_duration / integration_time))
+        expected = _expected_nirda_integrations(
+            1800,
+            pre_sequence_overhead_sec=258,
+            post_sequence_overhead_sec=60,
+            **_NIRDA_KWARGS,
+        )
         assert integ == expected
 
     def test_sequence_shorter_than_overhead_yields_zero_integrations(self):
@@ -383,12 +421,41 @@ class TestUpdateNIRDAIntegrations:
                 "AcquireInfCamImages", "SC_Integrations"
             )
         )
-        frame_time = (100 + 12) * (256 + 2) * 1e-5
-        num_frames_total = 1 + 0 + 1 * (0 + 2 * (5 + 0) + 5 + 0)
-        integration_time = num_frames_total * frame_time
-        effective = 1800 - start_oh - end_oh
-        expected = int(np.floor(effective / integration_time))
+        expected = _expected_nirda_integrations(
+            1800,
+            pre_sequence_overhead_sec=start_oh,
+            post_sequence_overhead_sec=end_oh,
+            **_NIRDA_KWARGS,
+        )
         assert integ == expected
+
+    def test_exact_boundary_for_second_integration_does_not_add_it(self):
+        """An exact fit for the second integration keeps the count at one."""
+        frame_time = (100 + 12) * (256 + 2) * 1e-5
+        num_frames_base = 0 + 2 * (5 + 0) + 5 + 0
+        first_integration_time = (
+            num_frames_base + _NIRDA_KWARGS["sc_resets1"]
+        ) * frame_time
+        other_integration_time = (
+            num_frames_base + _NIRDA_KWARGS["sc_resets2"]
+        ) * frame_time
+        duration_sec = first_integration_time + other_integration_time
+
+        seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
+        sched = _sched()
+        seq_out = sched._update_NIRDA_integrations(
+            seq,
+            seq.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+        )
+
+        integ = int(
+            seq_out.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        assert integ == 1
 
 
 # ---------------------------------------------------------------------------
@@ -542,12 +609,35 @@ class TestUpdatePayloadParametersSequence:
                 "AcquireInfCamImages", "SC_Integrations"
             )
         )
-        frame_time = (100 + 12) * (256 + 2) * 1e-5
-        num_frames_total = 1 + 0 + 1 * (0 + 2 * (5 + 0) + 5 + 0)
-        integration_time = num_frames_total * frame_time
-        effective = 1800 - 258 - 60
-        expected = int(np.floor(effective / integration_time))
+        expected = _expected_nirda_integrations(
+            1800,
+            pre_sequence_overhead_sec=258,
+            post_sequence_overhead_sec=60,
+            **_NIRDA_KWARGS,
+        )
         assert integ == expected
+
+    def test_nirda_exact_boundary_for_second_integration_via_wrapper(self):
+        """Wrapper preserves the exact-fit boundary for later integrations."""
+        frame_time = (100 + 12) * (256 + 2) * 1e-5
+        num_frames_base = 0 + 2 * (5 + 0) + 5 + 0
+        first_integration_time = (
+            num_frames_base + _NIRDA_KWARGS["sc_resets1"]
+        ) * frame_time
+        other_integration_time = (
+            num_frames_base + _NIRDA_KWARGS["sc_resets2"]
+        ) * frame_time
+        duration_sec = first_integration_time + other_integration_time
+
+        seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
+        sched = _sched_with_overhead()
+        seq_out = sched._update_payload_parameters_sequence(seq)
+        integ = int(
+            seq_out.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        assert integ == 1
 
     def test_nirda_overhead_exceeds_duration_yields_zero_integrations(self):
         """Sequence shorter than NIRDA overhead budget → 0 integrations (via wrapper).

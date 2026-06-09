@@ -62,9 +62,9 @@ class ScheduleProcessor:
         tle_line1: str,
         tle_line2: str,
         vda_pre_sequence_overhead: u.Quantity = 260 * u.s,
-        vda_post_sequence_overhead: u.Quantity = 120 * u.s,
+        vda_post_sequence_overhead: u.Quantity = 102 * u.s,
         nirda_pre_sequence_overhead: u.Quantity = 258 * u.s,
-        nirda_post_sequence_overhead: u.Quantity = 120 * u.s,
+        nirda_post_sequence_overhead: u.Quantity = 102 * u.s,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -94,11 +94,11 @@ class ScheduleProcessor:
         vda_pre_sequence_overhead : Quantity, optional
             VDA pre-sequence overhead (default 260 s).
         vda_post_sequence_overhead : Quantity, optional
-            VDA post-sequence overhead (default 120 s).
+            VDA post-sequence overhead (default 102 s).
         nirda_pre_sequence_overhead : Quantity, optional
             NIRDA pre-sequence overhead (default 258 s).
         nirda_post_sequence_overhead : Quantity, optional
-            NIRDA post-sequence overhead (default 120 s).
+            NIRDA post-sequence overhead (default 102 s).
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -1076,7 +1076,7 @@ class ScheduleProcessor:
         """
         working_cal = deepcopy(calendar)
 
-        # Collect all sequences globally, sorted by start_time
+        # Collect all sequences globally, sorted by start_time.
         all_sequences: List[Tuple[str, ObservationSequence]] = []
         for visit in working_cal.visits:
             for seq in visit.sequences:
@@ -1084,244 +1084,279 @@ class ScheduleProcessor:
         all_sequences.sort(key=lambda x: x[1].start_time)
 
         for idx, (visit_id, seq) in enumerate(all_sequences):
-            n_mins = int(np.rint(seq.duration.sec / 60.0))
-            if n_mins <= 0:
+            analysis = self._analyze_mid_sequence_visibility(visit_id, seq)
+            if analysis is None:
                 continue
 
-            target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
-            deltas = np.arange(n_mins) * u.min
-            times = seq.start_time + deltas
-
-            target_roll = self._computed_target_rolls.get(visit_id, {}).get(
-                seq.target
-            )
-            if self._roll_sweep_enabled and target_roll is not None:
-                vis = self.visibility.get_visibility(
-                    target_coord, times, roll=target_roll * u.deg
-                )
-            else:
-                vis = self.visibility.get_visibility(target_coord, times)
-
-            vis_arr = np.asarray(vis)
-
-            if np.all(vis_arr):
-                continue  # fully visible — nothing to do
-
-            # ── Identify all contiguous non-visible runs (gaps) ──
-            gaps: List[Tuple[int, int]] = []  # (start_idx, end_idx)
-            gap_start = None
-            for i, v in enumerate(vis_arr):
-                if not v:
-                    if gap_start is None:
-                        gap_start = i
-                else:
-                    if gap_start is not None:
-                        gaps.append((gap_start, i))
-                        gap_start = None
-            if gap_start is not None:
-                gaps.append((gap_start, len(vis_arr)))
-
+            target_coord, times, vis_arr = analysis
+            gaps = self._find_nonvisible_gaps(vis_arr)
             if not gaps:
-                continue  # shouldn't happen, but guard
+                continue
 
-            # ── Classify each gap as tolerable or not ──
-            gap_tolerable = []
-            for g_start, g_end in gaps:
-                g_len = g_end - g_start
-                tolerable = self._is_gap_tolerable(
-                    target_coord, times, g_start, g_len
+            gap_tolerable = [
+                self._is_gap_tolerable(
+                    target_coord,
+                    times,
+                    gap_start,
+                    gap_end - gap_start,
                 )
-                gap_tolerable.append(tolerable)
-
-            # If all gaps are tolerable, leave the sequence as-is
+                for gap_start, gap_end in gaps
+            ]
             if all(gap_tolerable):
                 continue
 
-            # ── Find the longest acceptable span ──
-            # An acceptable span runs from some visible minute to
-            # another, crossing only tolerable gaps in between.
-            # We scan through the gaps and track spans separated
-            # by intolerable gaps.
-            #
-            # Build a list of "segments": contiguous regions
-            # separated by intolerable gaps.  Each segment may
-            # contain tolerable gaps within it.
-            segment_bounds: List[Tuple[int, int]] = []
-            seg_start = 0
-            for gi, (g_start, g_end) in enumerate(gaps):
-                if not gap_tolerable[gi]:
-                    # Close current segment at the gap's start
-                    if g_start > seg_start:
-                        segment_bounds.append((seg_start, g_start))
-                    seg_start = g_end
-            # Final segment after last intolerable gap
-            if seg_start < len(vis_arr):
-                segment_bounds.append((seg_start, len(vis_arr)))
-
-            if not segment_bounds:
-                continue  # entirely non-visible
-
-            # Pick the longest segment
-            best_seg = max(segment_bounds, key=lambda b: b[1] - b[0])
-            best_start, best_end = best_seg
-
-            # Trim leading/trailing non-visible within the segment
-            while best_start < best_end and not vis_arr[best_start]:
-                best_start += 1
-            while best_end > best_start and not vis_arr[best_end - 1]:
-                best_end -= 1
-
-            if best_end <= best_start:
-                continue
-
-            new_start = seq.start_time + best_start * u.min
-            new_stop = seq.start_time + best_end * u.min
-
-            if (new_stop - new_start) < self.min_sequence_duration:
-                continue  # trimmed version would be too short
-
-            # Only replace if something actually changed
-            if new_start == seq.start_time and new_stop == seq.stop_time:
-                continue
-
-            trimmed = ObservationSequence(
-                id=seq.id,
-                target=seq.target,
-                priority=seq.priority,
-                start_time=new_start,
-                stop_time=new_stop,
-                ra=seq.ra,
-                dec=seq.dec,
-                payload_params=deepcopy(seq.payload_params),
+            best_window = self._best_tolerable_segment(
+                vis_arr,
+                gaps,
+                gap_tolerable,
             )
+            if best_window is None:
+                continue
+
+            trimmed = self._build_trimmed_sequence(seq, *best_window)
+            if trimmed is None:
+                continue
+
             working_cal.replace_sequence(visit_id, seq.id, trimmed)
             all_sequences[idx] = (visit_id, trimmed)
 
-            # ── Try extending the previous sequence forward ──
-            if idx > 0 and new_start > seq.start_time:
-                prev_visit_id, prev_seq = all_sequences[idx - 1]
-                freed_start = seq.start_time
-                freed_stop = new_start
-                freed_mins = int(
-                    np.rint((freed_stop - prev_seq.stop_time).sec / 60.0)
-                )
-                if freed_mins > 0:
-                    prev_coord = SkyCoord(
-                        prev_seq.ra,
-                        prev_seq.dec,
-                        frame="icrs",
-                        unit="deg",
-                    )
-                    gap_deltas = np.arange(freed_mins) * u.min
-                    gap_times = prev_seq.stop_time + gap_deltas
-
-                    prev_roll = self._computed_target_rolls.get(
-                        prev_visit_id, {}
-                    ).get(prev_seq.target)
-                    if self._roll_sweep_enabled and prev_roll is not None:
-                        prev_vis = self.visibility.get_visibility(
-                            prev_coord,
-                            gap_times,
-                            roll=prev_roll * u.deg,
-                        )
-                    else:
-                        prev_vis = self.visibility.get_visibility(
-                            prev_coord, gap_times
-                        )
-                    prev_vis_arr = np.asarray(prev_vis)
-
-                    # Extend forward through contiguous visible minutes
-                    extend_end = 0
-                    while (
-                        extend_end < len(prev_vis_arr)
-                        and prev_vis_arr[extend_end]
-                    ):
-                        extend_end += 1
-
-                    if extend_end > 0:
-                        new_prev_stop = prev_seq.stop_time + extend_end * u.min
-                        extended_prev = ObservationSequence(
-                            id=prev_seq.id,
-                            target=prev_seq.target,
-                            priority=prev_seq.priority,
-                            start_time=prev_seq.start_time,
-                            stop_time=new_prev_stop,
-                            ra=prev_seq.ra,
-                            dec=prev_seq.dec,
-                            payload_params=deepcopy(prev_seq.payload_params),
-                        )
-                        working_cal.replace_sequence(
-                            prev_visit_id, prev_seq.id, extended_prev
-                        )
-                        all_sequences[idx - 1] = (
-                            prev_visit_id,
-                            extended_prev,
-                        )
-
-            # ── Try extending the next sequence backward ──
-            if idx + 1 < len(all_sequences) and new_stop < seq.stop_time:
-                next_visit_id, next_seq = all_sequences[idx + 1]
-                freed_start = new_stop
-                freed_stop = seq.stop_time
-                freed_mins = int(
-                    np.rint((next_seq.start_time - freed_start).sec / 60.0)
-                )
-                if freed_mins > 0:
-                    next_coord = SkyCoord(
-                        next_seq.ra,
-                        next_seq.dec,
-                        frame="icrs",
-                        unit="deg",
-                    )
-                    gap_deltas = np.arange(freed_mins) * u.min
-                    gap_times = freed_start + gap_deltas
-
-                    next_roll = self._computed_target_rolls.get(
-                        next_visit_id, {}
-                    ).get(next_seq.target)
-                    if self._roll_sweep_enabled and next_roll is not None:
-                        next_vis = self.visibility.get_visibility(
-                            next_coord,
-                            gap_times,
-                            roll=next_roll * u.deg,
-                        )
-                    else:
-                        next_vis = self.visibility.get_visibility(
-                            next_coord, gap_times
-                        )
-                    next_vis_arr = np.asarray(next_vis)
-
-                    # Walk backward from the end to find earliest
-                    # contiguous visible minute
-                    last_idx = len(next_vis_arr) - 1
-                    if last_idx >= 0 and next_vis_arr[last_idx]:
-                        first_contiguous = last_idx
-                        while (
-                            first_contiguous > 0
-                            and next_vis_arr[first_contiguous - 1]
-                        ):
-                            first_contiguous -= 1
-
-                        new_next_start = gap_times[first_contiguous]
-                        extended_next = ObservationSequence(
-                            id=next_seq.id,
-                            target=next_seq.target,
-                            priority=next_seq.priority,
-                            start_time=new_next_start,
-                            stop_time=next_seq.stop_time,
-                            ra=next_seq.ra,
-                            dec=next_seq.dec,
-                            payload_params=deepcopy(next_seq.payload_params),
-                        )
-                        working_cal.replace_sequence(
-                            next_visit_id, next_seq.id, extended_next
-                        )
-                        all_sequences[idx + 1] = (
-                            next_visit_id,
-                            extended_next,
-                        )
+            self._extend_previous_after_mid_trim(
+                working_cal,
+                all_sequences,
+                idx,
+                seq.start_time,
+                trimmed.start_time,
+            )
+            self._extend_next_after_mid_trim(
+                working_cal,
+                all_sequences,
+                idx,
+                trimmed.stop_time,
+                seq.stop_time,
+            )
 
         return working_cal
+
+    def _analyze_mid_sequence_visibility(
+        self,
+        visit_id: str,
+        seq: ObservationSequence,
+    ) -> Optional[Tuple[SkyCoord, Any, np.ndarray]]:
+        """Return per-minute visibility for one sequence, if useful."""
+        n_mins = int(np.rint(seq.duration.sec / 60.0))
+        if n_mins <= 0:
+            return None
+
+        target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+        deltas = np.arange(n_mins) * u.min
+        times = seq.start_time + deltas
+        vis_arr = self._visibility_for_sequence(
+            visit_id, seq, target_coord, times
+        )
+        if np.all(vis_arr):
+            return None
+        return target_coord, times, vis_arr
+
+    def _visibility_for_sequence(
+        self,
+        visit_id: str,
+        seq: ObservationSequence,
+        target_coord: SkyCoord,
+        times: Any,
+    ) -> np.ndarray:
+        """Get visibility array for a sequence with roll-aware lookup."""
+        target_roll = self._computed_target_rolls.get(visit_id, {}).get(
+            seq.target
+        )
+        if self._roll_sweep_enabled and target_roll is not None:
+            vis = self.visibility.get_visibility(
+                target_coord,
+                times,
+                roll=target_roll * u.deg,
+            )
+        else:
+            vis = self.visibility.get_visibility(target_coord, times)
+        return np.asarray(vis)
+
+    def _find_nonvisible_gaps(
+        self,
+        vis_arr: np.ndarray,
+    ) -> List[Tuple[int, int]]:
+        """Find contiguous non-visible runs as half-open index ranges."""
+        gaps: List[Tuple[int, int]] = []
+        gap_start = None
+        for i, visible in enumerate(vis_arr):
+            if not visible:
+                if gap_start is None:
+                    gap_start = i
+            elif gap_start is not None:
+                gaps.append((gap_start, i))
+                gap_start = None
+
+        if gap_start is not None:
+            gaps.append((gap_start, len(vis_arr)))
+        return gaps
+
+    def _best_tolerable_segment(
+        self,
+        vis_arr: np.ndarray,
+        gaps: List[Tuple[int, int]],
+        gap_tolerable: List[bool],
+    ) -> Optional[Tuple[int, int]]:
+        """Return best [start, end) span separated by intolerable gaps."""
+        segment_bounds: List[Tuple[int, int]] = []
+        seg_start = 0
+        for i, (gap_start, gap_end) in enumerate(gaps):
+            if not gap_tolerable[i]:
+                if gap_start > seg_start:
+                    segment_bounds.append((seg_start, gap_start))
+                seg_start = gap_end
+
+        if seg_start < len(vis_arr):
+            segment_bounds.append((seg_start, len(vis_arr)))
+        if not segment_bounds:
+            return None
+
+        best_start, best_end = max(
+            segment_bounds,
+            key=lambda bounds: bounds[1] - bounds[0],
+        )
+
+        while best_start < best_end and not vis_arr[best_start]:
+            best_start += 1
+        while best_end > best_start and not vis_arr[best_end - 1]:
+            best_end -= 1
+
+        if best_end <= best_start:
+            return None
+        return best_start, best_end
+
+    def _build_trimmed_sequence(
+        self,
+        seq: ObservationSequence,
+        best_start: int,
+        best_end: int,
+    ) -> Optional[ObservationSequence]:
+        """Create trimmed sequence if valid and changed from input."""
+        new_start = seq.start_time + best_start * u.min
+        new_stop = seq.start_time + best_end * u.min
+
+        if (new_stop - new_start) < self.min_sequence_duration:
+            return None
+        if new_start == seq.start_time and new_stop == seq.stop_time:
+            return None
+
+        return ObservationSequence(
+            id=seq.id,
+            target=seq.target,
+            priority=seq.priority,
+            start_time=new_start,
+            stop_time=new_stop,
+            ra=seq.ra,
+            dec=seq.dec,
+            payload_params=deepcopy(seq.payload_params),
+        )
+
+    def _extend_previous_after_mid_trim(
+        self,
+        working_cal: ScienceCalendar,
+        all_sequences: List[Tuple[str, ObservationSequence]],
+        idx: int,
+        old_start: Time,
+        new_start: Time,
+    ) -> None:
+        """Extend previous sequence forward into newly freed leading time."""
+        if idx <= 0 or new_start <= old_start:
+            return
+
+        prev_visit_id, prev_seq = all_sequences[idx - 1]
+        freed_mins = int(np.rint((new_start - prev_seq.stop_time).sec / 60.0))
+        if freed_mins <= 0:
+            return
+
+        prev_coord = SkyCoord(
+            prev_seq.ra, prev_seq.dec, frame="icrs", unit="deg"
+        )
+        gap_deltas = np.arange(freed_mins) * u.min
+        gap_times = prev_seq.stop_time + gap_deltas
+        prev_vis_arr = self._visibility_for_sequence(
+            prev_visit_id,
+            prev_seq,
+            prev_coord,
+            gap_times,
+        )
+
+        extend_end = 0
+        while extend_end < len(prev_vis_arr) and prev_vis_arr[extend_end]:
+            extend_end += 1
+
+        if extend_end <= 0:
+            return
+
+        new_prev_stop = prev_seq.stop_time + extend_end * u.min
+        extended_prev = ObservationSequence(
+            id=prev_seq.id,
+            target=prev_seq.target,
+            priority=prev_seq.priority,
+            start_time=prev_seq.start_time,
+            stop_time=new_prev_stop,
+            ra=prev_seq.ra,
+            dec=prev_seq.dec,
+            payload_params=deepcopy(prev_seq.payload_params),
+        )
+        working_cal.replace_sequence(prev_visit_id, prev_seq.id, extended_prev)
+        all_sequences[idx - 1] = (prev_visit_id, extended_prev)
+
+    def _extend_next_after_mid_trim(
+        self,
+        working_cal: ScienceCalendar,
+        all_sequences: List[Tuple[str, ObservationSequence]],
+        idx: int,
+        new_stop: Time,
+        old_stop: Time,
+    ) -> None:
+        """Extend next sequence backward into newly freed trailing time."""
+        if idx + 1 >= len(all_sequences) or new_stop >= old_stop:
+            return
+
+        next_visit_id, next_seq = all_sequences[idx + 1]
+        freed_mins = int(np.rint((next_seq.start_time - new_stop).sec / 60.0))
+        if freed_mins <= 0:
+            return
+
+        next_coord = SkyCoord(
+            next_seq.ra, next_seq.dec, frame="icrs", unit="deg"
+        )
+        gap_deltas = np.arange(freed_mins) * u.min
+        gap_times = new_stop + gap_deltas
+        next_vis_arr = self._visibility_for_sequence(
+            next_visit_id,
+            next_seq,
+            next_coord,
+            gap_times,
+        )
+
+        last_idx = len(next_vis_arr) - 1
+        if last_idx < 0 or not next_vis_arr[last_idx]:
+            return
+
+        first_contiguous = last_idx
+        while first_contiguous > 0 and next_vis_arr[first_contiguous - 1]:
+            first_contiguous -= 1
+
+        new_next_start = gap_times[first_contiguous]
+        extended_next = ObservationSequence(
+            id=next_seq.id,
+            target=next_seq.target,
+            priority=next_seq.priority,
+            start_time=new_next_start,
+            stop_time=next_seq.stop_time,
+            ra=next_seq.ra,
+            dec=next_seq.dec,
+            payload_params=deepcopy(next_seq.payload_params),
+        )
+        working_cal.replace_sequence(next_visit_id, next_seq.id, extended_next)
+        all_sequences[idx + 1] = (next_visit_id, extended_next)
 
     # ── Force gap-fill helpers ─────────────────────────────────
 
@@ -1967,20 +2002,16 @@ class ScheduleProcessor:
 
         # per the payload users guide
         frame_time = (ROI_SizeX + 12) * (ROI_SizeY + 2) * 1e-5 * u.s
-        NumIntegrations = 1
-        NumFramesTotal = (
-            SC_Resets1
-            + (NumIntegrations - 1) * SC_Resets2
-            + NumIntegrations
-            * (
-                SC_DropFrames1
-                + (SC_Groups - 1) * (SC_ReadFrames + SC_DropFrames2)
-                + SC_ReadFrames
-                + SC_DropFrames3
-            )
+        NumFramesBase = (
+            SC_DropFrames1
+            + (SC_Groups - 1) * (SC_ReadFrames + SC_DropFrames2)
+            + SC_ReadFrames
+            + SC_DropFrames3
         )
-
-        integration_time = NumFramesTotal * frame_time
+        NumFramesFirst = NumFramesBase + SC_Resets1
+        NumFramesOther = NumFramesBase + SC_Resets2
+        first_integration_time = NumFramesFirst * frame_time
+        other_integration_time = NumFramesOther * frame_time
 
         # Use the duration argument so callers can override the window
         # (e.g. _update_payload_parameters_sequence passes sequence.duration).
@@ -1992,15 +2023,22 @@ class ScheduleProcessor:
             - post_sequence_overhead.to(u.s)
         )
         # Guard: if overhead exceeds duration, no integrations are possible
-        if effective_duration_s.value <= 0:
-            sequence.set_payload_parameter(
-                "AcquireInfCamImages", "SC_Integrations", "0"
-            )
-            return sequence
+        SC_Integrations = 0
+        if (effective_duration_s.value > 0) and (
+            first_integration_time.to(u.s) <= effective_duration_s.to(u.s)
+        ):
+            # There is enough time to perform the initial integration
+            effective_duration_s -= first_integration_time.to(u.s)
+            SC_Integrations += 1
 
-        SC_Integrations = int(
-            np.floor(effective_duration_s / integration_time.to(u.s))
-        )
+            # ... and potentially additional integrations.
+            if effective_duration_s > other_integration_time.to(u.s):
+                SC_Integrations += int(
+                    np.floor(
+                        effective_duration_s / other_integration_time.to(u.s)
+                    )
+                )
+
         success = sequence.set_payload_parameter(
             "AcquireInfCamImages", "SC_Integrations", str(SC_Integrations)
         )

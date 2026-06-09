@@ -1416,7 +1416,7 @@ class TestForceGapFill:
 
         seq = _make_seq("s1", "T1", start_min=0, duration_min=30)
         cal = _make_calendar([seq])
-        result = proc._trim_non_visible_tails(cal)
+        proc._trim_non_visible_tails(cal)
 
         # Without force_gap_fill the tail would be trimmed; with it
         # _process_all_sequences skips the call.  We test the flag

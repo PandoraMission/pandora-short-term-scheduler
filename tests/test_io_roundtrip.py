@@ -60,7 +60,7 @@ def test_boresight_contains_pri_cmd_dir(tmp_path):
     for bs in boresights:
         pri = bs.find(f"{prefix}PRI_CMD_DIR", ns)
         assert pri is not None, "PRI_CMD_DIR missing from Boresight"
-        assert pri.text == "10", f"PRI_CMD_DIR should be 10, got {pri.text}"
+        assert pri.text == "9", f"PRI_CMD_DIR should be 9, got {pri.text}"
 
 
 def test_payload_element_roundtrip_preserves_tags():

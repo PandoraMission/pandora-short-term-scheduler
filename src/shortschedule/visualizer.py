@@ -2192,9 +2192,7 @@ class ScheduleVisualizer:
         from matplotlib.patches import Patch
 
         scheduler = self.scheduler
-        priority_colors = self._get_priority_colors(
-            [1, 2, 3, 4, 5, 6, 7, 8]
-        )
+        priority_colors = self._get_priority_colors([1, 2, 3, 4, 5, 6, 7, 8])
 
         fig, ax = plt.subplots(figsize=figsize)
 
@@ -2208,37 +2206,31 @@ class ScheduleVisualizer:
                 else Time("2000-01-01")
             ),
         ):
-            visit_rolls = scheduler._computed_target_rolls.get(
-                visit.id, {}
-            )
+            visit_rolls = scheduler._computed_target_rolls.get(visit.id, {})
             for seq in visit.sequences:
                 n_mins = int(np.rint(seq.duration.sec / 60.0))
                 if n_mins <= 0:
                     continue
-                coord = SkyCoord(
-                    seq.ra, seq.dec, frame="icrs", unit="deg"
-                )
+                coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
                 deltas = np.arange(n_mins) * u.min
                 times = seq.start_time + deltas
 
                 roll = visit_rolls.get(seq.target)
-                if (
-                    scheduler._roll_sweep_enabled
-                    and roll is not None
-                ):
+                if scheduler._roll_sweep_enabled and roll is not None:
                     vis = scheduler.visibility.get_visibility(
                         coord, times, roll=roll * u.deg
                     )
                 else:
-                    vis = scheduler.visibility.get_visibility(
-                        coord, times
-                    )
+                    vis = scheduler.visibility.get_visibility(coord, times)
                 rows.append((visit.id, seq, np.asarray(vis)))
 
         if not rows:
             ax.text(
-                0.5, 0.5, "No sequences",
-                ha="center", transform=ax.transAxes,
+                0.5,
+                0.5,
+                "No sequences",
+                ha="center",
+                transform=ax.transAxes,
             )
             return fig
 
@@ -2269,9 +2261,13 @@ class ScheduleVisualizer:
             # Background bar: priority color
             color = priority_colors.get(seq.priority, "lightgray")
             rect = Rectangle(
-                (start_num, y - 0.35), dur_days, 0.7,
-                facecolor=color, edgecolor="none",
-                alpha=1.0, linewidth=0,
+                (start_num, y - 0.35),
+                dur_days,
+                0.7,
+                facecolor=color,
+                edgecolor="none",
+                alpha=1.0,
+                linewidth=0,
             )
             ax.add_patch(rect)
 
@@ -2292,9 +2288,14 @@ class ScheduleVisualizer:
                             x0 = start_num + block_start * min_dur
                             width = (i - block_start) * min_dur
                             r = Rectangle(
-                                (x0, y - 0.35), width, 0.7,
-                                facecolor="black", edgecolor="none",
-                                alpha=1.00, linewidth=0, zorder=1000
+                                (x0, y - 0.35),
+                                width,
+                                0.7,
+                                facecolor="black",
+                                edgecolor="none",
+                                alpha=1.00,
+                                linewidth=0,
+                                zorder=1000,
                             )
                             ax.add_patch(r)
                             non_vis_total += i - block_start
@@ -2303,8 +2304,13 @@ class ScheduleVisualizer:
             if show_sequence_labels:
                 mid = start_num + dur_days / 2
                 ax.text(
-                    mid, y, seq.id, ha="center", va="center",
-                    fontsize=5, clip_on=True,
+                    mid,
+                    y,
+                    seq.id,
+                    ha="center",
+                    va="center",
+                    fontsize=5,
+                    clip_on=True,
                 )
 
         # Axis limits  (patches don't trigger autoscale)
@@ -2328,7 +2334,8 @@ class ScheduleVisualizer:
             f"{title}\n"
             f"({non_vis_total} non-visible min / "
             f"{total_mins} total — {vis_pct:.1f}% visible)",
-            fontsize=12, pad=10,
+            fontsize=12,
+            pad=10,
         )
         ax.set_xlabel("Time (UTC)")
         ax.grid(True, axis="x", alpha=0.3)
@@ -2337,14 +2344,10 @@ class ScheduleVisualizer:
         legend_items = [
             Patch(facecolor="red", alpha=0.75, label="Non-visible"),
         ]
-        used_priorities = sorted(
-            set(s.priority for _, s, _ in rows)
-        )
+        used_priorities = sorted(set(s.priority for _, s, _ in rows))
         for p in used_priorities:
             c = priority_colors.get(p, "silver")
-            legend_items.append(
-                Patch(facecolor=c, label=f"Priority {p}")
-            )
+            legend_items.append(Patch(facecolor=c, label=f"Priority {p}"))
         ax.legend(handles=legend_items, loc="upper right", fontsize=7)
 
         fig.tight_layout()
