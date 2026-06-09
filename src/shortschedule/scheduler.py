@@ -1989,7 +1989,9 @@ class ScheduleProcessor:
         )
         # Guard: if overhead exceeds duration, no integrations are possible
         SC_Integrations = 0
-        if (effective_duration_s.value > 0) and (first_integration_time.to(u.s) <= effective_duration_s.to(u.s)):
+        if (effective_duration_s.value > 0) and (
+            first_integration_time.to(u.s) <= effective_duration_s.to(u.s)
+        ):
             # There is enough time to perform the initial integration
             effective_duration_s -= first_integration_time.to(u.s)
             SC_Integrations += 1
@@ -1997,7 +1999,9 @@ class ScheduleProcessor:
             # ... and potentially additional integrations.
             if effective_duration_s > other_integration_time.to(u.s):
                 SC_Integrations += int(
-                    np.floor(effective_duration_s / other_integration_time.to(u.s))
+                    np.floor(
+                        effective_duration_s / other_integration_time.to(u.s)
+                    )
                 )
 
         success = sequence.set_payload_parameter(

@@ -284,10 +284,7 @@ def _expected_nirda_integrations(
 
     frame_time = (roi_x + 12) * (roi_y + 2) * 1e-5
     num_frames_base = (
-        sc_drop1
-        + (sc_groups - 1) * (sc_read + sc_drop2)
-        + sc_read
-        + sc_drop3
+        sc_drop1 + (sc_groups - 1) * (sc_read + sc_drop2) + sc_read + sc_drop3
     )
     first_integration_time = (num_frames_base + sc_resets1) * frame_time
     other_integration_time = (num_frames_base + sc_resets2) * frame_time
