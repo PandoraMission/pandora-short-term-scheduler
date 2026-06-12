@@ -1,6 +1,6 @@
 # Standard library
-import os
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 # First-party/Local
 import shortschedule
@@ -9,15 +9,16 @@ from shortschedule.writer import XMLWriter
 
 
 def get_sample_calendar_path():
-    pkgdir = os.path.dirname(shortschedule.__file__)
-    return os.path.join(
-        pkgdir, "data", "Pandora_science_calendar_20251018_tsb-futz.xml"
+    return (
+        Path(shortschedule.__file__).parent
+        / "data"
+        / "Pandora_science_calendar_20251018_tsb-futz.xml"
     )
 
 
 def test_parse_sample_calendar_and_roundtrip(tmp_path):
     sample = get_sample_calendar_path()
-    assert os.path.exists(sample), f"Sample calendar not found at {sample}"
+    assert sample.exists(), f"Sample calendar not found at {sample}"
 
     cal = parse_science_calendar(sample)
     # Basic sanity checks
@@ -30,7 +31,7 @@ def test_parse_sample_calendar_and_roundtrip(tmp_path):
     out_file = tmp_path / "roundtrip.xml"
     writer = XMLWriter()
     written = writer.write_calendar(cal, str(out_file))
-    assert os.path.exists(written)
+    assert Path(written).exists()
 
     cal2 = parse_science_calendar(written)
     total_sequences2 = sum(len(v.sequences) for v in cal2.visits)

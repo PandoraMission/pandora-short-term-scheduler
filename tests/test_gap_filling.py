@@ -8,6 +8,9 @@ Covers:
 - Gap report structure verification
 """
 
+# Standard library
+from pathlib import Path
+
 # Third-party
 import numpy as np
 import pytest
@@ -431,9 +434,10 @@ class TestRollAwareGapFilling:
         """Full process_calendar with roll-sensitive visibility."""
         import shortschedule
 
-        pkgdir = shortschedule.__file__.rsplit("/", 1)[0]
         sample = (
-            pkgdir + "/data/Pandora_science_calendar_20251018_tsb-futz.xml"
+            Path(shortschedule.__file__).parent
+            / "data"
+            / "Pandora_science_calendar_20251018_tsb-futz.xml"
         )
 
         from shortschedule.parser import parse_science_calendar

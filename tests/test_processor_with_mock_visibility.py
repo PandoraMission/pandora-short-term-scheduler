@@ -1,3 +1,6 @@
+# Standard library
+from pathlib import Path
+
 # Third-party
 import numpy as np
 
@@ -28,8 +31,11 @@ def test_process_calendar_with_mocked_visibility(monkeypatch, tmp_path):
     )
 
     # Load sample calendar
-    pkgdir = shortschedule.__file__.rsplit("/", 1)[0]
-    sample = pkgdir + "/data/Pandora_science_calendar_20251018_tsb-futz.xml"
+    sample = (
+        Path(shortschedule.__file__).parent
+        / "data"
+        / "Pandora_science_calendar_20251018_tsb-futz.xml"
+    )
 
     cal = parse_science_calendar(sample)
     assert len(cal.visits) > 0

@@ -1,6 +1,6 @@
 # Standard library
-import os
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 # Third-party
 import numpy as np
@@ -25,9 +25,10 @@ class DummyVisibilityAllTrue:
 
 
 def get_sample_calendar_path():
-    pkgdir = os.path.dirname(shortschedule.__file__)
-    return os.path.join(
-        pkgdir, "data", "Pandora_science_calendar_20251018_tsb-futz.xml"
+    return (
+        Path(shortschedule.__file__).parent
+        / "data"
+        / "Pandora_science_calendar_20251018_tsb-futz.xml"
     )
 
 
@@ -38,7 +39,7 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     )
 
     sample = get_sample_calendar_path()
-    assert os.path.exists(sample), f"Sample calendar not found at {sample}"
+    assert sample.exists(), f"Sample calendar not found at {sample}"
 
     cal = parse_science_calendar(sample)
     assert len(cal.visits) > 0
@@ -54,7 +55,7 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     out_file = tmp_path / "processed_meta.xml"
     XMLWriter().write_calendar(processed, str(out_file))
 
-    assert os.path.exists(out_file), "Output file was not created"
+    assert out_file.exists(), "Output file was not created"
 
     root = ET.parse(str(out_file)).getroot()
     # ElementTree places elements in the default namespace if one is set on
