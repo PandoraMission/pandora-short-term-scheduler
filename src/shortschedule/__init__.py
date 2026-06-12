@@ -13,6 +13,7 @@ from .parser import parse_science_calendar
 from .roll import apply_rolls_to_calendar, apply_rolls_to_visit, calculate_roll
 from .scheduler import ScheduleProcessor
 from .writer import XMLWriter
+from .nirda import NirdaData
 
 # Package directory
 PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))
@@ -30,6 +31,7 @@ __all__ = [
     "apply_rolls_to_calendar",
     "get_version",
     "setup_logging",
+    "NirdaData"
 ]
 
 
