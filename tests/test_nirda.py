@@ -423,15 +423,19 @@ class TestUpdateForVitl:
         nd.update_for_vitl((_RESET_1 + 50) * nd.single_frame_time)
         assert nd.first_integration_time.to(u.s).value != old_first
 
-    def test_zero_frame_time_gives_one_reset(self):
-        """If reset_frame_time is zero update_for_vitl must not divide by zero."""
+    def test_zero_frame_time_gives_floor_reset(self):
+        """If reset_frame_time is zero update_for_vitl must not divide by zero.
+
+        With no usable frame duration the count falls back to the fixed floor
+        of two reset frames rather than dividing by zero.
+        """
         # A zero-area ROI drives single_frame_time (and thus reset_frame_time) to zero.
         nd = _make(
             roi_x_size=0, roi_y_size=0, roi_x_buffer_pixels=0, roi_y_buffer_pixels=0
         )
         assert nd.reset_frame_time.to(u.s).value == 0.0
         nd.update_for_vitl(10.0 * u.s)
-        assert nd.reset_frames_1 == 1
+        assert nd.reset_frames_1 == 2
 
 
 # ---------------------------------------------------------------------------
