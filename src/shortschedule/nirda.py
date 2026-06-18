@@ -75,9 +75,15 @@ class NirdaData:
     compression_ratio : float
         Effective on-board compression factor applied to raw data.
         This is an empirical parameter.
-    reset_frame_time : Quantity[second]
-        Explicit reset-frame duration. A negative value means the reset
-        frame takes the same time as a science frame (``single_frame_time``).
+    global_reset_method : str
+        Per-integration global-reset overhead model. 
+        - ``'off'`` (no outside roi reset; no overhead)
+        - ``'global'`` (outside roi are quickly resetl; a small fixed overhead)
+        - ``'line_by_line'`` (``global_reset_lbl_rows`` rows at ``global_reset_lbl_time_per_row`` each).
+    global_reset_lbl_rows : int
+        Number of reset rows used by the ``'line_by_line'`` method.
+    global_reset_lbl_time_per_row : Quantity[second]
+        Reset time per row used by the ``'line_by_line'`` method.
     additional_overhead_time : Quantity[second]
         Extra fixed overhead beyond ``pre_overhead_time`` and
         ``post_overhead_time`` subtracted before scheduling integrations.
@@ -88,6 +94,8 @@ class NirdaData:
         Total pixels clocked out per frame, including buffer pixels.
     single_frame_time : Quantity[second]
         Wall-clock duration of one detector frame.
+    reset_frame_time : Quantity[second]
+        Reset-frame duration. Derived as equal to ``single_frame_time``.
     first_integration_saved_frames : int
         Frames written to memory for the first integration.
     other_integration_saved_frames : int
@@ -123,8 +131,10 @@ class NirdaData:
     bytes_per_pixel: Quantity = 2 * u.byte
     dropped_integrations: int = 0
     compression_ratio: float = 0.8
-    reset_frame_time: Quantity = -1.0 * u.s
-    additional_overhead_time: Quantity = 2 * u.s
+    global_reset_method: str = 'off'
+    global_reset_lbl_rows: int = 256
+    global_reset_lbl_time_per_row: Quantity = 10.0e-6 * u.s
+    additional_overhead_time: Quantity = 0 * u.s
 
     # Derived attributes: computed in _update_derived, not constructor arguments
     pixels_per_frame: int = field(init=False)
@@ -135,6 +145,7 @@ class NirdaData:
     other_integration_time: Quantity = field(init=False)
     dropped_integration_time: Quantity = field(init=False)
     integration_data: Quantity = field(init=False)
+    reset_frame_time: Quantity = field(init=False)
 
     def __post_init__(self):
         self._update_derived()
@@ -159,23 +170,46 @@ class NirdaData:
             0, (self.pixels_per_frame * self.read_time_per_pixel).to(u.s).value
         ) * u.s
 
-        # Replace the negative sentinel with the actual frame time so that
-        # update_for_vitl can use reset_frame_time directly.
-        if self.reset_frame_time < 0 * u.s:
-            self.reset_frame_time = self.single_frame_time
+        # Assume reset frames take the same as regular frames.
+        self.reset_frame_time = self.single_frame_time
+
+        # Determine common integration time (part that is the same for 1st and subsequent integrations)
+        # There is additional per-integration overhead if a global reset is used.
+        self.global_reset_method = self.global_reset_method.lower().strip()
+        global_reset_overhead = 0.0 * u.s
+        if self.global_reset_method not in ('off', 'global', 'line_by_line'):
+            raise ValueError(f"NIRDA: Unknown global reset method requested: {self.global_reset_method}")
+        elif self.global_reset_method == 'global':
+            # Global reset requires a "negligible compared to frame time" overhead.
+            # This value is not real but just something small.
+            global_reset_overhead = 1.0e-6 * u.s
+        elif self.global_reset_method == 'line_by_line':
+            # Line by line method requires 10us per line.
+            global_reset_overhead = self.global_reset_lbl_time_per_row * self.global_reset_lbl_rows
+
+        # Common integration time in seconds (part shared by 1st and subsequent
+        # integrations). Kept as a plain float here and converted to a Quantity
+        # below, matching the float-then-``* u.s`` style used elsewhere.
+        common_integration_time = max(
+            0,
+            self.single_frame_time.to(u.s).value * common_frames
+            + global_reset_overhead.to(u.s).value
+        )
 
         self.first_integration_time = max(
             0,
-            self.single_frame_time.to(u.s).value * common_frames
+            common_integration_time
             + self.reset_frame_time.to(u.s).value * self.reset_frames_1,
         ) * u.s
 
         self.other_integration_time = max(
             0,
-            self.single_frame_time.to(u.s).value * common_frames
+            common_integration_time
             + self.reset_frame_time.to(u.s).value * self.reset_frames_2,
         ) * u.s
 
+        # If we drop any integrations then the duration of those drops will always be equal to the "other"
+        # integration time.
         self.dropped_integration_time = self.other_integration_time
 
         bytes_per_frame = max(
@@ -207,22 +241,28 @@ class NirdaData:
         vitl_settling_time : Quantity[second]
             Minimum time required for VITL detector settling.
         """
-        # reset_frame_time was resolved from the sentinel during __post_init__,
-        # so it holds the actual frame duration here.
+        # reset_frame_time is derived (equal to single_frame_time) during
+        # __post_init__, so it holds the actual frame duration here.
+        
+        # TODO: Open Question! Do we add the global reset time to this?
+
         if self.reset_frame_time.to(u.s).value == 0.0:
-            self.reset_frames_1 = 1
+            # Have at least 2 reset1
+            self.reset_frames_1 = 2
         else:
             self.reset_frames_1 = max(
                 1,
                 math.ceil((vitl_settling_time / self.reset_frame_time).decompose().value),
             )
 
+        # TODO: Open Question! Do we add the global reset time to this?
+
         self._update_derived()
 
     def solve_integrations(
         self,
         duration: Quantity,
-        pre_overhead_time: Quantity = 260.0 * u.s,
+        pre_overhead_time: Quantity = 258.0 * u.s,
         post_overhead_time: Quantity = 102.0 * u.s,
     ):
         """Compute the number of integrations that fit within a duration.
@@ -273,7 +313,7 @@ class NirdaData:
     def solve_duration(
         self,
         integrations: int,
-        pre_overhead_time: Quantity = 260.0 * u.s,
+        pre_overhead_time: Quantity = 258.0 * u.s,
         post_overhead_time: Quantity = 102.0 * u.s,
     ):
         """Compute the total duration required to acquire a given number of integrations.
