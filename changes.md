@@ -2,3 +2,5 @@
 
 - Adds NIRDA and VISDA classes which contain accurate and up to date parameters to perform timing and data volume calculations.
   - Adds tests for these new classes.
+- Adds overhead class which accounts for pre- and post- overhead timings for both VISDA and NIRDA
+- Adds baseline short-term calendar runner script to docs/
