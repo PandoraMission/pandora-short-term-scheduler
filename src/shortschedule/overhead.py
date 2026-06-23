@@ -45,17 +45,20 @@ class OverheadTiming:
         # ... 
         # Observation
         # ...
-        time_delta = 0.0
 
         # Post-Observation COMMANDS:
+        time_delta = 0.0
         # PAYLOAD_HALT_IMAGING_OR_COMMAND_SEQUENCE
         time_delta += 2.0
         # SADA_MODE with SADA_NUM 1, INDEX AUTO_TRACK_QEST
-        time_delta += 20.0
+        time_delta += 40.0
         # GOTO_TARGET Idle
         time_delta += 18.0
         # PAYLOAD_READ close file
+        time_delta += 42.0 # Delta between end of sequence and when MOC considers the slew to idle to be complete.
         # End of Observation
+        self.nirda_post_overhead_time = time_delta
+        self.visda_post_overhead_time = time_delta
 
 
 
