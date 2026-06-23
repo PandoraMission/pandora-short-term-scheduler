@@ -32,6 +32,26 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
+
+# Converters between payload XML text and NirdaData config values. Payload
+# values are sometimes written as floats (e.g. "5.0"), so ints are parsed
+# via float first.
+def _xml_to_int(value: str) -> int:
+    return int(float(value))
+
+
+def _int_to_xml(value) -> str:
+    return str(int(value))
+
+
+def _xml_to_bool(value: str) -> bool:
+    return bool(int(float(value)))
+
+
+def _bool_to_xml(value) -> str:
+    return str(int(bool(value)))
+
+
 @dataclass
 class NirdaData:
     """NIRDA timing and data-volume parameters for a single observation.
@@ -114,6 +134,33 @@ class NirdaData:
     integration_data : Quantity[byte]
         Data volume per science integration after on-board averaging.
     """
+
+    # Payload (PAN-SCICAL XML) integration. These are plain class attributes
+    # (no annotations) so the dataclass does not treat them as fields.
+    #
+    # PAYLOAD_SECTION : the payload element these config fields live under.
+    # CONFIG_SPEC     : maps a config field -> (xml_tag, from_xml, to_xml),
+    #                   describing how to read/write each field from/to the
+    #                   payload XML.
+    # REQUIRED_CONFIG_FIELDS : fields needed to compute SC_Integrations
+    #                   (average_groups only affects data volume, so it is
+    #                   optional).
+    PAYLOAD_SECTION = "AcquireInfCamImages"
+    CONFIG_SPEC = {
+        "roi_x_size": ("ROI_SizeX", _xml_to_int, _int_to_xml),
+        "roi_y_size": ("ROI_SizeY", _xml_to_int, _int_to_xml),
+        "reset_frames_1": ("SC_Resets1", _xml_to_int, _int_to_xml),
+        "reset_frames_2": ("SC_Resets2", _xml_to_int, _int_to_xml),
+        "drop_frames_1": ("SC_DropFrames1", _xml_to_int, _int_to_xml),
+        "drop_frames_2": ("SC_DropFrames2", _xml_to_int, _int_to_xml),
+        "drop_frames_3": ("SC_DropFrames3", _xml_to_int, _int_to_xml),
+        "read_frames": ("SC_ReadFrames", _xml_to_int, _int_to_xml),
+        "groups": ("SC_Groups", _xml_to_int, _int_to_xml),
+        "average_groups": ("AverageGroups", _xml_to_bool, _bool_to_xml),
+    }
+    REQUIRED_CONFIG_FIELDS = frozenset(
+        f for f in CONFIG_SPEC if f != "average_groups"
+    )
 
     # NIRDA observation configurations
     reset_frames_1: int = 50
@@ -371,3 +418,16 @@ class NirdaData:
             )
 
         return (duration, data, data * self.compression_ratio)
+
+    def get_config(self) -> dict:
+        """Return the current payload-config field values.
+
+        Returns
+        -------
+        dict
+            Maps each :data:`CONFIG_SPEC` field name to this instance's
+            current value (e.g. ``{'roi_x_size': 80, 'reset_frames_1': 50,
+            ...}``). Useful for reading the default detector configuration
+            when applying per-field overrides.
+        """
+        return {field: getattr(self, field) for field in self.CONFIG_SPEC}

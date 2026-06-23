@@ -772,3 +772,44 @@ class TestAdditionalOverheadInSolveDuration:
         nd = _make(additional_overhead_time=5e-3 * u.s)
         duration, _, _ = nd.solve_duration(0, 0 * u.s, 0 * u.s)
         assert duration.to(u.s).value == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Payload config spec / get_config
+# ---------------------------------------------------------------------------
+class TestNirdaConfigSpec:
+    """Tests for the payload config mapping and get_config()."""
+
+    def test_get_config_keys_match_spec(self):
+        """get_config returns exactly the CONFIG_SPEC field names."""
+        nd = NirdaData()
+        assert set(nd.get_config().keys()) == set(NirdaData.CONFIG_SPEC.keys())
+
+    def test_get_config_returns_current_values(self):
+        """get_config reflects this instance's field values."""
+        nd = _make(drop_frames_1=7, groups=9)
+        cfg = nd.get_config()
+        assert cfg["drop_frames_1"] == 7
+        assert cfg["groups"] == 9
+
+    def test_spec_fields_are_real_attributes(self):
+        """Every CONFIG_SPEC field is a real NirdaData attribute."""
+        nd = NirdaData()
+        for field_name in NirdaData.CONFIG_SPEC:
+            assert hasattr(nd, field_name)
+
+    def test_payload_section_is_inf_cam(self):
+        """NIRDA config lives under the AcquireInfCamImages payload."""
+        assert NirdaData.PAYLOAD_SECTION == "AcquireInfCamImages"
+
+    def test_required_fields_exclude_average_groups(self):
+        """average_groups is optional (affects data volume only)."""
+        assert "average_groups" not in NirdaData.REQUIRED_CONFIG_FIELDS
+        assert "groups" in NirdaData.REQUIRED_CONFIG_FIELDS
+
+    def test_roundtrip_converters(self):
+        """from_xml(to_xml(value)) round-trips for a sample field."""
+        tag, from_xml, to_xml = NirdaData.CONFIG_SPEC["drop_frames_1"]
+        assert from_xml(to_xml(5)) == 5
+        # Floats in the payload text parse to ints.
+        assert from_xml("5.0") == 5

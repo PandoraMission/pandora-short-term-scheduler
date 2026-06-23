@@ -458,3 +458,45 @@ class TestVissciVsVisimg:
         vd_img = _make(is_vissci=False)
         assert vd_sci.single_frame_time == vd_img.single_frame_time
         assert vd_sci.pixels_per_frame == vd_img.pixels_per_frame
+
+
+# ---------------------------------------------------------------------------
+# Payload config spec / get_config
+# ---------------------------------------------------------------------------
+class TestVisdaConfigSpec:
+    """Tests for the payload config mapping and get_config()."""
+
+    def test_get_config_keys_match_spec(self):
+        """get_config returns exactly the CONFIG_SPEC field names."""
+        vd = VisdaData()
+        assert set(vd.get_config().keys()) == set(VisdaData.CONFIG_SPEC.keys())
+
+    def test_get_config_returns_current_values(self):
+        """get_config reflects this instance's field values."""
+        vd = _make(frames_per_coadd=3, num_rois=4)
+        cfg = vd.get_config()
+        assert cfg["frames_per_coadd"] == 3
+        assert cfg["num_rois"] == 4
+
+    def test_spec_fields_are_real_attributes(self):
+        """Every CONFIG_SPEC field is a real VisdaData attribute."""
+        vd = VisdaData()
+        for field_name in VisdaData.CONFIG_SPEC:
+            assert hasattr(vd, field_name)
+
+    def test_payload_section_is_vis_cam(self):
+        """VISDA config lives under the AcquireVisCamScienceData payload."""
+        assert VisdaData.PAYLOAD_SECTION == "AcquireVisCamScienceData"
+
+    def test_required_fields(self):
+        """Exposure and frames-per-coadd are required; ROI fields are not."""
+        assert "exposure_time_s" in VisdaData.REQUIRED_CONFIG_FIELDS
+        assert "frames_per_coadd" in VisdaData.REQUIRED_CONFIG_FIELDS
+        assert "roi_dimension" not in VisdaData.REQUIRED_CONFIG_FIELDS
+
+    def test_exposure_converters_microseconds(self):
+        """Exposure round-trips through the microsecond payload encoding."""
+        tag, from_xml, to_xml = VisdaData.CONFIG_SPEC["exposure_time_s"]
+        # 0.2 s default -> "200000" us -> 0.2 s
+        assert to_xml(0.2 * u.s) == "200000"
+        assert abs(from_xml("200000").to(u.s).value - 0.2) < 1e-9

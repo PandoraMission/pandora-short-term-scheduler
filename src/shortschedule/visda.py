@@ -29,6 +29,26 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
+
+# Converters between payload XML text and VisdaData config values. Payload
+# values are sometimes written as floats (e.g. "5.0"), so ints are parsed
+# via float first. Exposure time is stored on the payload in microseconds.
+def _xml_to_int(value: str) -> int:
+    return int(float(value))
+
+
+def _int_to_xml(value) -> str:
+    return str(int(value))
+
+
+def _xml_to_exposure(value: str) -> Quantity:
+    return int(float(value)) * u.us
+
+
+def _exposure_to_xml(value: Quantity) -> str:
+    return str(int(value.to(u.us).value))
+
+
 @dataclass
 class VisdaData:
     """VISDA timing and data-volume parameters for a single observation.
@@ -79,6 +99,31 @@ class VisdaData:
     dropped_integration_time : Quantity[second]
         Wall-clock duration of the dropped-frame buffer.
     """
+
+    # Payload (PAN-SCICAL XML) integration. These are plain class attributes
+    # (no annotations) so the dataclass does not treat them as fields.
+    #
+    # PAYLOAD_SECTION : the payload element these config fields live under.
+    # CONFIG_SPEC     : maps a config field -> (xml_tag, from_xml, to_xml),
+    #                   describing how to read/write each field from/to the
+    #                   payload XML.
+    # REQUIRED_CONFIG_FIELDS : fields needed to compute
+    #                   NumTotalFramesRequested (the ROI fields only affect
+    #                   data volume, so they are optional).
+    PAYLOAD_SECTION = "AcquireVisCamScienceData"
+    CONFIG_SPEC = {
+        "exposure_time_s": (
+            "ExposureTime_us",
+            _xml_to_exposure,
+            _exposure_to_xml,
+        ),
+        "frames_per_coadd": ("FramesPerCoadd", _xml_to_int, _int_to_xml),
+        "roi_dimension": ("StarRoiDimension", _xml_to_int, _int_to_xml),
+        "num_rois": ("MaxNumStarRois", _xml_to_int, _int_to_xml),
+    }
+    REQUIRED_CONFIG_FIELDS = frozenset(
+        ("exposure_time_s", "frames_per_coadd")
+    )
 
     # VISDA observation configurations
     frames_per_coadd: int = 5
@@ -226,3 +271,17 @@ class VisdaData:
             duration = integrations * self.single_frame_time + overhead_time
 
         return (duration, data, data * self.compression_ratio)
+    
+    def get_config(self) -> dict:
+        """Return the current payload-config field values.
+
+        Returns
+        -------
+        dict
+            Maps each :data:`CONFIG_SPEC` field name to this instance's
+            current value (e.g. ``{'frames_per_coadd': 5,
+            'exposure_time_s': <Quantity 0.2 s>, ...}``). Useful for reading
+            the default detector configuration when applying per-field
+            overrides.
+        """
+        return {field: getattr(self, field) for field in self.CONFIG_SPEC}
