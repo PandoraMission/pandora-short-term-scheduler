@@ -259,6 +259,7 @@ class ScheduleProcessor:
         calendar: ScienceCalendar,
         window_start: Optional[Any] = None,
         window_duration_days: int = 21,
+        merge_similar_observations: bool = False,
         verbose: bool = False,
     ) -> ScienceCalendar:
         """Process a `ScienceCalendar` and return an updated calendar.
@@ -283,6 +284,11 @@ class ScheduleProcessor:
             ISO string or Time object indicating the window start.
         window_duration_days : int, optional
             Number of days to include in the processing window.
+        merge_similar_observations : bool, optional
+            When True, adjacent observation sequences in the same visit that
+            share the same target and pointing are merged into a single
+            longer sequence.
+            Defaults to False.
         verbose : bool, optional
             Print diagnostics when True.
 
@@ -327,6 +333,20 @@ class ScheduleProcessor:
             verbose=verbose,
             precomputed_rolls=self._computed_target_rolls,
         )
+
+        # Optionally merge back-to-back same-target sequences within each
+        # visit. This runs *after* all gap-filling, trimming, and other
+        # duration/timing adjustments so it operates on the final scheduled
+        # boundaries. Because merging extends a sequence over its neighbor,
+        # the merged sequences' payload integration counts are recomputed
+        # for their new combined durations.
+        if merge_similar_observations:
+            processed_calendar = self._merge_similar_observations(
+                processed_calendar, verbose
+            )
+            processed_calendar = self._update_payload_parameters(
+                processed_calendar
+            )
 
         # Analyze processed calendar
         self._analyze_processed_calendar(processed_calendar)
@@ -465,6 +485,104 @@ class ScheduleProcessor:
         return ScienceCalendar(
             metadata=calendar.metadata, visits=windowed_visits
         )
+
+    # Tolerances used when deciding whether two sequences can be merged.
+    _MERGE_ADJACENCY_TOL_SEC = 1.0  # max stop-to-start gap (seconds)
+    _MERGE_POINTING_TOL_DEG = 1e-6  # max RA/Dec difference (degrees)
+
+    def _merge_similar_observations(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> ScienceCalendar:
+        """Merge back-to-back same-target sequences within each visit.
+
+        Two consecutive sequences (in start-time order) inside the same
+        visit are merged when they:
+
+        1. belong to the same visit (sequences are grouped per visit),
+        2. observe the same target with the same pointing (RA/Dec), and
+        3. are contiguous in time, the second sequence starts at (within
+           a tolerance of) the first sequence's stop time.
+
+        The merged sequence keeps the first sequence's identity, priority,
+        and payload parameters, and extends its ``stop_time`` to the second
+        sequence's ``stop_time``. Merging is applied transitively, so a run
+        of three or more contiguous same-target sequences collapses into a
+        single sequence.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar to merge in place-safe fashion (a new calendar with
+            new visits/sequences is returned; the input is not mutated).
+        verbose : bool, optional
+            If True, print a line for each merge performed.
+
+        Returns
+        -------
+        ScienceCalendar
+            Calendar with eligible sequences merged.
+        """
+        merged_count = 0
+        new_visits: List[Visit] = []
+
+        for visit in calendar.visits:
+            # Process sequences in chronological order so "right after each
+            # other" is well defined regardless of input ordering.
+            ordered = sorted(visit.sequences, key=lambda s: s.start_time)
+
+            merged_sequences: List[ObservationSequence] = []
+            for seq in ordered:
+                if merged_sequences and self._can_merge(merged_sequences[-1], seq):
+                    # Extend the previous (kept) sequence over this one.
+                    previous = merged_sequences[-1]
+                    if verbose:
+                        print(
+                            f"Merging visit {visit.id} sequence {seq.id} "
+                            f"into {previous.id} "
+                            f"(target {previous.target}): stop "
+                            f"{previous.stop_time_str} -> {seq.stop_time_str}"
+                        )
+                    previous.stop_time = seq.stop_time
+                    merged_count += 1
+                else:
+                    # Copy so the returned calendar never aliases the input.
+                    merged_sequences.append(seq.copy())
+
+            new_visits.append(Visit(id=visit.id, sequences=merged_sequences))
+
+        if verbose:
+            print(
+                f"Merged {merged_count} similar observation sequence(s) "
+                f"across {len(calendar.visits)} visit(s)."
+            )
+
+        return ScienceCalendar(
+            metadata=calendar.metadata,
+            visits=new_visits,
+            visibility=calendar.visibility,
+        )
+
+    def _can_merge(
+        self, first: ObservationSequence, second: ObservationSequence
+    ) -> bool:
+        """Return True if ``second`` can be merged into ``first``.
+
+        See :meth:`_merge_similar_observations` for the merge criteria.
+        """
+        # Same target (case-insensitive, whitespace-insensitive).
+        if (first.target or "").strip().lower() != (second.target or "").strip().lower():
+            return False
+
+        # Same pointing.
+        if (
+            abs(first.ra - second.ra) > self._MERGE_POINTING_TOL_DEG
+            or abs(first.dec - second.dec) > self._MERGE_POINTING_TOL_DEG
+        ):
+            return False
+
+        # Contiguous in time: second starts when first stops.
+        gap_sec = (second.start_time - first.stop_time).sec
+        return abs(gap_sec) <= self._MERGE_ADJACENCY_TOL_SEC
 
     def _process_all_sequences(
         self, calendar: ScienceCalendar, verbose: bool = False

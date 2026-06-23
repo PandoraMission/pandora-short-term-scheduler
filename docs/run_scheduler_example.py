@@ -83,6 +83,7 @@ processed_calendar = scheduler.process_calendar(
     original_calendar,
     window_start=window_start,
     window_duration_days=window_duration_days,
+    merge_similar_observations=True
 )
 
 # ---------------------------------------------------------------------------
