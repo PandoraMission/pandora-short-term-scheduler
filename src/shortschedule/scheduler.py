@@ -2141,15 +2141,13 @@ class ScheduleProcessor:
         sequence = self._update_VDA_integrations(
             sequence,
             duration,
-            pre_sequence_overhead=self.overhead.visda_pre_overhead_time,
-            post_sequence_overhead=self.overhead.visda_post_overhead_time,
+            overhead=self.overhead,
             override_fields=visda_fields,
         )
         sequence = self._update_NIRDA_integrations(
             sequence,
             duration,
-            pre_sequence_overhead=self.overhead.nirda_pre_overhead_time,
-            post_sequence_overhead=self.overhead.nirda_post_overhead_time,
+            overhead=self.overhead,
             override_fields=nirda_fields,
         )
 
@@ -2159,8 +2157,7 @@ class ScheduleProcessor:
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        pre_sequence_overhead: TimeDelta = 260 * u.s,
-        post_sequence_overhead: TimeDelta = 102 * u.s,
+        overhead: Optional[OverheadTiming] = None,
         override_fields: Any = (),
     ) -> ObservationSequence:
         """Set NumTotalFramesRequested using a ``VisdaData`` model.
@@ -2169,8 +2166,19 @@ class ScheduleProcessor:
         ``AcquireVisCamScienceData`` payload (or, for any field listed in
         *override_fields*, from the ``VisdaData`` defaults), and the frame
         count that fits the sequence duration -- net of the pre/post
-        overheads -- is computed by ``VisdaData.solve_integrations``.
+        overheads in *overhead* -- is computed by
+        ``VisdaData.solve_integrations``.
+
+        Parameters
+        ----------
+        overhead : OverheadTiming, optional
+            Overhead timings to apply. Defaults to ``self.overhead`` (built
+            once at construction); a bare ``OverheadTiming`` is used only if
+            the processor has none.
         """
+        if overhead is None:
+            overhead = getattr(self, "overhead", None) or OverheadTiming()
+
         # Detector read time is not represented in the payload; the existing
         # scheduling math treats a frame as taking exactly the exposure time.
         visda, info = self._build_payload_data(
@@ -2192,10 +2200,6 @@ class ScheduleProcessor:
                 "AcquireVisCamScienceData", tag, text
             )
 
-        overhead = OverheadTiming(
-            visda_pre_overhead_time=pre_sequence_overhead.to(u.s),
-            visda_post_overhead_time=post_sequence_overhead.to(u.s),
-        )
         frames, data, data_compressed = visda.solve_integrations(
             duration.to(u.s), overhead
         )
@@ -2219,8 +2223,7 @@ class ScheduleProcessor:
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        pre_sequence_overhead: TimeDelta = 258 * u.s,
-        post_sequence_overhead: TimeDelta = 102 * u.s,
+        overhead: Optional[OverheadTiming] = None,
         override_fields: Any = (),
     ) -> ObservationSequence:
         """Set SC_Integrations using a ``NirdaData`` model.
@@ -2229,9 +2232,19 @@ class ScheduleProcessor:
         ``AcquireInfCamImages`` payload (or, for any field listed in
         *override_fields*, from the ``NirdaData`` defaults), and the number
         of integrations that fit the sequence duration -- net of the
-        pre/post overheads -- is computed by
+        pre/post overheads in *overhead* -- is computed by
         ``NirdaData.solve_integrations``.
+
+        Parameters
+        ----------
+        overhead : OverheadTiming, optional
+            Overhead timings to apply. Defaults to ``self.overhead`` (built
+            once at construction); a bare ``OverheadTiming`` is used only if
+            the processor has none.
         """
+        if overhead is None:
+            overhead = getattr(self, "overhead", None) or OverheadTiming()
+
         nirda, info = self._build_payload_data(
             sequence,
             override_fields,
@@ -2253,10 +2266,6 @@ class ScheduleProcessor:
         for tag, text in info.items():
             sequence.set_payload_parameter("AcquireInfCamImages", tag, text)
 
-        overhead = OverheadTiming(
-            nirda_pre_overhead_time=pre_sequence_overhead.to(u.s),
-            nirda_post_overhead_time=post_sequence_overhead.to(u.s),
-        )
         integrations, data, data_compressed = nirda.solve_integrations(
             duration.to(u.s), overhead
         )

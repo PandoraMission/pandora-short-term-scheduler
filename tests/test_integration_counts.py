@@ -153,6 +153,20 @@ def _visda_overhead(pre_sec=0.0, post_sec=0.0):
     )
 
 
+def _overhead(pre=0 * u.s, post=0 * u.s):
+    """OverheadTiming applying the same pre/post to both detectors.
+
+    Lets a test pass one overhead to either the VDA or NIRDA update without
+    caring which detector reads which field.
+    """
+    return OverheadTiming(
+        visda_pre_overhead_time=pre,
+        visda_post_overhead_time=post,
+        nirda_pre_overhead_time=pre,
+        nirda_post_overhead_time=post,
+    )
+
+
 def _expected_vda_frames(
     duration_sec,
     *,
@@ -190,14 +204,12 @@ class TestUpdateVDAIntegrations:
         seq_no = sched._update_VDA_integrations(
             copy.deepcopy(seq),
             duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
         )
         seq_with = sched._update_VDA_integrations(
             copy.deepcopy(seq),
             duration,
-            pre_sequence_overhead=260 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(260 * u.s, 60 * u.s),
         )
 
         frames_no = int(
@@ -225,8 +237,7 @@ class TestUpdateVDAIntegrations:
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
         )
         frames = int(
             seq_out.get_payload_parameter(
@@ -247,8 +258,7 @@ class TestUpdateVDAIntegrations:
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=260 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(260 * u.s, 60 * u.s),
         )
         frames = int(
             seq_out.get_payload_parameter(
@@ -269,8 +279,7 @@ class TestUpdateVDAIntegrations:
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=260 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(260 * u.s, 60 * u.s),
         )
         frames = int(
             seq_out.get_payload_parameter(
@@ -291,8 +300,7 @@ class TestUpdateVDAIntegrations:
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=260 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(260 * u.s, 60 * u.s),
         )
         frames = int(
             seq_out.get_payload_parameter(
@@ -315,8 +323,7 @@ class TestUpdateVDAIntegrations:
         seq_out = sched._update_VDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=100 * u.s,
-            post_sequence_overhead=50 * u.s,
+            overhead=_overhead(100 * u.s, 50 * u.s),
         )
         frames = int(
             seq_out.get_payload_parameter(
@@ -384,14 +391,12 @@ class TestUpdateNIRDAIntegrations:
         seq_no = sched._update_NIRDA_integrations(
             copy.deepcopy(seq),
             duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
         )
         seq_with = sched._update_NIRDA_integrations(
             copy.deepcopy(seq),
             duration,
-            pre_sequence_overhead=258 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(258 * u.s, 60 * u.s),
         )
 
         integ_no = int(
@@ -414,8 +419,7 @@ class TestUpdateNIRDAIntegrations:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
         )
         integ = int(
             seq_out.get_payload_parameter(
@@ -433,8 +437,7 @@ class TestUpdateNIRDAIntegrations:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=258 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(258 * u.s, 60 * u.s),
         )
         integ = int(
             seq_out.get_payload_parameter(
@@ -457,8 +460,7 @@ class TestUpdateNIRDAIntegrations:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=258 * u.s,
-            post_sequence_overhead=60 * u.s,
+            overhead=_overhead(258 * u.s, 60 * u.s),
         )
         integ = int(
             seq_out.get_payload_parameter(
@@ -478,8 +480,7 @@ class TestUpdateNIRDAIntegrations:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             duration,
-            pre_sequence_overhead=start_oh * u.s,
-            post_sequence_overhead=end_oh * u.s,
+            overhead=_overhead(start_oh * u.s, end_oh * u.s),
         )
         integ = int(
             seq_out.get_payload_parameter(
@@ -515,8 +516,7 @@ class TestUpdateNIRDAIntegrations:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             seq.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
         )
 
         integ = int(
@@ -764,8 +764,7 @@ class TestNirdaParameterOverride:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             seq.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
             override_fields=["drop_frames_1", "drop_frames_3"],
         )
 
@@ -789,8 +788,7 @@ class TestNirdaParameterOverride:
         seq_out = sched._update_NIRDA_integrations(
             seq,
             seq.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
             override_fields=["drop_frames_1"],
         )
         drop2 = seq_out.get_payload_parameter(
@@ -813,14 +811,12 @@ class TestNirdaParameterOverride:
         out_no = sched._update_NIRDA_integrations(
             seq_a,
             seq_a.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
         )
         out_override = sched._update_NIRDA_integrations(
             seq_b,
             seq_b.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
             override_fields=["reset_frames_1"],
         )
         integ_no = int(
@@ -852,8 +848,7 @@ class TestVisdaParameterOverride:
         seq_out = sched._update_VDA_integrations(
             seq,
             seq.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
             override_fields=["frames_per_coadd"],
         )
         fpc = seq_out.get_payload_parameter(
@@ -877,8 +872,7 @@ class TestVisdaParameterOverride:
         seq_out = sched._update_VDA_integrations(
             seq,
             seq.duration,
-            pre_sequence_overhead=0 * u.s,
-            post_sequence_overhead=0 * u.s,
+            overhead=_overhead(),
             override_fields=["exposure_time_s"],
         )
         exposure = seq_out.get_payload_parameter(
@@ -980,8 +974,7 @@ class TestDataSizeWarnings:
             sched._update_VDA_integrations(
                 seq,
                 seq.duration,
-                pre_sequence_overhead=0 * u.s,
-                post_sequence_overhead=0 * u.s,
+                overhead=_overhead(),
             )
 
     def test_vda_within_limits_no_warning(self):
@@ -1000,8 +993,7 @@ class TestDataSizeWarnings:
             sched._update_VDA_integrations(
                 seq,
                 seq.duration,
-                pre_sequence_overhead=0 * u.s,
-                post_sequence_overhead=0 * u.s,
+                overhead=_overhead(),
             )
 
     def test_nirda_oversize_raises_warning(self):
@@ -1029,8 +1021,7 @@ class TestDataSizeWarnings:
             sched._update_NIRDA_integrations(
                 seq,
                 seq.duration,
-                pre_sequence_overhead=0 * u.s,
-                post_sequence_overhead=0 * u.s,
+                overhead=_overhead(),
             )
 
     def test_no_limits_attribute_no_warning(self):
@@ -1046,8 +1037,7 @@ class TestDataSizeWarnings:
             sched._update_VDA_integrations(
                 seq,
                 seq.duration,
-                pre_sequence_overhead=0 * u.s,
-                post_sequence_overhead=0 * u.s,
+                overhead=_overhead(),
             )
 
     def test_limits_stored_with_defaults(self):
