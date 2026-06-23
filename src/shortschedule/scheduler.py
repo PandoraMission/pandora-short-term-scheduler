@@ -15,6 +15,7 @@ are provided. The processor performs these high-level steps:
 # Standard library
 import copy
 import uuid
+import warnings
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -70,6 +71,8 @@ class ScheduleProcessor:
         nirda_post_sequence_overhead: u.Quantity | None = None,
         override_nirda_parameters: Optional[Dict[int, List[str]]] = None,
         override_visda_parameters: Optional[Dict[int, List[str]]] = None,
+        max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
+        max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -123,6 +126,16 @@ class ScheduleProcessor:
             ``override_nirda_parameters`` but using ``VisdaData`` field
             names (e.g. ``frames_per_coadd``, ``exposure_time_s``).
             Defaults to no overrides.
+        max_file_size_uncompressed : Quantity[byte], optional
+            Maximum allowed *uncompressed* data volume per detector per
+            sequence. A warning is raised during the payload-update step if a
+            sequence's computed NIRDA or VISDA data exceeds this.
+            Defaults to 830 MB.
+        max_file_size_compressed : Quantity[byte], optional
+            Maximum allowed *compressed* data volume per detector per
+            sequence. A warning is raised if a sequence's computed compressed
+            NIRDA or VISDA data exceeds this.
+            Defaults to 255 MB.
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -270,6 +283,12 @@ class ScheduleProcessor:
         self._override_visda_parameters: Dict[int, List[str]] = (
             override_visda_parameters or {}
         )
+
+        # Per-observation data-volume limits. A warning is raised during the
+        # payload-update step if a sequence's computed NIRDA/VISDA data
+        # exceeds these.
+        self.max_file_size_uncompressed = max_file_size_uncompressed
+        self.max_file_size_compressed = max_file_size_compressed
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -2059,6 +2078,51 @@ class ScheduleProcessor:
             return None, missing
         return data_cls(**kwargs), writeback
 
+    def _warn_if_data_exceeds_limits(
+        self,
+        sequence: ObservationSequence,
+        detector: str,
+        data: u.Quantity,
+        data_compressed: u.Quantity,
+    ) -> None:
+        """Warn if a sequence's computed data volume exceeds the limits.
+
+        Compares the *uncompressed* ``data`` against
+        ``max_file_size_uncompressed`` and the *compressed*
+        ``data_compressed`` against ``max_file_size_compressed``, emitting a
+        ``UserWarning`` for each limit that is exceeded.
+        """
+        max_uncompressed = getattr(self, "max_file_size_uncompressed", None)
+        max_compressed = getattr(self, "max_file_size_compressed", None)
+
+        seq_id = (
+            f"{detector} sequence {sequence.id} "
+            f"({sequence.target} @ {sequence.start_time.isot})"
+        )
+
+        if (
+            max_uncompressed is not None
+            and data.to(u.byte).value > max_uncompressed.to(u.byte).value
+        ):
+            warnings.warn(
+                f"{seq_id}: uncompressed data "
+                f"{data.to(u.byte).value / 1e6:.1f} MB exceeds limit "
+                f"{max_uncompressed.to(u.byte).value / 1e6:.1f} MB",
+                stacklevel=2,
+            )
+
+        if (
+            max_compressed is not None
+            and data_compressed.to(u.byte).value
+            > max_compressed.to(u.byte).value
+        ):
+            warnings.warn(
+                f"{seq_id}: compressed data "
+                f"{data_compressed.to(u.byte).value / 1e6:.1f} MB exceeds "
+                f"limit {max_compressed.to(u.byte).value / 1e6:.1f} MB",
+                stacklevel=2,
+            )
+
     def _update_payload_parameters_sequence(
         self, sequence: ObservationSequence
     ) -> ObservationSequence:
@@ -2132,7 +2196,12 @@ class ScheduleProcessor:
             visda_pre_overhead_time=pre_sequence_overhead.to(u.s),
             visda_post_overhead_time=post_sequence_overhead.to(u.s),
         )
-        frames, _, _ = visda.solve_integrations(duration.to(u.s), overhead)
+        frames, data, data_compressed = visda.solve_integrations(
+            duration.to(u.s), overhead
+        )
+        self._warn_if_data_exceeds_limits(
+            sequence, "VISDA", data, data_compressed
+        )
 
         success = sequence.set_payload_parameter(
             "AcquireVisCamScienceData",
@@ -2188,8 +2257,11 @@ class ScheduleProcessor:
             nirda_pre_overhead_time=pre_sequence_overhead.to(u.s),
             nirda_post_overhead_time=post_sequence_overhead.to(u.s),
         )
-        integrations, _, _ = nirda.solve_integrations(
+        integrations, data, data_compressed = nirda.solve_integrations(
             duration.to(u.s), overhead
+        )
+        self._warn_if_data_exceeds_limits(
+            sequence, "NIRDA", data, data_compressed
         )
 
         success = sequence.set_payload_parameter(

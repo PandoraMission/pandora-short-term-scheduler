@@ -1,6 +1,7 @@
 # Standard library
 import copy
 import unittest.mock as mock
+import warnings
 import xml.etree.ElementTree as ET
 
 # Third-party
@@ -944,6 +945,133 @@ class TestOverrideRoutingByPriority:
             proc = ScheduleProcessor("L1", "L2")
         assert proc._override_nirda_parameters == {}
         assert proc._override_visda_parameters == {}
+
+
+# ---------------------------------------------------------------------------
+# Data-volume limit warnings
+# ---------------------------------------------------------------------------
+
+
+def _sched_with_limits(max_uncompressed, max_compressed):
+    """Bare ScheduleProcessor carrying only the data-volume limits."""
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    sched.max_file_size_uncompressed = max_uncompressed
+    sched.max_file_size_compressed = max_compressed
+    return sched
+
+
+class TestDataSizeWarnings:
+    """The scheduler warns when computed data exceeds the size limits."""
+
+    def test_vda_oversize_raises_warning(self):
+        """A VISDA sequence over the uncompressed limit warns."""
+        # 1800 s at 0.1 s/frame -> 18000 frames; default ROI gives a large
+        # data volume that exceeds 830 MB uncompressed.
+        seq = _make_vda_seq(
+            duration_sec=1800,
+            exposure_us=100_000,
+            frames_per_coadd=1,
+        )
+        sched = _sched_with_limits(
+            830.0 * 1000 * 1000 * u.byte,
+            255.0 * 1000 * 1000 * u.byte,
+        )
+        with pytest.warns(UserWarning, match="exceeds"):
+            sched._update_VDA_integrations(
+                seq,
+                seq.duration,
+                pre_sequence_overhead=0 * u.s,
+                post_sequence_overhead=0 * u.s,
+            )
+
+    def test_vda_within_limits_no_warning(self):
+        """A small VISDA sequence under the limits must not warn."""
+        seq = _make_vda_seq(
+            duration_sec=60,
+            exposure_us=1_000_000,
+            frames_per_coadd=1,
+        )
+        sched = _sched_with_limits(
+            830.0 * 1000 * 1000 * u.byte,
+            255.0 * 1000 * 1000 * u.byte,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            sched._update_VDA_integrations(
+                seq,
+                seq.duration,
+                pre_sequence_overhead=0 * u.s,
+                post_sequence_overhead=0 * u.s,
+            )
+
+    def test_nirda_oversize_raises_warning(self):
+        """A NIRDA sequence over the uncompressed limit warns."""
+        # Many groups + single read frame + long window pack many
+        # integrations' worth of saved frames into the window, inflating the
+        # data volume past the limit.
+        seq = _make_nirda_seq(
+            duration_sec=5000,
+            roi_x=200,
+            roi_y=200,
+            sc_resets1=1,
+            sc_resets2=1,
+            sc_drop1=0,
+            sc_drop2=0,
+            sc_drop3=0,
+            sc_read=1,
+            sc_groups=20,
+        )
+        sched = _sched_with_limits(
+            830.0 * 1000 * 1000 * u.byte,
+            255.0 * 1000 * 1000 * u.byte,
+        )
+        with pytest.warns(UserWarning, match="exceeds"):
+            sched._update_NIRDA_integrations(
+                seq,
+                seq.duration,
+                pre_sequence_overhead=0 * u.s,
+                post_sequence_overhead=0 * u.s,
+            )
+
+    def test_no_limits_attribute_no_warning(self):
+        """A bare processor without limits set must not warn (or crash)."""
+        seq = _make_vda_seq(
+            duration_sec=1800,
+            exposure_us=100_000,
+            frames_per_coadd=1,
+        )
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            sched._update_VDA_integrations(
+                seq,
+                seq.duration,
+                pre_sequence_overhead=0 * u.s,
+                post_sequence_overhead=0 * u.s,
+            )
+
+    def test_limits_stored_with_defaults(self):
+        """Constructor stores the default data-volume limits."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor("L1", "L2")
+        assert proc.max_file_size_uncompressed.to(u.byte).value == (
+            830.0 * 1000 * 1000
+        )
+        assert proc.max_file_size_compressed.to(u.byte).value == (
+            255.0 * 1000 * 1000
+        )
+
+    def test_limits_overridable(self):
+        """Constructor accepts custom data-volume limits."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor(
+                "L1",
+                "L2",
+                max_file_size_uncompressed=1.0 * u.byte,
+                max_file_size_compressed=2.0 * u.byte,
+            )
+        assert proc.max_file_size_uncompressed == 1.0 * u.byte
+        assert proc.max_file_size_compressed == 2.0 * u.byte
 
 
 # ---------------------------------------------------------------------------
