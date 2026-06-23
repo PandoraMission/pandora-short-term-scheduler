@@ -20,12 +20,17 @@ Two integration lengths are tracked: the *first* integration (which uses
 shorter ``reset_frames_2``).
 """
 
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
 
 from astropy import units as u
 from astropy.units import Quantity
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .overhead import OverheadTiming
 
 @dataclass
 class NirdaData:
@@ -262,8 +267,7 @@ class NirdaData:
     def solve_integrations(
         self,
         duration: Quantity,
-        pre_overhead_time: Quantity = 258.0 * u.s,
-        post_overhead_time: Quantity = 102.0 * u.s,
+        overhead: OverheadTiming = None
     ):
         """Compute the number of integrations that fit within a duration.
 
@@ -271,10 +275,9 @@ class NirdaData:
         ----------
         duration : Quantity[second]
             Total available observation time.
-        pre_overhead_time : Quantity[second], optional
-            Fixed overhead before science integrations begin.
-        post_overhead_time : Quantity[second], optional
-            Fixed overhead after science integrations end.
+        overhead : OverheadTiming, default=None
+            Overhead timings for nirda and visda.
+            If None, then use default overheads.
 
         Returns
         -------
@@ -285,11 +288,17 @@ class NirdaData:
         data_compressed : Quantity[byte]
             Total compressed data volume.
         """
+
+        if overhead is None:
+            # Use default overheads
+            from .overhead import OverheadTiming
+            overhead = OverheadTiming()
+
         buffered_time = (
-            duration.to(u.s)
-            - pre_overhead_time.to(u.s)
-            - post_overhead_time.to(u.s)
-            - self.additional_overhead_time.to(u.s)
+            duration
+            - overhead.nirda_pre_overhead_time
+            - overhead.nirda_post_overhead_time
+            - self.additional_overhead_time
         )
         buffered_time = max(0, buffered_time.value) * u.s
 
@@ -313,8 +322,7 @@ class NirdaData:
     def solve_duration(
         self,
         integrations: int,
-        pre_overhead_time: Quantity = 258.0 * u.s,
-        post_overhead_time: Quantity = 102.0 * u.s,
+        overhead: OverheadTiming = None
     ):
         """Compute the total duration required to acquire a given number of integrations.
 
@@ -322,10 +330,9 @@ class NirdaData:
         ----------
         integrations : int
             Desired number of science integrations.
-        pre_overhead_time : Quantity[second], optional
-            Fixed overhead before science integrations begin.
-        post_overhead_time : Quantity[second], optional
-            Fixed overhead after science integrations end.
+        overhead : OverheadTiming, default=None
+            Overhead timings for nirda and visda.
+            If None, then use default overheads.
 
         Returns
         -------
@@ -343,7 +350,13 @@ class NirdaData:
         as-is rather than changed to compensate for drops.
         """
         integrations = max(0, integrations)
-        overhead_time = pre_overhead_time + post_overhead_time + self.additional_overhead_time
+        
+        if overhead is None:
+            # Use default overheads
+            from .overhead import OverheadTiming
+            overhead = OverheadTiming()
+        
+        overhead_time = overhead.nirda_pre_overhead_time + overhead.nirda_post_overhead_time + self.additional_overhead_time
         data = integrations * self.integration_data
 
         if integrations == 0:

@@ -17,7 +17,7 @@ import pytest
 from astropy import units as u
 
 # First-party/Local
-from shortschedule.data.visda import VisdaData
+from shortschedule.visda import VisdaData
 
 # ---------------------------------------------------------------------------
 # Shared test fixture — small, round-number parameters for easy hand calculation
