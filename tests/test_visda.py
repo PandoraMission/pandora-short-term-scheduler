@@ -17,7 +17,16 @@ import pytest
 from astropy import units as u
 
 # First-party/Local
+from shortschedule.overhead import OverheadTiming
 from shortschedule.visda import VisdaData
+
+
+def _visda_overhead(pre=0 * u.s, post=0 * u.s):
+    """OverheadTiming carrying only the VISDA pre/post overheads under test."""
+    return OverheadTiming(
+        visda_pre_overhead_time=pre,
+        visda_post_overhead_time=post,
+    )
 
 # ---------------------------------------------------------------------------
 # Shared test fixture — small, round-number parameters for easy hand calculation
@@ -235,7 +244,7 @@ class TestSolveIntegrations:
     def test_zero_duration_yields_zero_frames(self):
         """A zero-length window should produce no frames."""
         vd = _make()
-        frames, data, data_c = vd.solve_integrations(0.0 * u.s, 0 * u.s, 0 * u.s)
+        frames, data, data_c = vd.solve_integrations(0.0 * u.s, _visda_overhead())
         assert frames == 0
         assert data.to(u.byte).value == 0
         assert data_c.to(u.byte).value == 0
@@ -245,14 +254,14 @@ class TestSolveIntegrations:
         vd = _make()
         # Seven frames' worth of time, plus a tiny guard, must floor to 5.
         duration = vd.single_frame_time * 7 * (1 + 1e-9)
-        frames, _, _ = vd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        frames, _, _ = vd.solve_integrations(duration, _visda_overhead())
         assert frames == 5
 
     def test_exact_coadd_window(self):
         """Time for exactly one coadd should give frames_per_coadd frames."""
         vd = _make()
         duration = vd.single_frame_time * _COADD * (1 + 1e-9)
-        frames, _, _ = vd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        frames, _, _ = vd.solve_integrations(duration, _visda_overhead())
         assert frames == _COADD
 
     def test_frames_always_multiple_of_coadd(self):
@@ -260,16 +269,16 @@ class TestSolveIntegrations:
         vd = _make()
         for n in range(1, 40):
             duration = vd.single_frame_time * n * (1 + 1e-9)
-            frames, _, _ = vd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+            frames, _, _ = vd.solve_integrations(duration, _visda_overhead())
             assert frames % _COADD == 0
 
     def test_overhead_reduces_frames(self):
         """Adding overhead should reduce the number of frames."""
         vd = _make()
         duration = vd.single_frame_time * 20
-        n_no_oh, _, _ = vd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        n_no_oh, _, _ = vd.solve_integrations(duration, _visda_overhead())
         n_with_oh, _, _ = vd.solve_integrations(
-            duration, vd.single_frame_time * 10, 0 * u.s
+            duration, _visda_overhead(vd.single_frame_time * 10)
         )
         assert n_with_oh < n_no_oh
 
@@ -278,15 +287,15 @@ class TestSolveIntegrations:
         vd_no_oh = _make(additional_overhead_time=0 * u.s)
         vd_with_oh = _make(additional_overhead_time=_SFT * 10 * u.s)
         duration = _make().single_frame_time * 20
-        n_no, _, _ = vd_no_oh.solve_integrations(duration, 0 * u.s, 0 * u.s)
-        n_with, _, _ = vd_with_oh.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        n_no, _, _ = vd_no_oh.solve_integrations(duration, _visda_overhead())
+        n_with, _, _ = vd_with_oh.solve_integrations(duration, _visda_overhead())
         assert n_with < n_no
 
     def test_data_scales_with_frames(self):
         """data should equal frames * frame_bytes."""
         vd = _make()
         frames, data, _ = vd.solve_integrations(
-            vd.single_frame_time * 20, 0 * u.s, 0 * u.s
+            vd.single_frame_time * 20, _visda_overhead()
         )
         expected = frames * vd.frame_bytes
         assert abs(data.to(u.byte).value - expected.to(u.byte).value) < 1e-6
@@ -295,7 +304,7 @@ class TestSolveIntegrations:
         """data_compressed should equal data * compression_ratio."""
         vd = _make(compression_ratio=0.5)
         _, data, data_c = vd.solve_integrations(
-            vd.single_frame_time * 20, 0 * u.s, 0 * u.s
+            vd.single_frame_time * 20, _visda_overhead()
         )
         assert abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-6
 
@@ -303,21 +312,21 @@ class TestSolveIntegrations:
         """If less than one coadd fits, frame count should be zero."""
         vd = _make()
         duration = vd.single_frame_time * (_COADD - 1)
-        frames, _, _ = vd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        frames, _, _ = vd.solve_integrations(duration, _visda_overhead())
         assert frames == 0
 
     def test_zero_frame_time_gives_zero_frames(self):
         """Zero single_frame_time must not divide by zero; it yields zero frames."""
         vd = _make(exposure_time_s=0.0 * u.s, read_time_per_frame_s=0.0 * u.s)
         assert vd.single_frame_time.to(u.s).value == 0
-        frames, _, _ = vd.solve_integrations(100.0 * u.s, 0 * u.s, 0 * u.s)
+        frames, _, _ = vd.solve_integrations(100.0 * u.s, _visda_overhead())
         assert frames == 0
 
     def test_zero_frames_per_coadd_does_not_raise(self):
         """frames_per_coadd of zero must not trigger a modulo-by-zero error."""
         vd = _make(frames_per_coadd=0)
         frames, _, _ = vd.solve_integrations(
-            vd.single_frame_time * 7, 0 * u.s, 0 * u.s
+            vd.single_frame_time * 7, _visda_overhead()
         )
         assert frames >= 0
 
@@ -352,15 +361,15 @@ class TestSolveDuration:
     def test_duration_value(self):
         """duration = integrations * single_frame_time + overheads."""
         vd = _make()
-        duration, _, _ = vd.solve_duration(10, 0 * u.s, 0 * u.s)
+        duration, _, _ = vd.solve_duration(10, _visda_overhead())
         assert abs(duration.to(u.s).value - 10 * _SFT) < 1e-12
 
     def test_overhead_added_to_duration(self):
         """Overhead parameters should be added to the total duration."""
         vd = _make()
         pre, post = 30.0 * u.s, 10.0 * u.s
-        dur_no_oh, _, _ = vd.solve_duration(3, 0 * u.s, 0 * u.s)
-        dur_with_oh, _, _ = vd.solve_duration(3, pre, post)
+        dur_no_oh, _, _ = vd.solve_duration(3, _visda_overhead())
+        dur_with_oh, _, _ = vd.solve_duration(3, _visda_overhead(pre, post))
         assert abs(
             dur_with_oh.to(u.s).value - dur_no_oh.to(u.s).value - 40.0
         ) < 1e-12
@@ -368,7 +377,7 @@ class TestSolveDuration:
     def test_data_is_pure_bytes(self):
         """data should be a plain byte Quantity, not byte*second."""
         vd = _make()
-        _, data, _ = vd.solve_duration(10, 0 * u.s, 0 * u.s)
+        _, data, _ = vd.solve_duration(10, _visda_overhead())
         # Convertible to bytes without a leftover time dimension.
         assert data.unit.is_equivalent(u.byte)
 
@@ -376,35 +385,35 @@ class TestSolveDuration:
         """data should equal integrations * frame_bytes."""
         vd = _make()
         n = 7
-        _, data, _ = vd.solve_duration(n, 0 * u.s, 0 * u.s)
+        _, data, _ = vd.solve_duration(n, _visda_overhead())
         expected = n * vd.frame_bytes.to(u.byte).value
         assert abs(data.to(u.byte).value - expected) < 1e-6
 
     def test_compressed_data_uses_compression_ratio(self):
         """data_compressed should equal data * compression_ratio."""
         vd = _make(compression_ratio=0.25)
-        _, data, data_c = vd.solve_duration(8, 0 * u.s, 0 * u.s)
+        _, data, data_c = vd.solve_duration(8, _visda_overhead())
         assert abs(data_c.to(u.byte).value - 0.25 * data.to(u.byte).value) < 1e-6
 
     def test_additional_overhead_added_to_duration(self):
         """solve_duration should add additional_overhead_time to the total."""
         vd_no_oh = _make(additional_overhead_time=0 * u.s)
         vd_with_oh = _make(additional_overhead_time=5.0 * u.s)
-        dur_no, _, _ = vd_no_oh.solve_duration(3, 0 * u.s, 0 * u.s)
-        dur_with, _, _ = vd_with_oh.solve_duration(3, 0 * u.s, 0 * u.s)
+        dur_no, _, _ = vd_no_oh.solve_duration(3, _visda_overhead())
+        dur_with, _, _ = vd_with_oh.solve_duration(3, _visda_overhead())
         assert abs(dur_with.to(u.s).value - dur_no.to(u.s).value - 5.0) < 1e-12
 
     def test_additional_overhead_not_added_when_zero_integrations(self):
         """Zero frames should give zero duration regardless of overhead."""
         vd = _make(additional_overhead_time=5.0 * u.s)
-        duration, _, _ = vd.solve_duration(0, 0 * u.s, 0 * u.s)
+        duration, _, _ = vd.solve_duration(0, _visda_overhead())
         assert duration.to(u.s).value == 0.0
 
     def test_duration_increases_monotonically(self):
         """More frames should always require more time."""
         vd = _make()
         durations = [
-            vd.solve_duration(n, 0 * u.s, 0 * u.s)[0].to(u.s).value
+            vd.solve_duration(n, _visda_overhead())[0].to(u.s).value
             for n in range(1, 6)
         ]
         for i in range(len(durations) - 1):
@@ -421,10 +430,10 @@ class TestSolveRoundtrip:
         """With no overhead, a coadd-multiple frame count should round-trip."""
         vd = _make()
         for n in (_COADD, 2 * _COADD, 3 * _COADD):
-            duration, _, _ = vd.solve_duration(n, 0 * u.s, 0 * u.s)
+            duration, _, _ = vd.solve_duration(n, _visda_overhead())
             # Tiny relative guard against floating-point loss when re-dividing.
             duration = duration + vd.single_frame_time * 1e-6
-            recovered, _, _ = vd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+            recovered, _, _ = vd.solve_integrations(duration, _visda_overhead())
             assert recovered == n, f"Roundtrip failed for n={n}: recovered {recovered}"
 
     def test_roundtrip_with_overhead(self):
@@ -432,9 +441,9 @@ class TestSolveRoundtrip:
         vd = _make()
         pre, post = 20.0 * u.s, 10.0 * u.s
         for n in (_COADD, 2 * _COADD):
-            duration, _, _ = vd.solve_duration(n, pre, post)
+            duration, _, _ = vd.solve_duration(n, _visda_overhead(pre, post))
             duration = duration + vd.single_frame_time * 1e-6
-            recovered, _, _ = vd.solve_integrations(duration, pre, post)
+            recovered, _, _ = vd.solve_integrations(duration, _visda_overhead(pre, post))
             assert recovered == n, (
                 f"Roundtrip with overhead failed for n={n}: recovered {recovered}"
             )

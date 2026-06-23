@@ -1,0 +1,4 @@
+"""Hardcoded constraints"""
+
+MAX_FILE_SIZE_UNCOMPRESSED_MB = 830.0
+MAX_FILE_SIZE_COMPRESSED_MB = 255.0

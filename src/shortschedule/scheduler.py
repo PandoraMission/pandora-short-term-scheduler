@@ -27,7 +27,10 @@ from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
 from .models import ObservationSequence, ScienceCalendar, Visit
+from .nirda import NirdaData
+from .overhead import OverheadTiming
 from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
+from .visda import VisdaData
 
 
 class ScheduleProcessor:
@@ -61,10 +64,12 @@ class ScheduleProcessor:
         self,
         tle_line1: str,
         tle_line2: str,
-        vda_pre_sequence_overhead: u.Quantity = 260 * u.s,
-        vda_post_sequence_overhead: u.Quantity = 102 * u.s,
-        nirda_pre_sequence_overhead: u.Quantity = 258 * u.s,
-        nirda_post_sequence_overhead: u.Quantity = 102 * u.s,
+        vda_pre_sequence_overhead: u.Quantity | None = None,
+        vda_post_sequence_overhead: u.Quantity | None = None,
+        nirda_pre_sequence_overhead: u.Quantity | None = None,
+        nirda_post_sequence_overhead: u.Quantity | None = None,
+        override_nirda_parameters: Optional[Dict[int, List[str]]] = None,
+        override_visda_parameters: Optional[Dict[int, List[str]]] = None,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -92,13 +97,32 @@ class ScheduleProcessor:
         tle_line1, tle_line2 : str
             TLE lines for satellite
         vda_pre_sequence_overhead : Quantity, optional
-            VDA pre-sequence overhead (default 260 s).
+            VDA pre-sequence overhead (default is None which will use the overhead defaults).
         vda_post_sequence_overhead : Quantity, optional
-            VDA post-sequence overhead (default 102 s).
+            VDA post-sequence overhead (default is None which will use the overhead defaults).
         nirda_pre_sequence_overhead : Quantity, optional
-            NIRDA pre-sequence overhead (default 258 s).
+            NIRDA pre-sequence overhead (default is None which will use the overhead defaults).
         nirda_post_sequence_overhead : Quantity, optional
-            NIRDA post-sequence overhead (default 102 s).
+            NIRDA post-sequence overhead (default is None which will use the overhead defaults).
+        override_nirda_parameters : dict, optional
+            Per-priority NIRDA payload overrides applied during the
+            payload-update step. Maps an observation priority to a list of
+            ``NirdaData`` field names whose values should be replaced by the
+            ``NirdaData`` defaults instead of being read from the
+            observation. For example:
+                ``{0: ['drop_frames_1', 'drop_frames_3']}``
+                    means: for every priority-0 observation, use the default-class
+                    values for ``drop_frames_1`` and ``drop_frames_3``
+                    (and write them back onto the observation) before
+                    recomputing SC_Integrations.
+            Field names are ``NirdaData`` attribute names; the corresponding XML
+            tags are updated automatically.
+            Defaults to no overrides.
+        override_visda_parameters : dict, optional
+            Per-priority VISDA payload overrides, structured identically to
+            ``override_nirda_parameters`` but using ``VisdaData`` field
+            names (e.g. ``frames_per_coadd``, ``exposure_time_s``).
+            Defaults to no overrides.
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -201,8 +225,9 @@ class ScheduleProcessor:
         #   { visit_id: { target_name: roll_deg_or_None } }
         self._computed_target_rolls: Dict[str, Dict[str, Optional[float]]] = {}
 
-        # Payload overhead budgets — validate that each value carries time
-        # units so that downstream .to(u.s) / .to(u.us) calls succeed.
+        # Validate any explicitly supplied overheads carry time units so that
+        # downstream .to(u.s) / .to(u.us) calls succeed. ``None`` means "use
+        # the OverheadTiming default derived from the modelled MOC sequence".
         _overhead_params = {
             "vda_pre_sequence_overhead": vda_pre_sequence_overhead,
             "vda_post_sequence_overhead": vda_post_sequence_overhead,
@@ -210,9 +235,9 @@ class ScheduleProcessor:
             "nirda_post_sequence_overhead": nirda_post_sequence_overhead,
         }
         for _name, _val in _overhead_params.items():
-            if isinstance(_val, TimeDelta):
-                pass
-            elif isinstance(_val, u.Quantity):
+            if _val is None or isinstance(_val, TimeDelta):
+                continue
+            if isinstance(_val, u.Quantity):
                 try:
                     _val.to(u.s)
                 except u.UnitConversionError:
@@ -225,10 +250,26 @@ class ScheduleProcessor:
                     f"{_name} must be an astropy Quantity or TimeDelta "
                     f"with time units; got {type(_val).__name__!r}"
                 )
-        self.vda_pre_sequence_overhead = vda_pre_sequence_overhead
-        self.vda_post_sequence_overhead = vda_post_sequence_overhead
-        self.nirda_pre_sequence_overhead = nirda_pre_sequence_overhead
-        self.nirda_post_sequence_overhead = nirda_post_sequence_overhead
+
+        # Collect the overheads into a single OverheadTiming so the
+        # payload-update step can hand it straight to the NIRDA/VISDA data
+        # classes. Note OverheadTiming uses "visda" naming for the VDA fields
+        # and fills any None with its modelled default.
+        self.overhead = OverheadTiming(
+            visda_pre_overhead_time=vda_pre_sequence_overhead,
+            visda_post_overhead_time=vda_post_sequence_overhead,
+            nirda_pre_overhead_time=nirda_pre_sequence_overhead,
+            nirda_post_overhead_time=nirda_post_sequence_overhead,
+        )
+
+        # Per-priority payload overrides applied during the payload-update
+        # step. Structure: { priority: [data_class_field_name, ...] }
+        self._override_nirda_parameters: Dict[int, List[str]] = (
+            override_nirda_parameters or {}
+        )
+        self._override_visda_parameters: Dict[int, List[str]] = (
+            override_visda_parameters or {}
+        )
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -1962,6 +2003,62 @@ class ScheduleProcessor:
 
         return calendar
 
+    def _build_payload_data(
+        self,
+        sequence: ObservationSequence,
+        override_fields: Any,
+        data_cls: Any,
+        extra_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        """Build a NirdaData/VisdaData object from a sequence's payload.
+
+        The payload section, field<->XML mapping, and required fields are
+        taken from the data class itself (``PAYLOAD_SECTION``,
+        ``CONFIG_SPEC``, ``REQUIRED_CONFIG_FIELDS``). For each config field
+        the value is read from the observation's payload XML and converted
+        to the data-class field. Fields named in *override_fields* are
+        instead taken from a default ``data_cls()`` instance (via
+        ``get_config``) and queued to be written back to the observation so
+        the calendar reflects the override.
+
+        Returns
+        -------
+        (data_obj, writeback) on success, where ``writeback`` maps XML tags
+        to the string values that should be written back to the payload for
+        overridden fields.  Returns ``(None, missing_tags)`` if any required
+        field is absent (e.g. a sequence with no payload for this section).
+        """
+        section = data_cls.PAYLOAD_SECTION
+        spec = data_cls.CONFIG_SPEC
+        required_fields = data_cls.REQUIRED_CONFIG_FIELDS
+
+        override_fields = set(override_fields or ())
+        default_config = data_cls().get_config()
+        kwargs: Dict[str, Any] = dict(extra_kwargs or {})
+        writeback: Dict[str, str] = {}
+        missing: List[str] = []
+
+        for field, (tag, from_xml, to_xml) in spec.items():
+            if field in override_fields:
+                value = default_config[field]
+                kwargs[field] = value
+                writeback[tag] = to_xml(value)
+                continue
+
+            raw = sequence.get_payload_parameter(section, tag)
+            if raw is None or raw == "":
+                if field in required_fields:
+                    missing.append(tag)
+                continue
+            try:
+                kwargs[field] = from_xml(raw)
+            except (ValueError, TypeError):
+                missing.append(tag)
+
+        if missing:
+            return None, missing
+        return data_cls(**kwargs), writeback
+
     def _update_payload_parameters_sequence(
         self, sequence: ObservationSequence
     ) -> ObservationSequence:
@@ -1969,17 +2066,27 @@ class ScheduleProcessor:
         # correct type and the overhead subtraction uses a consistent unit.
         duration = sequence.duration
 
+        # Per-priority parameter overrides (see process_calendar). Falls back
+        # to no overrides when the attributes are unset (e.g. when a bare
+        # ScheduleProcessor is constructed in tests).
+        nirda_overrides = getattr(self, "_override_nirda_parameters", {}) or {}
+        visda_overrides = getattr(self, "_override_visda_parameters", {}) or {}
+        nirda_fields = nirda_overrides.get(sequence.priority, ())
+        visda_fields = visda_overrides.get(sequence.priority, ())
+
         sequence = self._update_VDA_integrations(
             sequence,
             duration,
-            pre_sequence_overhead=self.vda_pre_sequence_overhead,
-            post_sequence_overhead=self.vda_post_sequence_overhead,
+            pre_sequence_overhead=self.overhead.visda_pre_overhead_time,
+            post_sequence_overhead=self.overhead.visda_post_overhead_time,
+            override_fields=visda_fields,
         )
         sequence = self._update_NIRDA_integrations(
             sequence,
             duration,
-            pre_sequence_overhead=self.nirda_pre_sequence_overhead,
-            post_sequence_overhead=self.nirda_post_sequence_overhead,
+            pre_sequence_overhead=self.overhead.nirda_pre_overhead_time,
+            post_sequence_overhead=self.overhead.nirda_post_overhead_time,
+            override_fields=nirda_fields,
         )
 
         return sequence
@@ -1989,180 +2096,109 @@ class ScheduleProcessor:
         sequence: ObservationSequence,
         duration: TimeDelta,
         pre_sequence_overhead: TimeDelta = 260 * u.s,
-        post_sequence_overhead: TimeDelta = 120 * u.s,
+        post_sequence_overhead: TimeDelta = 102 * u.s,
+        override_fields: Any = (),
     ) -> ObservationSequence:
+        """Set NumTotalFramesRequested using a ``VisdaData`` model.
 
-        # Include VDA overheads at the start and end of the sequence using
-        # pre_sequence_overhead and post_sequence_overhead.
-
-        # Get parameters
-        exposure_time_str = sequence.get_payload_parameter(
-            "AcquireVisCamScienceData", "ExposureTime_us"
+        The VISDA detector configuration is built from the sequence's
+        ``AcquireVisCamScienceData`` payload (or, for any field listed in
+        *override_fields*, from the ``VisdaData`` defaults), and the frame
+        count that fits the sequence duration -- net of the pre/post
+        overheads -- is computed by ``VisdaData.solve_integrations``.
+        """
+        # Detector read time is not represented in the payload; the existing
+        # scheduling math treats a frame as taking exactly the exposure time.
+        visda, info = self._build_payload_data(
+            sequence,
+            override_fields,
+            VisdaData,
+            extra_kwargs={"read_time_per_frame_s": 0 * u.s},
         )
-        frames_per_coadd_str = sequence.get_payload_parameter(
-            "AcquireVisCamScienceData", "FramesPerCoadd"
+        if visda is None:
+            print(
+                f"Warning: Missing VDA parameters for sequence "
+                f"{sequence.id} {sequence.start_time}: {', '.join(info)}"
+            )
+            return sequence
+
+        # Write any overridden parameters back onto the observation.
+        for tag, text in info.items():
+            sequence.set_payload_parameter(
+                "AcquireVisCamScienceData", tag, text
+            )
+
+        overhead = OverheadTiming(
+            visda_pre_overhead_time=pre_sequence_overhead.to(u.s),
+            visda_post_overhead_time=post_sequence_overhead.to(u.s),
         )
+        frames, _, _ = visda.solve_integrations(duration.to(u.s), overhead)
 
-        if not exposure_time_str or not frames_per_coadd_str:
+        success = sequence.set_payload_parameter(
+            "AcquireVisCamScienceData",
+            "NumTotalFramesRequested",
+            str(int(frames)),
+        )
+        if not success:
             print(
-                f"Warning: Missing VDA parameters for sequence {sequence.id} {sequence.start_time}"
+                f"Warning: Failed to update NumTotalFramesRequested for "
+                f"sequence {sequence.id} {sequence.start_time}"
             )
-            return sequence
-
-        try:
-            # Convert to proper types - exposure time is always integer microseconds
-            exposure_time = int(exposure_time_str) * u.us
-            frames_per_coadd = int(frames_per_coadd_str)
-
-            # Convert duration to microseconds for calculation
-            duration_us = (
-                duration.to(u.us)
-                - pre_sequence_overhead.to(u.us)
-                - post_sequence_overhead.to(u.us)
-            )
-
-            # Guard: if overhead exceeds duration, no frames are possible
-            if duration_us.value <= 0:
-                sequence.set_payload_parameter(
-                    "AcquireVisCamScienceData",
-                    "NumTotalFramesRequested",
-                    "0",
-                )
-                return sequence
-
-            # Calculate maximum complete coadds that fit in duration
-            effective_exposure_time = exposure_time * frames_per_coadd
-            max_coadds = int(np.floor(duration_us / effective_exposure_time))
-
-            # Calculate total frames (must be multiple of FramesPerCoadd)
-            num_total_frames = max_coadds * frames_per_coadd
-
-            # Ensure at least one coadd if duration allows
-            if (
-                num_total_frames == 0
-                and duration_us >= effective_exposure_time
-            ):
-                num_total_frames = frames_per_coadd
-
-            # Set the parameter (convert to string)
-            success = sequence.set_payload_parameter(
-                "AcquireVisCamScienceData",
-                "NumTotalFramesRequested",
-                str(num_total_frames),
-            )
-
-            if not success:
-                print(
-                    f"Warning: Failed to update NumTotalFramesRequested for sequence {sequence.id} {sequence.start_time}"
-                )
-            return sequence
-
-        except (ValueError, TypeError, AttributeError) as e:
-            print(
-                f"Error updating VDA parameters for sequence {sequence.id} {sequence.start_time}: {e}"
-            )
-            return sequence
+        return sequence
 
     def _update_NIRDA_integrations(
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
         pre_sequence_overhead: TimeDelta = 258 * u.s,
-        post_sequence_overhead: TimeDelta = 120 * u.s,
+        post_sequence_overhead: TimeDelta = 102 * u.s,
+        override_fields: Any = (),
     ) -> ObservationSequence:
+        """Set SC_Integrations using a ``NirdaData`` model.
 
-        seq_identifier = (
-            f"{sequence.id} ({sequence.target} @ "
-            f"{sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
+        The NIRDA detector configuration is built from the sequence's
+        ``AcquireInfCamImages`` payload (or, for any field listed in
+        *override_fields*, from the ``NirdaData`` defaults), and the number
+        of integrations that fit the sequence duration -- net of the
+        pre/post overheads -- is computed by
+        ``NirdaData.solve_integrations``.
+        """
+        nirda, info = self._build_payload_data(
+            sequence,
+            override_fields,
+            NirdaData,
         )
-
-        # Collect raw string values and guard against missing parameters
-        # *before* any int() conversion so that a sequence without NIRDA
-        # payload (e.g. a VDA-only sequence) returns cleanly instead of
-        # raising TypeError.
-        required_params = {
-            name: sequence.get_payload_parameter("AcquireInfCamImages", name)
-            for name in (
-                "ROI_SizeX",
-                "ROI_SizeY",
-                "SC_Resets1",
-                "SC_Resets2",
-                "SC_DropFrames1",
-                "SC_DropFrames2",
-                "SC_DropFrames3",
-                "SC_ReadFrames",
-                "SC_Groups",
+        if nirda is None:
+            seq_identifier = (
+                f"{sequence.id} ({sequence.target} @ "
+                f"{sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
             )
-        }
-
-        missing_params = [
-            name for name, value in required_params.items() if value is None
-        ]
-
-        if missing_params:
             print(
                 f"Warning: Missing NIRDA parameters for sequence "
                 f"{seq_identifier}"
             )
-            print(f"Missing parameters: {', '.join(missing_params)}")
+            print(f"Missing parameters: {', '.join(info)}")
             return sequence
 
-        # All parameters are present; convert to int.
-        ROI_SizeX = int(required_params["ROI_SizeX"])
-        ROI_SizeY = int(required_params["ROI_SizeY"])
-        SC_Resets1 = int(required_params["SC_Resets1"])
-        SC_Resets2 = int(required_params["SC_Resets2"])
-        SC_DropFrames1 = int(required_params["SC_DropFrames1"])
-        SC_DropFrames2 = int(required_params["SC_DropFrames2"])
-        SC_DropFrames3 = int(required_params["SC_DropFrames3"])
-        SC_ReadFrames = int(required_params["SC_ReadFrames"])
-        SC_Groups = int(required_params["SC_Groups"])
+        # Write any overridden parameters back onto the observation.
+        for tag, text in info.items():
+            sequence.set_payload_parameter("AcquireInfCamImages", tag, text)
 
-        # per the payload users guide
-        frame_time = (ROI_SizeX + 12) * (ROI_SizeY + 2) * 1e-5 * u.s
-        NumFramesBase = (
-            SC_DropFrames1
-            + (SC_Groups - 1) * (SC_ReadFrames + SC_DropFrames2)
-            + SC_ReadFrames
-            + SC_DropFrames3
+        overhead = OverheadTiming(
+            nirda_pre_overhead_time=pre_sequence_overhead.to(u.s),
+            nirda_post_overhead_time=post_sequence_overhead.to(u.s),
         )
-        NumFramesFirst = NumFramesBase + SC_Resets1
-        NumFramesOther = NumFramesBase + SC_Resets2
-        first_integration_time = NumFramesFirst * frame_time
-        other_integration_time = NumFramesOther * frame_time
-
-        # Use the duration argument so callers can override the window
-        # (e.g. _update_payload_parameters_sequence passes sequence.duration).
-        duration_sequence_seconds = duration.to(u.s)
-
-        effective_duration_s = (
-            duration_sequence_seconds
-            - pre_sequence_overhead.to(u.s)
-            - post_sequence_overhead.to(u.s)
+        integrations, _, _ = nirda.solve_integrations(
+            duration.to(u.s), overhead
         )
-        # Guard: if overhead exceeds duration, no integrations are possible
-        SC_Integrations = 0
-        if (effective_duration_s.value > 0) and (
-            first_integration_time.to(u.s) <= effective_duration_s.to(u.s)
-        ):
-            # There is enough time to perform the initial integration
-            effective_duration_s -= first_integration_time.to(u.s)
-            SC_Integrations += 1
-
-            # ... and potentially additional integrations.
-            if effective_duration_s > other_integration_time.to(u.s):
-                SC_Integrations += int(
-                    np.floor(
-                        effective_duration_s / other_integration_time.to(u.s)
-                    )
-                )
 
         success = sequence.set_payload_parameter(
-            "AcquireInfCamImages", "SC_Integrations", str(SC_Integrations)
+            "AcquireInfCamImages", "SC_Integrations", str(int(integrations))
         )
         if not success:
             print(
-                f"Warning: Failed to update SC_Integrations for sequence {sequence.id} {sequence.start_time}"
+                f"Warning: Failed to update SC_Integrations for sequence "
+                f"{sequence.id} {sequence.start_time}"
             )
 
         return sequence
@@ -2998,19 +3034,21 @@ class ScheduleProcessor:
         """
         issues = []
 
-        # Compute effective overhead budget (max of VDA/NIRDA)
-        pre_oh_sec = max(
-            getattr(self, "vda_pre_sequence_overhead", 0 * u.s).to(u.s).value,
-            getattr(self, "nirda_pre_sequence_overhead", 0 * u.s)
-            .to(u.s)
-            .value,
-        )
-        post_oh_sec = max(
-            getattr(self, "vda_post_sequence_overhead", 0 * u.s).to(u.s).value,
-            getattr(self, "nirda_post_sequence_overhead", 0 * u.s)
-            .to(u.s)
-            .value,
-        )
+        # Compute effective overhead budget (max of VDA/NIRDA). A bare
+        # processor without an OverheadTiming falls back to zero overhead.
+        overhead = getattr(self, "overhead", None)
+        if overhead is None:
+            pre_oh_sec = 0.0
+            post_oh_sec = 0.0
+        else:
+            pre_oh_sec = max(
+                overhead.visda_pre_overhead_time.to(u.s).value,
+                overhead.nirda_pre_overhead_time.to(u.s).value,
+            )
+            post_oh_sec = max(
+                overhead.visda_post_overhead_time.to(u.s).value,
+                overhead.nirda_post_overhead_time.to(u.s).value,
+            )
         total_oh_sec = pre_oh_sec + post_oh_sec
 
         for visit in calendar.visits:

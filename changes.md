@@ -5,3 +5,4 @@
 - Adds overhead class which accounts for pre- and post- overhead timings for both VISDA and NIRDA
 - Adds baseline short-term calendar runner script to docs/
 - Adds ability to merge back-to-back observations of the same target
+- Adds ability to override payload parameters set by original long-term calendar on a per-priority type basis.

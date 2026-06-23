@@ -73,6 +73,26 @@ scheduler = ScheduleProcessor(
     roll_step=1.0,                # roll search step size (deg)
     min_power_frac=0.68,          # min acceptable orbit-average power fraction
     force_gap_fill=False,         # if True, aggressively fill scheduling gaps
+    # ----------------------------------------------------------------------
+    # Optional per-priority payload overrides.
+    #
+    # These force specific NIRDA/VISDA payload parameters to the values from
+    # the default NirdaData / VisdaData classes for every observation of a
+    # given priority, instead of using the values carried by the observation.
+    # Each maps a priority -> list of data-class field names to override; the
+    # corresponding payload XML tags are updated and the integration counts
+    # are recomputed accordingly.
+    #
+    # Example: for all priority-0 observations, replace drop_frames_1 and
+    # drop_frames_3 (NIRDA) and frames_per_coadd (VISDA) with class defaults.
+    #
+    # override_nirda_parameters={
+    #     0: ["drop_frames_1", "drop_frames_3"],
+    #     1: ["reset_frames_1"],
+    # },
+    # override_visda_parameters={
+    #     0: ["frames_per_coadd"],
+    # },
 )
 
 # ---------------------------------------------------------------------------

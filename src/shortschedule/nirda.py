@@ -307,8 +307,6 @@ class NirdaData:
                 math.ceil((vitl_settling_time / self.reset_frame_time).decompose().value),
             )
 
-        # TODO: Open Question! Do we add the global reset time to this?
-
         self._update_derived()
 
     def solve_integrations(

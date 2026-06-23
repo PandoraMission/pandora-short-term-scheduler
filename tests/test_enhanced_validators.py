@@ -24,6 +24,7 @@ from shortschedule.models import (
     ScienceCalendar,
     Visit,
 )
+from shortschedule.overhead import OverheadTiming
 from shortschedule.scheduler import ScheduleProcessor
 
 # ================================================================
@@ -451,10 +452,12 @@ class TestValidateSequenceTiming:
 class TestValidatePayloadExposures:
     def _sched_with_overheads(self):
         sched = _bare_sched()
-        sched.vda_pre_sequence_overhead = 260 * u.s
-        sched.vda_post_sequence_overhead = 120 * u.s
-        sched.nirda_pre_sequence_overhead = 258 * u.s
-        sched.nirda_post_sequence_overhead = 120 * u.s
+        sched.overhead = OverheadTiming(
+            visda_pre_overhead_time=260 * u.s,
+            visda_post_overhead_time=120 * u.s,
+            nirda_pre_overhead_time=258 * u.s,
+            nirda_post_overhead_time=120 * u.s,
+        )
         return sched
 
     def test_no_issues_when_exposure_fits(self):

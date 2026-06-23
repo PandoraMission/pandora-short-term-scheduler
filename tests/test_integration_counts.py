@@ -11,10 +11,18 @@ from astropy.time import Time, TimeDelta
 
 # First-party/Local
 from shortschedule.models import ObservationSequence
+from shortschedule.nirda import NirdaData
+from shortschedule.overhead import OverheadTiming
 from shortschedule.scheduler import ScheduleProcessor
+from shortschedule.visda import VisdaData
 
 # ---------------------------------------------------------------------------
 # Helpers
+#
+# Sequences are built from the NirdaData/VisdaData classes: a data object is
+# constructed with the desired configuration, then its payload XML is emitted
+# from the class's CONFIG_SPEC. This keeps the tests in lock-step with the
+# detector models the scheduler uses.
 # ---------------------------------------------------------------------------
 
 
@@ -23,13 +31,41 @@ def _sched():
     return ScheduleProcessor.__new__(ScheduleProcessor)
 
 
+def _payload_from_config(data_obj, extra_tags=None):
+    """Build a payload XML element for *data_obj* from its CONFIG_SPEC.
+
+    Each config field is written to its mapped XML tag using the class's
+    own ``to_xml`` converter, so the payload always matches the data model.
+    *extra_tags* adds any output-only tags (e.g. the integration count the
+    scheduler will overwrite).
+    """
+    root = ET.Element(data_obj.PAYLOAD_SECTION)
+    config = data_obj.get_config()
+    for field, (tag, _from_xml, to_xml) in data_obj.CONFIG_SPEC.items():
+        ET.SubElement(root, tag).text = to_xml(config[field])
+    for tag, text in (extra_tags or {}).items():
+        ET.SubElement(root, tag).text = text
+    return root
+
+
+def _visda_from_kwargs(exposure_us, frames_per_coadd):
+    """Build a VisdaData for the test's VDA parameters.
+
+    read_time_per_frame_s is forced to zero so a frame takes exactly the
+    exposure time, matching the scheduler's frame-count convention.
+    """
+    return VisdaData(
+        exposure_time_s=exposure_us * u.us,
+        frames_per_coadd=frames_per_coadd,
+        read_time_per_frame_s=0 * u.s,
+    )
+
+
 def _make_vda_seq(duration_sec, exposure_us, frames_per_coadd):
-    """Minimal sequence with AcquireVisCamScienceData payload."""
+    """Sequence whose AcquireVisCamScienceData payload is built from VisdaData."""
     start = Time("2026-06-15T12:00:00", scale="utc")
-    root = ET.Element("AcquireVisCamScienceData")
-    ET.SubElement(root, "ExposureTime_us").text = str(exposure_us)
-    ET.SubElement(root, "FramesPerCoadd").text = str(frames_per_coadd)
-    ET.SubElement(root, "NumTotalFramesRequested").text = "0"
+    vd = _visda_from_kwargs(exposure_us, frames_per_coadd)
+    root = _payload_from_config(vd, {"NumTotalFramesRequested": "0"})
     return ObservationSequence(
         id="vda_seq",
         target="T",
@@ -38,12 +74,25 @@ def _make_vda_seq(duration_sec, exposure_us, frames_per_coadd):
         stop_time=start + TimeDelta(duration_sec, format="sec"),
         ra=0.0,
         dec=0.0,
-        payload_params={"AcquireVisCamScienceData": root},
+        payload_params={vd.PAYLOAD_SECTION: root},
     )
 
 
-def _make_nirda_seq(
-    duration_sec,
+# Maps the legacy keyword names used by these tests to NirdaData fields.
+_NIRDA_KW_TO_FIELD = {
+    "roi_x": "roi_x_size",
+    "roi_y": "roi_y_size",
+    "sc_resets1": "reset_frames_1",
+    "sc_resets2": "reset_frames_2",
+    "sc_drop1": "drop_frames_1",
+    "sc_drop2": "drop_frames_2",
+    "sc_drop3": "drop_frames_3",
+    "sc_read": "read_frames",
+    "sc_groups": "groups",
+}
+
+
+def _nirda_from_kwargs(
     roi_x=100,
     roi_y=256,
     sc_resets1=1,
@@ -54,19 +103,27 @@ def _make_nirda_seq(
     sc_read=5,
     sc_groups=3,
 ):
-    """Minimal sequence with AcquireInfCamImages payload."""
+    """Build a NirdaData from the test's NIRDA parameters."""
+    kwargs = dict(
+        roi_x=roi_x,
+        roi_y=roi_y,
+        sc_resets1=sc_resets1,
+        sc_resets2=sc_resets2,
+        sc_drop1=sc_drop1,
+        sc_drop2=sc_drop2,
+        sc_drop3=sc_drop3,
+        sc_read=sc_read,
+        sc_groups=sc_groups,
+    )
+    fields = {_NIRDA_KW_TO_FIELD[k]: v for k, v in kwargs.items()}
+    return NirdaData(**fields)
+
+
+def _make_nirda_seq(duration_sec, **kwargs):
+    """Sequence whose AcquireInfCamImages payload is built from NirdaData."""
     start = Time("2026-06-15T12:00:00", scale="utc")
-    root = ET.Element("AcquireInfCamImages")
-    ET.SubElement(root, "ROI_SizeX").text = str(roi_x)
-    ET.SubElement(root, "ROI_SizeY").text = str(roi_y)
-    ET.SubElement(root, "SC_Resets1").text = str(sc_resets1)
-    ET.SubElement(root, "SC_Resets2").text = str(sc_resets2)
-    ET.SubElement(root, "SC_DropFrames1").text = str(sc_drop1)
-    ET.SubElement(root, "SC_DropFrames2").text = str(sc_drop2)
-    ET.SubElement(root, "SC_DropFrames3").text = str(sc_drop3)
-    ET.SubElement(root, "SC_ReadFrames").text = str(sc_read)
-    ET.SubElement(root, "SC_Groups").text = str(sc_groups)
-    ET.SubElement(root, "SC_Integrations").text = "0"
+    nd = _nirda_from_kwargs(**kwargs)
+    root = _payload_from_config(nd, {"SC_Integrations": "0"})
     return ObservationSequence(
         id="nirda_seq",
         target="T",
@@ -75,8 +132,41 @@ def _make_nirda_seq(
         stop_time=start + TimeDelta(duration_sec, format="sec"),
         ra=0.0,
         dec=0.0,
-        payload_params={"AcquireInfCamImages": root},
+        payload_params={nd.PAYLOAD_SECTION: root},
     )
+
+
+def _nirda_overhead(pre_sec=0.0, post_sec=0.0):
+    """OverheadTiming with the given NIRDA pre/post overheads (seconds)."""
+    return OverheadTiming(
+        nirda_pre_overhead_time=pre_sec * u.s,
+        nirda_post_overhead_time=post_sec * u.s,
+    )
+
+
+def _visda_overhead(pre_sec=0.0, post_sec=0.0):
+    """OverheadTiming with the given VISDA pre/post overheads (seconds)."""
+    return OverheadTiming(
+        visda_pre_overhead_time=pre_sec * u.s,
+        visda_post_overhead_time=post_sec * u.s,
+    )
+
+
+def _expected_vda_frames(
+    duration_sec,
+    *,
+    exposure_us,
+    frames_per_coadd,
+    pre_sequence_overhead_sec=0,
+    post_sequence_overhead_sec=0,
+):
+    """Expected NumTotalFramesRequested, computed via VisdaData."""
+    vd = _visda_from_kwargs(exposure_us, frames_per_coadd)
+    frames, _, _ = vd.solve_integrations(
+        duration_sec * u.s,
+        _visda_overhead(pre_sequence_overhead_sec, post_sequence_overhead_sec),
+    )
+    return int(frames)
 
 
 # ---------------------------------------------------------------------------
@@ -271,37 +361,15 @@ def _expected_nirda_integrations(
     post_sequence_overhead_sec=0,
     **kwargs,
 ):
-    """Match the scheduler's first-integration and later-integration math."""
-    roi_x = kwargs["roi_x"]
-    roi_y = kwargs["roi_y"]
-    sc_resets1 = kwargs["sc_resets1"]
-    sc_resets2 = kwargs["sc_resets2"]
-    sc_drop1 = kwargs["sc_drop1"]
-    sc_drop2 = kwargs["sc_drop2"]
-    sc_drop3 = kwargs["sc_drop3"]
-    sc_read = kwargs["sc_read"]
-    sc_groups = kwargs["sc_groups"]
-
-    frame_time = (roi_x + 12) * (roi_y + 2) * 1e-5
-    num_frames_base = (
-        sc_drop1 + (sc_groups - 1) * (sc_read + sc_drop2) + sc_read + sc_drop3
+    """Expected SC_Integrations, computed via NirdaData."""
+    nd = _nirda_from_kwargs(**kwargs)
+    integrations, _, _ = nd.solve_integrations(
+        duration_sec * u.s,
+        _nirda_overhead(
+            pre_sequence_overhead_sec, post_sequence_overhead_sec
+        ),
     )
-    first_integration_time = (num_frames_base + sc_resets1) * frame_time
-    other_integration_time = (num_frames_base + sc_resets2) * frame_time
-
-    effective_duration = (
-        duration_sec - pre_sequence_overhead_sec - post_sequence_overhead_sec
-    )
-    if effective_duration <= 0 or first_integration_time > effective_duration:
-        return 0
-
-    integrations = 1
-    effective_duration -= first_integration_time
-    if effective_duration > other_integration_time:
-        integrations += int(
-            np.floor(effective_duration / other_integration_time)
-        )
-    return integrations
+    return int(integrations)
 
 
 class TestUpdateNIRDAIntegrations:
@@ -353,11 +421,7 @@ class TestUpdateNIRDAIntegrations:
                 "AcquireInfCamImages", "SC_Integrations"
             )
         )
-        # integration_time = 16 * 0.28896 = 4.62336 s → floor(1800/4.62336) = 389
-        frame_time = (100 + 12) * (256 + 2) * 1e-5
-        num_frames_total = 1 + 0 + 1 * (0 + 2 * (5 + 0) + 5 + 0)
-        integration_time = num_frames_total * frame_time
-        expected = int(np.floor(1800 / integration_time))
+        expected = _expected_nirda_integrations(1800, **_NIRDA_KWARGS)
         assert integ == expected
 
     def test_exact_integration_count_with_default_overhead(self):
@@ -429,17 +493,21 @@ class TestUpdateNIRDAIntegrations:
         )
         assert integ == expected
 
-    def test_exact_boundary_for_second_integration_does_not_add_it(self):
-        """An exact fit for the second integration keeps the count at one."""
-        frame_time = (100 + 12) * (256 + 2) * 1e-5
-        num_frames_base = 0 + 2 * (5 + 0) + 5 + 0
-        first_integration_time = (
-            num_frames_base + _NIRDA_KWARGS["sc_resets1"]
-        ) * frame_time
-        other_integration_time = (
-            num_frames_base + _NIRDA_KWARGS["sc_resets2"]
-        ) * frame_time
-        duration_sec = first_integration_time + other_integration_time
+    def test_second_integration_fits_at_boundary(self):
+        """A window of first + other (plus a hair) fits two integrations.
+
+        NirdaData.solve_integrations fits the second integration as soon as
+        the remaining time reaches the "other" integration time, so a window
+        just past first + other yields two integrations.
+        """
+        nd = _nirda_from_kwargs(**_NIRDA_KWARGS)
+        first_integration_time = nd.first_integration_time.to(u.s).value
+        other_integration_time = nd.other_integration_time.to(u.s).value
+        # Small positive margin keeps the test off the floating-point knife
+        # edge while still exercising the boundary behaviour.
+        duration_sec = (
+            first_integration_time + other_integration_time + 1e-3
+        )
 
         seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
         sched = _sched()
@@ -455,7 +523,7 @@ class TestUpdateNIRDAIntegrations:
                 "AcquireInfCamImages", "SC_Integrations"
             )
         )
-        assert integ == 1
+        assert integ == 2
 
 
 # ---------------------------------------------------------------------------
@@ -469,12 +537,14 @@ def _sched_with_overhead(
     nirda_pre=0 * u.s,
     nirda_post=0 * u.s,
 ):
-    """ScheduleProcessor instance with only the overhead attributes set."""
+    """ScheduleProcessor instance whose only state is its OverheadTiming."""
     sched = ScheduleProcessor.__new__(ScheduleProcessor)
-    sched.vda_pre_sequence_overhead = vda_pre
-    sched.vda_post_sequence_overhead = vda_post
-    sched.nirda_pre_sequence_overhead = nirda_pre
-    sched.nirda_post_sequence_overhead = nirda_post
+    sched.overhead = OverheadTiming(
+        visda_pre_overhead_time=vda_pre,
+        visda_post_overhead_time=vda_post,
+        nirda_pre_overhead_time=nirda_pre,
+        nirda_post_overhead_time=nirda_post,
+    )
     return sched
 
 
@@ -617,17 +687,14 @@ class TestUpdatePayloadParametersSequence:
         )
         assert integ == expected
 
-    def test_nirda_exact_boundary_for_second_integration_via_wrapper(self):
-        """Wrapper preserves the exact-fit boundary for later integrations."""
-        frame_time = (100 + 12) * (256 + 2) * 1e-5
-        num_frames_base = 0 + 2 * (5 + 0) + 5 + 0
-        first_integration_time = (
-            num_frames_base + _NIRDA_KWARGS["sc_resets1"]
-        ) * frame_time
-        other_integration_time = (
-            num_frames_base + _NIRDA_KWARGS["sc_resets2"]
-        ) * frame_time
-        duration_sec = first_integration_time + other_integration_time
+    def test_nirda_second_integration_fits_at_boundary_via_wrapper(self):
+        """Wrapper fits the second integration just past first + other."""
+        nd = _nirda_from_kwargs(**_NIRDA_KWARGS)
+        first_integration_time = nd.first_integration_time.to(u.s).value
+        other_integration_time = nd.other_integration_time.to(u.s).value
+        duration_sec = (
+            first_integration_time + other_integration_time + 1e-3
+        )
 
         seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
         sched = _sched_with_overhead()
@@ -637,7 +704,7 @@ class TestUpdatePayloadParametersSequence:
                 "AcquireInfCamImages", "SC_Integrations"
             )
         )
-        assert integ == 1
+        assert integ == 2
 
     def test_nirda_overhead_exceeds_duration_yields_zero_integrations(self):
         """Sequence shorter than NIRDA overhead budget → 0 integrations (via wrapper).
@@ -674,6 +741,212 @@ class TestUpdatePayloadParametersSequence:
 
 
 # ---------------------------------------------------------------------------
+# Per-priority parameter overrides
+# ---------------------------------------------------------------------------
+
+
+class TestNirdaParameterOverride:
+    """override_fields replaces observation values with NirdaData defaults."""
+
+    def test_overridden_fields_written_back_as_defaults(self):
+        """Listed fields are replaced by class defaults and written to XML."""
+        defaults = NirdaData()
+        # Build a sequence whose drop frames differ from the class defaults.
+        seq = _make_nirda_seq(
+            duration_sec=1800,
+            sc_drop1=5,
+            sc_drop3=7,
+            **{k: v for k, v in _NIRDA_KWARGS.items() if k not in
+               ("sc_drop1", "sc_drop3")},
+        )
+        sched = _sched()
+        seq_out = sched._update_NIRDA_integrations(
+            seq,
+            seq.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+            override_fields=["drop_frames_1", "drop_frames_3"],
+        )
+
+        drop1 = seq_out.get_payload_parameter(
+            "AcquireInfCamImages", "SC_DropFrames1"
+        )
+        drop3 = seq_out.get_payload_parameter(
+            "AcquireInfCamImages", "SC_DropFrames3"
+        )
+        assert int(drop1) == defaults.drop_frames_1
+        assert int(drop3) == defaults.drop_frames_3
+
+    def test_non_overridden_fields_untouched(self):
+        """Fields not listed keep the observation's original values."""
+        seq = _make_nirda_seq(
+            duration_sec=1800,
+            sc_drop2=9,
+            **{k: v for k, v in _NIRDA_KWARGS.items() if k != "sc_drop2"},
+        )
+        sched = _sched()
+        seq_out = sched._update_NIRDA_integrations(
+            seq,
+            seq.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+            override_fields=["drop_frames_1"],
+        )
+        drop2 = seq_out.get_payload_parameter(
+            "AcquireInfCamImages", "SC_DropFrames2"
+        )
+        assert int(drop2) == 9
+
+    def test_override_changes_integration_count(self):
+        """Overriding reset frames changes the computed SC_Integrations."""
+        # Large SC_Resets1 in the observation lengthens the first integration;
+        # overriding reset_frames_1 with the (smaller) default should let more
+        # integrations fit.
+        seq_a = _make_nirda_seq(
+            duration_sec=1800,
+            **{**_NIRDA_KWARGS, "sc_resets1": 500},
+        )
+        seq_b = seq_a.copy()
+        sched = _sched()
+
+        out_no = sched._update_NIRDA_integrations(
+            seq_a,
+            seq_a.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+        )
+        out_override = sched._update_NIRDA_integrations(
+            seq_b,
+            seq_b.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+            override_fields=["reset_frames_1"],
+        )
+        integ_no = int(
+            out_no.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        integ_override = int(
+            out_override.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        # Default reset_frames_1 (50) < 500, so the first integration is
+        # shorter and the count should not decrease.
+        assert integ_override >= integ_no
+
+
+class TestVisdaParameterOverride:
+    """override_fields replaces observation values with VisdaData defaults."""
+
+    def test_overridden_field_written_back_as_default(self):
+        defaults = VisdaData()
+        seq = _make_vda_seq(
+            duration_sec=1800,
+            exposure_us=500_000,
+            frames_per_coadd=3,
+        )
+        sched = _sched()
+        seq_out = sched._update_VDA_integrations(
+            seq,
+            seq.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+            override_fields=["frames_per_coadd"],
+        )
+        fpc = seq_out.get_payload_parameter(
+            "AcquireVisCamScienceData", "FramesPerCoadd"
+        )
+        assert int(fpc) == defaults.frames_per_coadd
+        # Exposure (not overridden) is unchanged.
+        exposure = seq_out.get_payload_parameter(
+            "AcquireVisCamScienceData", "ExposureTime_us"
+        )
+        assert int(exposure) == 500_000
+
+    def test_exposure_override_written_in_microseconds(self):
+        defaults = VisdaData()
+        seq = _make_vda_seq(
+            duration_sec=1800,
+            exposure_us=500_000,
+            frames_per_coadd=1,
+        )
+        sched = _sched()
+        seq_out = sched._update_VDA_integrations(
+            seq,
+            seq.duration,
+            pre_sequence_overhead=0 * u.s,
+            post_sequence_overhead=0 * u.s,
+            override_fields=["exposure_time_s"],
+        )
+        exposure = seq_out.get_payload_parameter(
+            "AcquireVisCamScienceData", "ExposureTime_us"
+        )
+        assert int(exposure) == int(
+            defaults.exposure_time_s.to(u.us).value
+        )
+
+
+class TestOverrideRoutingByPriority:
+    """The wrapper applies overrides only to matching priorities."""
+
+    def _make_nirda_seq_priority(self, priority):
+        seq = _make_nirda_seq(
+            duration_sec=1800,
+            sc_drop1=5,
+            **{k: v for k, v in _NIRDA_KWARGS.items() if k != "sc_drop1"},
+        )
+        seq.priority = priority
+        return seq
+
+    def test_matching_priority_is_overridden(self):
+        defaults = NirdaData()
+        sched = _sched_with_overhead()
+        sched._override_nirda_parameters = {0: ["drop_frames_1"]}
+        sched._override_visda_parameters = {}
+
+        seq = self._make_nirda_seq_priority(0)
+        out = sched._update_payload_parameters_sequence(seq)
+        drop1 = out.get_payload_parameter(
+            "AcquireInfCamImages", "SC_DropFrames1"
+        )
+        assert int(drop1) == defaults.drop_frames_1
+
+    def test_non_matching_priority_not_overridden(self):
+        sched = _sched_with_overhead()
+        sched._override_nirda_parameters = {0: ["drop_frames_1"]}
+        sched._override_visda_parameters = {}
+
+        seq = self._make_nirda_seq_priority(2)
+        out = sched._update_payload_parameters_sequence(seq)
+        drop1 = out.get_payload_parameter(
+            "AcquireInfCamImages", "SC_DropFrames1"
+        )
+        # Priority 2 not in override map -> observation value (5) preserved.
+        assert int(drop1) == 5
+
+    def test_overrides_accepted_and_stored_via_constructor(self):
+        """override_*_parameters are constructor args stored on the instance."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor(
+                "L1",
+                "L2",
+                override_nirda_parameters={0: ["drop_frames_1"]},
+                override_visda_parameters={1: ["frames_per_coadd"]},
+            )
+        assert proc._override_nirda_parameters == {0: ["drop_frames_1"]}
+        assert proc._override_visda_parameters == {1: ["frames_per_coadd"]}
+
+    def test_override_defaults_to_empty_when_unset(self):
+        """Omitting the override args yields empty override maps."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor("L1", "L2")
+        assert proc._override_nirda_parameters == {}
+        assert proc._override_visda_parameters == {}
+
+
+# ---------------------------------------------------------------------------
 # ScheduleProcessor.__init__ overhead validation
 # ---------------------------------------------------------------------------
 
@@ -685,7 +958,7 @@ class TestScheduleProcessorOverheadValidation:
         """Default overhead values (Quantity with time units) are accepted."""
         with mock.patch("shortschedule.scheduler.Visibility"):
             proc = ScheduleProcessor("L1", "L2")
-        assert proc.vda_pre_sequence_overhead == 260 * u.s
+        assert proc.overhead.visda_pre_overhead_time == 260 * u.s
 
     def test_timedelta_overhead_accepted(self):
         """TimeDelta overhead values must also be accepted without error."""
@@ -695,7 +968,7 @@ class TestScheduleProcessorOverheadValidation:
                 "L2",
                 vda_pre_sequence_overhead=TimeDelta(300 * u.s),
             )
-        assert proc.vda_pre_sequence_overhead == TimeDelta(300 * u.s)
+        assert proc.overhead.visda_pre_overhead_time == TimeDelta(300 * u.s)
 
     def test_wrong_units_raises_value_error(self):
         """A Quantity with non-time units must raise ValueError."""

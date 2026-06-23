@@ -22,6 +22,15 @@ from astropy import units as u
 
 # First-party/Local
 from shortschedule.nirda import NirdaData
+from shortschedule.overhead import OverheadTiming
+
+
+def _nirda_overhead(pre=0 * u.s, post=0 * u.s):
+    """OverheadTiming carrying only the NIRDA pre/post overheads under test."""
+    return OverheadTiming(
+        nirda_pre_overhead_time=pre,
+        nirda_post_overhead_time=post,
+    )
 
 # ---------------------------------------------------------------------------
 # Shared test fixture — small, round-number parameters for easy hand calculation
@@ -459,7 +468,7 @@ class TestSolveIntegrations:
     def test_zero_duration_yields_zero_integrations(self):
         """A zero-length window should produce no integrations."""
         nd = _make()
-        integrations, data, data_c = nd.solve_integrations(0.0 * u.s, 0 * u.s, 0 * u.s)
+        integrations, data, data_c = nd.solve_integrations(0.0 * u.s, _nirda_overhead())
         assert integrations == 0
         assert data.to(u.byte).value == 0
         assert data_c.to(u.byte).value == 0
@@ -470,7 +479,7 @@ class TestSolveIntegrations:
         # Use the object's own first_integration_time so the boundary is exact
         # regardless of floating-point ordering in the derived constants.
         integrations, _, _ = nd.solve_integrations(
-            nd.first_integration_time, 0 * u.s, 0 * u.s
+            nd.first_integration_time, _nirda_overhead()
         )
         assert integrations == 1
 
@@ -484,7 +493,7 @@ class TestSolveIntegrations:
             + nd.other_integration_time * 3
             + nd.other_integration_time * 1e-6
         )
-        integrations, _, _ = nd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        integrations, _, _ = nd.solve_integrations(duration, _nirda_overhead())
         assert integrations == 4
 
     def test_overhead_reduces_count(self):
@@ -493,9 +502,9 @@ class TestSolveIntegrations:
         # Window fits several integrations; a pre-overhead of two integrations'
         # worth must remove at least one.
         duration = (_FIRST_INT_TIME + 3 * _OTHER_INT_TIME) * u.s
-        n_no_oh, _, _ = nd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        n_no_oh, _, _ = nd.solve_integrations(duration, _nirda_overhead())
         n_with_oh, _, _ = nd.solve_integrations(
-            duration, _OTHER_INT_TIME * 2 * u.s, 0 * u.s
+            duration, _nirda_overhead(_OTHER_INT_TIME * 2 * u.s)
         )
         assert n_with_oh < n_no_oh
 
@@ -503,14 +512,14 @@ class TestSolveIntegrations:
         """data should equal integrations * integration_data."""
         nd = _make()
         duration = 56e-3 * u.s
-        integrations, data, _ = nd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        integrations, data, _ = nd.solve_integrations(duration, _nirda_overhead())
         expected = integrations * nd.integration_data
         assert abs(data.to(u.byte).value - expected.to(u.byte).value) < 1e-10
 
     def test_compressed_data_uses_compression_ratio(self):
         """data_compressed should equal data * compression_ratio."""
         nd = _make(compression_ratio=0.5)
-        _, data, data_c = nd.solve_integrations(56e-3 * u.s, 0 * u.s, 0 * u.s)
+        _, data, data_c = nd.solve_integrations(56e-3 * u.s, _nirda_overhead())
         assert abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-10
 
     def test_dropped_integrations_reduce_count(self):
@@ -520,8 +529,8 @@ class TestSolveIntegrations:
         # Window comfortably fits more than two integrations so the raw count
         # stays above the dropped count.
         duration = (_FIRST_INT_TIME + 3 * _OTHER_INT_TIME) * u.s
-        n_no, _, _ = nd_no_drop.solve_integrations(duration, 0 * u.s, 0 * u.s)
-        n_drop, _, _ = nd_dropped.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        n_no, _, _ = nd_no_drop.solve_integrations(duration, _nirda_overhead())
+        n_drop, _, _ = nd_dropped.solve_integrations(duration, _nirda_overhead())
         assert n_no - n_drop == 2
 
     def test_dropped_integrations_cannot_go_below_zero(self):
@@ -537,8 +546,8 @@ class TestSolveIntegrations:
         # Window fits two integrations; one integration's worth of additional
         # overhead must drop the count.
         duration = (_FIRST_INT_TIME + _OTHER_INT_TIME) * u.s + _OTHER_INT_TIME * 1e-6 * u.s
-        n_no, _, _ = nd_no_oh.solve_integrations(duration, 0 * u.s, 0 * u.s)
-        n_with, _, _ = nd_with_oh.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        n_no, _, _ = nd_no_oh.solve_integrations(duration, _nirda_overhead())
+        n_with, _, _ = nd_with_oh.solve_integrations(duration, _nirda_overhead())
         assert n_with < n_no
 
     def test_duration_shorter_than_first_integration_gives_zero(self):
@@ -547,7 +556,7 @@ class TestSolveIntegrations:
         # Just under the object's own first_integration_time, scaled so it works
         # at any magnitude.
         duration = nd.first_integration_time * (1 - 1e-6)
-        integrations, _, _ = nd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        integrations, _, _ = nd.solve_integrations(duration, _nirda_overhead())
         assert integrations == 0
 
 
@@ -580,7 +589,7 @@ class TestSolveDuration:
     def test_one_integration_duration(self):
         """One integration: duration = first_integration_time + overheads."""
         nd = _make()
-        duration, _, _ = nd.solve_duration(1, 0 * u.s, 0 * u.s)
+        duration, _, _ = nd.solve_duration(1, _nirda_overhead())
         expected = _FIRST_INT_TIME
         assert abs(duration.to(u.s).value - expected) < 1e-12
 
@@ -589,15 +598,15 @@ class TestSolveDuration:
         nd = _make()
         n = 4
         expected = _FIRST_INT_TIME + 3 * _OTHER_INT_TIME
-        duration, _, _ = nd.solve_duration(n, 0 * u.s, 0 * u.s)
+        duration, _, _ = nd.solve_duration(n, _nirda_overhead())
         assert abs(duration.to(u.s).value - expected) < 1e-12
 
     def test_overhead_added_to_duration(self):
         """Overhead parameters should be added to the total duration."""
         nd = _make()
         pre, post = 30e-3 * u.s, 10e-3 * u.s
-        dur_no_oh, _, _ = nd.solve_duration(3, 0 * u.s, 0 * u.s)
-        dur_with_oh, _, _ = nd.solve_duration(3, pre, post)
+        dur_no_oh, _, _ = nd.solve_duration(3, _nirda_overhead())
+        dur_with_oh, _, _ = nd.solve_duration(3, _nirda_overhead(pre, post))
         assert abs(
             dur_with_oh.to(u.s).value - dur_no_oh.to(u.s).value - 40e-3
         ) < 1e-12
@@ -606,29 +615,29 @@ class TestSolveDuration:
         """data should be integrations * integration_data."""
         nd = _make()
         n = 5
-        _, data, _ = nd.solve_duration(n, 0 * u.s, 0 * u.s)
+        _, data, _ = nd.solve_duration(n, _nirda_overhead())
         expected = n * nd.integration_data.to(u.byte).value
         assert abs(data.to(u.byte).value - expected) < 1e-10
 
     def test_compressed_data_uses_compression_ratio(self):
         """data_compressed should equal data * compression_ratio."""
         nd = _make(compression_ratio=0.6)
-        _, data, data_c = nd.solve_duration(4, 0 * u.s, 0 * u.s)
+        _, data, data_c = nd.solve_duration(4, _nirda_overhead())
         assert abs(data_c.to(u.byte).value - 0.6 * data.to(u.byte).value) < 1e-10
 
     def test_dropped_integrations_ignored(self):
         """dropped_integrations must not affect solve_duration (by spec)."""
         nd_no_drop = _make(dropped_integrations=0)
         nd_dropped = _make(dropped_integrations=5)
-        dur_no, _, _ = nd_no_drop.solve_duration(4, 0 * u.s, 0 * u.s)
-        dur_drop, _, _ = nd_dropped.solve_duration(4, 0 * u.s, 0 * u.s)
+        dur_no, _, _ = nd_no_drop.solve_duration(4, _nirda_overhead())
+        dur_drop, _, _ = nd_dropped.solve_duration(4, _nirda_overhead())
         assert dur_no == dur_drop
 
     def test_duration_increases_monotonically(self):
         """More integrations should always require more time."""
         nd = _make()
         durations = [
-            nd.solve_duration(n, 0 * u.s, 0 * u.s)[0].to(u.s).value
+            nd.solve_duration(n, _nirda_overhead())[0].to(u.s).value
             for n in range(1, 6)
         ]
         for i in range(len(durations) - 1):
@@ -645,10 +654,10 @@ class TestSolveRoundtrip:
         """With no overhead, solve_duration then solve_integrations should return n."""
         nd = _make()
         for n in range(1, 8):
-            duration, _, _ = nd.solve_duration(n, 0 * u.s, 0 * u.s)
+            duration, _, _ = nd.solve_duration(n, _nirda_overhead())
             # Tiny relative guard against floating-point loss when re-dividing.
             duration = duration + nd.other_integration_time * 1e-6
-            recovered, _, _ = nd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+            recovered, _, _ = nd.solve_integrations(duration, _nirda_overhead())
             assert recovered == n, f"Roundtrip failed for n={n}: recovered {recovered}"
 
     def test_roundtrip_with_overhead(self):
@@ -656,11 +665,11 @@ class TestSolveRoundtrip:
         nd = _make()
         pre, post = 20e-3 * u.s, 10e-3 * u.s
         for n in range(1, 6):
-            duration, _, _ = nd.solve_duration(n, pre, post)
+            duration, _, _ = nd.solve_duration(n, _nirda_overhead(pre, post))
             # Add a tiny relative epsilon so floating-point boundary comparisons
             # stay on the correct (>=) side without fitting an extra integration.
             duration = duration + nd.other_integration_time * 1e-6
-            recovered, _, _ = nd.solve_integrations(duration, pre, post)
+            recovered, _, _ = nd.solve_integrations(duration, _nirda_overhead(pre, post))
             assert recovered == n, (
                 f"Roundtrip with overhead failed for n={n}: recovered {recovered}"
             )
@@ -673,8 +682,8 @@ class TestSolveRoundtrip:
         # So ask for n_science raw (no drops) → duration → back out drops correctly
         n_science = 4
         n_total = n_science + dropped  # what solve_duration will schedule
-        duration, _, _ = nd.solve_duration(n_total, 0 * u.s, 0 * u.s)
-        recovered, _, _ = nd.solve_integrations(duration, 0 * u.s, 0 * u.s)
+        duration, _, _ = nd.solve_duration(n_total, _nirda_overhead())
+        recovered, _, _ = nd.solve_integrations(duration, _nirda_overhead())
         assert recovered == n_science
 
 
@@ -761,8 +770,8 @@ class TestAdditionalOverheadInSolveDuration:
         """solve_duration should add additional_overhead_time to the total."""
         nd_no_oh = _make(additional_overhead_time=0 * u.s)
         nd_with_oh = _make(additional_overhead_time=5e-3 * u.s)
-        dur_no, _, _ = nd_no_oh.solve_duration(3, 0 * u.s, 0 * u.s)
-        dur_with, _, _ = nd_with_oh.solve_duration(3, 0 * u.s, 0 * u.s)
+        dur_no, _, _ = nd_no_oh.solve_duration(3, _nirda_overhead())
+        dur_with, _, _ = nd_with_oh.solve_duration(3, _nirda_overhead())
         assert abs(
             dur_with.to(u.s).value - dur_no.to(u.s).value - 5e-3
         ) < 1e-12
@@ -770,7 +779,7 @@ class TestAdditionalOverheadInSolveDuration:
     def test_additional_overhead_not_added_when_zero_integrations(self):
         """Zero integrations should give zero duration regardless of overhead."""
         nd = _make(additional_overhead_time=5e-3 * u.s)
-        duration, _, _ = nd.solve_duration(0, 0 * u.s, 0 * u.s)
+        duration, _, _ = nd.solve_duration(0, _nirda_overhead())
         assert duration.to(u.s).value == 0.0
 
 
