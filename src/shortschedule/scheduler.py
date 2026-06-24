@@ -424,6 +424,11 @@ class ScheduleProcessor:
                 processed_calendar
             )
 
+        # Renumber visit and observation IDs sequentially. This runs last,
+        # after any merges/time changes that may have dropped IDs, so the
+        # delivered calendar always has contiguous, ordered identifiers.
+        self._renumber_ids(processed_calendar, verbose)
+
         # Analyze processed calendar
         self._analyze_processed_calendar(processed_calendar)
 
@@ -565,6 +570,47 @@ class ScheduleProcessor:
     # Tolerances used when deciding whether two sequences can be merged.
     _MERGE_ADJACENCY_TOL_SEC = 1.0  # max stop-to-start gap (seconds)
     _MERGE_POINTING_TOL_DEG = 1e-6  # max RA/Dec difference (degrees)
+
+    def _renumber_ids(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> ScienceCalendar:
+        """Renumber visit and observation IDs to be sequential.
+
+        Visits are numbered ``0001``, ``0002``, ... in their current order,
+        and within each visit the observation sequences are numbered
+        ``001``, ``002``, ... in their current order. This is run after all
+        time changes and merges so that any IDs dropped along the way are
+        replaced with a contiguous, ordered set.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar whose IDs are renumbered in place.
+        verbose : bool, optional
+            Print the number of IDs changed when True.
+
+        Returns
+        -------
+        ScienceCalendar
+            The same calendar instance, with IDs renumbered.
+        """
+        changed = 0
+        for visit_index, visit in enumerate(calendar.visits, start=1):
+            new_visit_id = f"{visit_index:04d}"
+            if visit.id != new_visit_id:
+                visit.id = new_visit_id
+                changed += 1
+
+            for seq_index, seq in enumerate(visit.sequences, start=1):
+                new_seq_id = f"{seq_index:03d}"
+                if seq.id != new_seq_id:
+                    seq.id = new_seq_id
+                    changed += 1
+
+        if verbose:
+            print(f"Renumbered IDs: {changed} identifier(s) updated.")
+
+        return calendar
 
     def _merge_similar_observations(
         self, calendar: ScienceCalendar, verbose: bool = False

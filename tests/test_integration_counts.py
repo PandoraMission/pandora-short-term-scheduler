@@ -11,7 +11,11 @@ from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 # First-party/Local
-from shortschedule.models import ObservationSequence
+from shortschedule.models import (
+    ObservationSequence,
+    ScienceCalendar,
+    Visit,
+)
 from shortschedule.nirda import NirdaData
 from shortschedule.overhead import OverheadTiming
 from shortschedule.scheduler import ScheduleProcessor
@@ -496,35 +500,35 @@ class TestUpdateNIRDAIntegrations:
         assert integ == expected
 
     def test_second_integration_fits_at_boundary(self):
-        """A window of first + other (plus a hair) fits two integrations.
+        """Extending a window by one ``other`` integration adds exactly one.
 
         NirdaData.solve_integrations fits the second integration as soon as
-        the remaining time reaches the "other" integration time, so a window
-        just past first + other yields two integrations.
+        the remaining time reaches the "other" integration time. The check is
+        framed as a delta so it stays valid regardless of any fixed offset
+        (e.g. dropped_integrations) applied to the reported count.
         """
         nd = _nirda_from_kwargs(**_NIRDA_KWARGS)
         first_integration_time = nd.first_integration_time.to(u.s).value
         other_integration_time = nd.other_integration_time.to(u.s).value
-        # Small positive margin keeps the test off the floating-point knife
-        # edge while still exercising the boundary behaviour.
-        duration_sec = (
+        sched = _sched()
+
+        def _count(duration_sec):
+            seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
+            out = sched._update_NIRDA_integrations(
+                seq, seq.duration, overhead=_overhead()
+            )
+            return int(
+                out.get_payload_parameter(
+                    "AcquireInfCamImages", "SC_Integrations"
+                )
+            )
+
+        # Small positive margins keep both cases off the floating-point edge.
+        one = _count(first_integration_time + 1e-3)
+        two = _count(
             first_integration_time + other_integration_time + 1e-3
         )
-
-        seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
-        sched = _sched()
-        seq_out = sched._update_NIRDA_integrations(
-            seq,
-            seq.duration,
-            overhead=_overhead(),
-        )
-
-        integ = int(
-            seq_out.get_payload_parameter(
-                "AcquireInfCamImages", "SC_Integrations"
-            )
-        )
-        assert integ == 2
+        assert two == one + 1
 
 
 # ---------------------------------------------------------------------------
@@ -689,23 +693,26 @@ class TestUpdatePayloadParametersSequence:
         assert integ == expected
 
     def test_nirda_second_integration_fits_at_boundary_via_wrapper(self):
-        """Wrapper fits the second integration just past first + other."""
+        """Wrapper adds exactly one integration for one more ``other`` window."""
         nd = _nirda_from_kwargs(**_NIRDA_KWARGS)
         first_integration_time = nd.first_integration_time.to(u.s).value
         other_integration_time = nd.other_integration_time.to(u.s).value
-        duration_sec = (
+        sched = _sched_with_overhead()
+
+        def _count(duration_sec):
+            seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
+            out = sched._update_payload_parameters_sequence(seq)
+            return int(
+                out.get_payload_parameter(
+                    "AcquireInfCamImages", "SC_Integrations"
+                )
+            )
+
+        one = _count(first_integration_time + 1e-3)
+        two = _count(
             first_integration_time + other_integration_time + 1e-3
         )
-
-        seq = _make_nirda_seq(duration_sec=duration_sec, **_NIRDA_KWARGS)
-        sched = _sched_with_overhead()
-        seq_out = sched._update_payload_parameters_sequence(seq)
-        integ = int(
-            seq_out.get_payload_parameter(
-                "AcquireInfCamImages", "SC_Integrations"
-            )
-        )
-        assert integ == 2
+        assert two == one + 1
 
     def test_nirda_overhead_exceeds_duration_yields_zero_integrations(self):
         """Sequence shorter than NIRDA overhead budget → 0 integrations (via wrapper).
@@ -1186,3 +1193,87 @@ class TestScheduleProcessorOverheadValidation:
                     "L2",
                     nirda_pre_sequence_overhead=258,  # bare int, no units
                 )
+
+
+# ---------------------------------------------------------------------------
+# Sequential ID renumbering
+# ---------------------------------------------------------------------------
+
+
+def _seq_with_id(seq_id):
+    """Minimal ObservationSequence carrying just an ID."""
+    start = Time("2026-06-15T12:00:00", scale="utc")
+    return ObservationSequence(
+        id=seq_id,
+        target="T",
+        priority=1,
+        start_time=start,
+        stop_time=start + TimeDelta(60, format="sec"),
+        ra=0.0,
+        dec=0.0,
+        payload_params={},
+    )
+
+
+class TestRenumberIds:
+    """_renumber_ids makes visit and observation IDs contiguous."""
+
+    def _cal(self):
+        return ScienceCalendar(
+            metadata={},
+            visits=[
+                Visit(id="0007", sequences=[
+                    _seq_with_id("050"), _seq_with_id("099")
+                ]),
+                Visit(id="0003", sequences=[_seq_with_id("012")]),
+                Visit(id="ABC", sequences=[
+                    _seq_with_id("x"), _seq_with_id("y"), _seq_with_id("z")
+                ]),
+            ],
+        )
+
+    def test_visit_ids_renumbered_from_one(self):
+        """Visit IDs become 0001, 0002, ... in order."""
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        cal = self._cal()
+        sched._renumber_ids(cal)
+        assert [v.id for v in cal.visits] == ["0001", "0002", "0003"]
+
+    def test_observation_ids_renumbered_per_visit(self):
+        """Each visit's observation IDs restart at 001 and increment."""
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        cal = self._cal()
+        sched._renumber_ids(cal)
+        assert [s.id for s in cal.visits[0].sequences] == ["001", "002"]
+        assert [s.id for s in cal.visits[1].sequences] == ["001"]
+        assert [s.id for s in cal.visits[2].sequences] == [
+            "001", "002", "003"
+        ]
+
+    def test_already_sequential_is_noop(self):
+        """Correctly numbered IDs are left unchanged."""
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        cal = ScienceCalendar(
+            metadata={},
+            visits=[
+                Visit(id="0001", sequences=[_seq_with_id("001")]),
+                Visit(id="0002", sequences=[
+                    _seq_with_id("001"), _seq_with_id("002")
+                ]),
+            ],
+        )
+        sched._renumber_ids(cal)
+        assert [v.id for v in cal.visits] == ["0001", "0002"]
+        assert [s.id for s in cal.visits[1].sequences] == ["001", "002"]
+
+    def test_widths_are_zero_padded(self):
+        """Visit IDs use 4 digits and observation IDs use 3 digits."""
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        cal = self._cal()
+        sched._renumber_ids(cal)
+        assert all(len(v.id) == 4 for v in cal.visits)
+        assert all(
+            len(s.id) == 3
+            for v in cal.visits
+            for s in v.sequences
+        )
