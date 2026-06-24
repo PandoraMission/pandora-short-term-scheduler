@@ -20,7 +20,12 @@ import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
+    ZoneInfo = None
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2458,10 +2463,13 @@ class ScheduleProcessor:
             else:
                 old = child.text
                 child.text = self._format_payload_value(value)
-                self._print(
-                    f"{prefix} | PAYLOAD OVERRIDE: {path}/{tag} "
-                    f"'{old}' -> '{child.text}'"
-                )
+                # Only report when the value actually changed.
+                old_norm = old.strip() if old is not None else None
+                if old_norm != child.text:
+                    self._print(
+                        f"{prefix} | PAYLOAD OVERRIDE: {path}/{tag} "
+                        f"'{old}' -> '{child.text}'"
+                    )
 
     def _apply_payload_overrides(
         self, sequence: ObservationSequence, visit_id: Any = None
@@ -2780,9 +2788,11 @@ class ScheduleProcessor:
             sequence.set_payload_parameter(
                 "AcquireVisCamScienceData", tag, text
             )
-            self._print(
-                f"{prefix} | VISDA OVERRIDE: {tag} '{old}' -> '{text}'"
-            )
+            # Only report when the value actually changed.
+            if (old if old is None else str(old)) != text:
+                self._print(
+                    f"{prefix} | VISDA OVERRIDE: {tag} '{old}' -> '{text}'"
+                )
 
         old_frames = sequence.get_payload_parameter(
             "AcquireVisCamScienceData", "NumTotalFramesRequested"
@@ -2857,9 +2867,11 @@ class ScheduleProcessor:
         for tag, text in info.items():
             old = sequence.get_payload_parameter("AcquireInfCamImages", tag)
             sequence.set_payload_parameter("AcquireInfCamImages", tag, text)
-            self._print(
-                f"{prefix} | NIRDA OVERRIDE: {tag} '{old}' -> '{text}'"
-            )
+            # Only report when the value actually changed.
+            if (old if old is None else str(old)) != text:
+                self._print(
+                    f"{prefix} | NIRDA OVERRIDE: {tag} '{old}' -> '{text}'"
+                )
 
         # Optionally adjust reset_frames_1 to cover the VITL settling time
         # before computing integrations, and persist the new SC_Resets1.
@@ -3670,7 +3682,9 @@ class ScheduleProcessor:
             except Exception:
                 pass
 
-        fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+        # No per-entry timestamps; the run start time is recorded once in the
+        # log file header instead (see below).
+        fmt = logging.Formatter("%(message)s")
 
         # Console handler: gated by verbose for INFO, always shows warnings.
         console = logging.StreamHandler()
@@ -3688,8 +3702,25 @@ class ScheduleProcessor:
             log_file = base.with_suffix(".log")
             errors_file = base.with_suffix(".errors.log")
 
+            # Write a header recording the run start time in UTC and US
+            # Eastern, so individual entries need not carry timestamps. The
+            # FileHandler below then appends to this file.
+            now_utc = datetime.now(timezone.utc)
+            utc_str = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
+            if ZoneInfo is not None:
+                eastern = now_utc.astimezone(ZoneInfo("America/New_York"))
+                eastern_str = eastern.strftime("%Y-%m-%d %H:%M:%S %Z")
+            else:  # pragma: no cover - zoneinfo missing
+                eastern_str = "unavailable (zoneinfo not installed)"
+            with open(log_file, "w", encoding="utf-8") as handle:
+                handle.write("=" * 70 + "\n")
+                handle.write("Short-term scheduler run log\n")
+                handle.write(f"Run start (UTC):     {utc_str}\n")
+                handle.write(f"Run start (Eastern): {eastern_str}\n")
+                handle.write("=" * 70 + "\n\n")
+
             file_handler = logging.FileHandler(
-                log_file, mode="w", encoding="utf-8"
+                log_file, mode="a", encoding="utf-8"
             )
             file_handler.setLevel(logging.INFO)
             file_handler.setFormatter(fmt)
