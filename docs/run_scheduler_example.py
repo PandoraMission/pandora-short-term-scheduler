@@ -74,26 +74,75 @@ scheduler = ScheduleProcessor(
     min_power_frac=0.68,          # min acceptable orbit-average power fraction
     force_gap_fill=False,         # if True, aggressively fill scheduling gaps
     # ----------------------------------------------------------------------
-    # Optional per-priority payload overrides.
-    #
-    # These force specific NIRDA/VISDA payload parameters for every
-    # observation of a given priority, instead of using the values carried by
-    # the observation. Each maps a priority -> {field_name: value}; the
-    # corresponding payload XML tags are updated and the integration counts
-    # are recomputed accordingly. A value of None means "use the default from
-    # the NirdaData / VisdaData class".
-    #
-    # Example: for all priority-0 observations set drop_frames_1=2 and take
-    # drop_frames_3 from the class default; for priority 1 set
-    # reset_frames_1=30; and set VISDA frames_per_coadd=5 for priority 0.
-    #
-    # override_nirda_parameters={
-    #     0: {"drop_frames_1": 2, "drop_frames_3": None},
-    #     1: {"reset_frames_1": 30},
-    # },
-    # override_visda_parameters={
-    #     0: {"frames_per_coadd": 5},
-    # },
+    # Per-priority payload overrides, by literal XML tag (CalendarCleaner
+    # config.json format): {priority: {section: {xml_tag: value}}}. These are
+    # forced onto every observation of the given priority (creating any
+    # missing tag) before integration counts are recomputed, so ROI / coadd /
+    # reset changes flow through. Priority keys may be ints or "Priority_N".
+    override_payload_parameters={
+        "Priority_0": {
+            "Observational_Parameters": {
+                "Boresight": {
+                    "PRI_CMD_DIR": 9,
+                },
+            },
+            "AcquireInfCamImages": {
+                "ROI_StartX": 1737,
+                "ROI_StartY": 962,
+                "ROI_SizeX": 80,
+                "ROI_SizeY": 250,
+                "SC_Resets2": 1,
+            },
+            "AcquireVisCamScienceData": {
+                "FramesPerCoadd": 50,
+                "MaxNumStarRois": 1,
+                "StarRoiDimension": 50,
+            },
+        },
+        "Priority_1": {
+            "Observational_Parameters": {
+                "Boresight": {
+                    "PRI_CMD_DIR": 9,
+                },
+            },
+            "AcquireInfCamImages": {
+                "ROI_StartX": 1737,
+                "ROI_StartY": 962,
+                "ROI_SizeX": 80,
+                "ROI_SizeY": 250,
+                "RiceX": 5,
+                "RiceY": 28,
+                "SC_Resets2": 1,
+            },
+            "AcquireVisCamScienceData": {
+                "StarRoiDimension": 50,
+                "FramesPerCoadd": 5,
+            },
+        },
+        "Priority_2": {
+            "Observational_Parameters": {
+                "Boresight": {
+                    "PRI_CMD_DIR": 9,
+                },
+            },
+            "AcquireInfCamImages": {
+                "ROI_StartX": 1737,
+                "ROI_StartY": 962,
+                "ROI_SizeX": 80,
+                "ROI_SizeY": 250,
+                "SC_Resets2": 1,
+            },
+            "AcquireVisCamScienceData": {
+                "StarRoiDimension": 50,
+                "FramesPerCoadd": 5,
+            },
+        },
+    },
+    # Field-name overrides (NirdaData/VisdaData fields; None -> class default)
+    # are also available and recompute integrations; the XML-tag form above
+    # is preferred when mirroring the cleaner config:
+    # override_nirda_parameters={0: {"drop_frames_1": 2}},
+    # override_visda_parameters={0: {"frames_per_coadd": 5}},
 )
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ import copy
 import logging
 import uuid
 import warnings
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -91,6 +92,7 @@ class ScheduleProcessor:
         nirda_post_sequence_overhead: u.Quantity | None = None,
         override_nirda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
         override_visda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
+        override_payload_parameters: Optional[Dict[Any, Dict[str, Dict[str, Any]]]] = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
@@ -149,6 +151,19 @@ class ScheduleProcessor:
             Per-priority VISDA payload overrides, structured identically to
             ``override_nirda_parameters`` but using ``VisdaData`` field names
             (e.g. ``{0: {'frames_per_coadd': 5}}``). Defaults to no
+            overrides.
+        override_payload_parameters : dict, optional
+            General per-priority overrides written directly onto the payload
+            XML by tag name (the CalendarCleaner ``config.json`` format).
+            Structure: ``{priority: {section: {xml_tag: value}}}`` where
+            *section* is e.g. ``'AcquireInfCamImages'`` or
+            ``'AcquireVisCamScienceData'`` and *xml_tag* is a literal payload
+            tag (``ROI_StartX``, ``ROI_SizeX``, ``SC_Resets2``,
+            ``FramesPerCoadd``, ``RiceX`` ...). Tags missing from an
+            observation are created. Priority keys may be ints (``0``) or
+            ``'Priority_0'`` strings. These are applied *before* the
+            integration counts are recomputed, so size/coadd/reset changes
+            flow through. Free-time observations are skipped. Defaults to no
             overrides.
         max_file_size_uncompressed : Quantity[byte], optional
             Maximum allowed *uncompressed* data volume per detector per
@@ -316,6 +331,11 @@ class ScheduleProcessor:
         )
         self._override_visda_parameters: Dict[int, Any] = (
             override_visda_parameters or {}
+        )
+        # General per-priority XML-tag payload overrides (cleaner config.json
+        # format). Normalized to int priority keys.
+        self._override_payload_parameters: Dict[int, Any] = (
+            self._normalize_priority_keys(override_payload_parameters)
         )
 
         # Per-observation data-volume limits. A warning is raised during the
@@ -2330,12 +2350,114 @@ class ScheduleProcessor:
             self._print(f"Warning: {msg}")
             warnings.warn(msg, stacklevel=2)
 
+    @staticmethod
+    def _normalize_priority_keys(raw: Optional[Dict[Any, Any]]) -> Dict[int, Any]:
+        """Coerce override priority keys to ints (accepts 'Priority_0', '0')."""
+        out: Dict[int, Any] = {}
+        for key, value in (raw or {}).items():
+            if isinstance(key, bool):
+                # bool is an int subclass; reject to avoid surprises.
+                raise ValueError(f"Invalid priority key: {key!r}")
+            if isinstance(key, int):
+                priority = key
+            elif isinstance(key, str):
+                token = key.strip()
+                if token.lower().startswith("priority_"):
+                    token = token.split("_", 1)[1]
+                priority = int(token)
+            else:
+                raise ValueError(f"Invalid priority key: {key!r}")
+            out[priority] = value
+        return out
+
+    @staticmethod
+    def _format_payload_value(value: Any) -> str:
+        """Format a Python value as payload XML text (cleaner-compatible)."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float):
+            if value.is_integer():
+                return str(int(value))
+            return f"{value:.6f}".rstrip("0").rstrip(".")
+        return str(value)
+
+    def _set_override_element(
+        self,
+        parent: "ET.Element",
+        mapping: Dict[str, Any],
+        prefix: str,
+        path: str,
+    ) -> None:
+        """Recursively force *mapping* onto *parent*, creating missing tags.
+
+        Scalar values are written as element text; nested dicts create (or
+        descend into) child elements, supporting structures like
+        ``{'Boresight': {'PRI_CMD_DIR': 9}}``.
+        """
+        for tag, value in mapping.items():
+            child = parent.find(tag)
+            if child is None:
+                child = ET.SubElement(parent, tag)
+            if isinstance(value, dict):
+                self._set_override_element(
+                    child, value, prefix, f"{path}/{tag}"
+                )
+            else:
+                old = child.text
+                child.text = self._format_payload_value(value)
+                self._print(
+                    f"{prefix} | PAYLOAD OVERRIDE: {path}/{tag} "
+                    f"'{old}' -> '{child.text}'"
+                )
+
+    def _apply_payload_overrides(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> None:
+        """Force per-priority XML overrides onto a sequence.
+
+        Writes ``override_payload_parameters[priority][section][...]`` onto
+        the observation, creating any missing tag (or section). Values may be
+        nested dicts (e.g. ``Observational_Parameters -> Boresight ->
+        PRI_CMD_DIR``). The payload detector sections
+        (``AcquireInfCamImages`` / ``AcquireVisCamScienceData``) and an
+        ``Observational_Parameters`` override are all stored on
+        ``payload_params``; the writer merges the latter into the
+        Observational_Parameters block it builds. Free-time observations are
+        skipped. Runs before the integration recompute so size/coadd/reset
+        changes take effect.
+        """
+        overrides = getattr(self, "_override_payload_parameters", {}) or {}
+        if not overrides:
+            return
+        entry = overrides.get(sequence.priority)
+        if not entry:
+            return
+        if (sequence.target or "").strip().lower() in (
+            "free time",
+            "freetime",
+            "free_time",
+            "free-time",
+        ):
+            return
+
+        prefix = self._seq_prefix(visit_id, sequence)
+        for section, mapping in entry.items():
+            section_elem = sequence.payload_params.get(section)
+            if section_elem is None:
+                section_elem = ET.Element(section)
+                sequence.payload_params[section] = section_elem
+            self._set_override_element(section_elem, mapping, prefix, section)
+
     def _update_payload_parameters_sequence(
         self, sequence: ObservationSequence, visit_id: Any = None
     ) -> ObservationSequence:
         # Pass sequence.duration (TimeDelta) so both helpers receive the
         # correct type and the overhead subtraction uses a consistent unit.
         duration = sequence.duration
+
+        # General XML-tag payload overrides first, so subsequent integration
+        # recomputation sees the forced ROI/coadd/reset values.
+        self._apply_payload_overrides(sequence, visit_id=visit_id)
 
         # Per-priority parameter overrides (see process_calendar). Falls back
         # to no overrides when the attributes are unset (e.g. when a bare

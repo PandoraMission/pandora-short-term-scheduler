@@ -15,4 +15,5 @@
 - Adds helper method to generate diagnostic data file.
   - Diag file contains a observation file manifest including compressed fits file names.
 - Adds short term scheduler to processed calendar meta data.
+- Adds override for PRI_CMD_DIR -> 9.
 - Adds tests for all of these changes.
