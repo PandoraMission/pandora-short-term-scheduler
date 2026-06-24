@@ -292,12 +292,13 @@ class TestSolveIntegrations:
         assert n_with < n_no
 
     def test_data_scales_with_frames(self):
-        """data should equal frames * frame_bytes."""
+        """data should equal coadds * frame_bytes (saved, net of coadding)."""
         vd = _make()
         frames, data, _ = vd.solve_integrations(
             vd.single_frame_time * 20, _visda_overhead()
         )
-        expected = frames * vd.frame_bytes
+        coadds = frames // vd.frames_per_coadd
+        expected = coadds * vd.frame_bytes
         assert abs(data.to(u.byte).value - expected.to(u.byte).value) < 1e-6
 
     def test_compressed_data_uses_compression_ratio(self):
@@ -382,11 +383,11 @@ class TestSolveDuration:
         assert data.unit.is_equivalent(u.byte)
 
     def test_data_scales_with_integrations(self):
-        """data should equal integrations * frame_bytes."""
+        """data should equal coadds * frame_bytes (saved, net of coadding)."""
         vd = _make()
-        n = 7
+        n = 35
         _, data, _ = vd.solve_duration(n, _visda_overhead())
-        expected = n * vd.frame_bytes.to(u.byte).value
+        expected = (n // vd.frames_per_coadd) * vd.frame_bytes.to(u.byte).value
         assert abs(data.to(u.byte).value - expected) < 1e-6
 
     def test_compressed_data_uses_compression_ratio(self):

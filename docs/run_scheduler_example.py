@@ -94,6 +94,7 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeX": 80,
                 "ROI_SizeY": 250,
                 "SC_Resets2": 1,
+                "SC_DropFrames1": 1
             },
             "AcquireVisCamScienceData": {
                 "FramesPerCoadd": 50,
@@ -115,6 +116,7 @@ scheduler = ScheduleProcessor(
                 "RiceX": 5,
                 "RiceY": 28,
                 "SC_Resets2": 1,
+                "SC_DropFrames1": 1
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
@@ -133,6 +135,7 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeX": 80,
                 "ROI_SizeY": 250,
                 "SC_Resets2": 1,
+                "SC_DropFrames1": 1
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
