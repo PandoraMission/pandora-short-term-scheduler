@@ -16,4 +16,5 @@
   - Diag file contains a observation file manifest including compressed fits file names.
 - Adds short term scheduler to processed calendar meta data.
 - Adds override for PRI_CMD_DIR -> 9.
+- Adds ability to convert det method 2 to 1 and adds pre-defined RA/DEC for the single ROI for observations that have max_num_rois = 1.
 - Adds tests for all of these changes.

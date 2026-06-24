@@ -73,6 +73,7 @@ scheduler = ScheduleProcessor(
     roll_step=1.0,                # roll search step size (deg)
     min_power_frac=0.68,          # min acceptable orbit-average power fraction
     force_gap_fill=False,         # if True, aggressively fill scheduling gaps
+    convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
     # ----------------------------------------------------------------------
     # Per-priority payload overrides, by literal XML tag (CalendarCleaner
     # config.json format): {priority: {section: {xml_tag: value}}}. These are

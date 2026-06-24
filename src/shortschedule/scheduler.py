@@ -97,6 +97,7 @@ class ScheduleProcessor:
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
         vitl_settling_time: u.Quantity = 60.0 * u.s,
+        convert_single_roi_to_predefined: bool = True,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -183,6 +184,13 @@ class ScheduleProcessor:
         vitl_settling_time : Quantity[second], optional
             Minimum VITL detector settling time used when
             ``update_nirda_reset1_for_vitl`` is True. Defaults to 60 s.
+        convert_single_roi_to_predefined : bool, optional
+            When True (default), any observation whose VIS section requests a
+            single brightest-star auto-detect ROI (``MaxNumStarRois == 1`` and
+            ``StarRoiDetMethod == 2``) is converted to the predefined-ROI
+            method (``StarRoiDetMethod == 1``) with the target RA/Dec written
+            as the single predefined ROI (``numPredefinedStarRois == 1``,
+            ``PredefinedStarRoiRa/RA1``, ``PredefinedStarRoiDec/Dec1``).
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -349,6 +357,13 @@ class ScheduleProcessor:
         # integration count is computed.
         self.update_nirda_reset1_for_vitl = update_nirda_reset1_for_vitl
         self.vitl_settling_time = vitl_settling_time
+
+        # Single-ROI conversion: when enabled, any observation whose VIS
+        # section requests exactly one star ROI via the brightest-star
+        # auto-detect method (MaxNumStarRois == 1, StarRoiDetMethod == 2) is
+        # converted to the predefined-ROI method (StarRoiDetMethod == 1) with
+        # the target RA/Dec supplied as the single predefined ROI.
+        self.convert_single_roi_to_predefined = convert_single_roi_to_predefined
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -2484,7 +2499,123 @@ class ScheduleProcessor:
             visit_id=visit_id,
         )
 
+        # Convert single-ROI auto-detect observations to the predefined-ROI
+        # method. Runs after the overrides above so a forced MaxNumStarRois of
+        # 1 is taken into account; the conversion does not change timing or
+        # data volume, so its position relative to the integration recompute
+        # is immaterial.
+        if getattr(self, "convert_single_roi_to_predefined", False):
+            self._convert_single_roi_to_predefined(sequence, visit_id=visit_id)
+
         return sequence
+
+    def _convert_single_roi_to_predefined(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> bool:
+        """Convert a single-ROI auto-detect VIS section to predefined-ROI.
+
+        Mirrors the CalendarCleaner ``Fix_Single_ROI_Det`` step: when the
+        ``AcquireVisCamScienceData`` section requests exactly one star ROI via
+        the brightest-star auto-detect method (``MaxNumStarRois == 1`` and
+        ``StarRoiDetMethod == 2``), switch it to the predefined-ROI method
+        (``StarRoiDetMethod == 1``) and supply the target RA/Dec as the single
+        predefined ROI.
+
+        The target RA/Dec is resolved verbatim, preferring the VIS section's
+        ``TargetRA``/``TargetDEC``, then the sequence's ``ra``/``dec``. The
+        conversion is idempotent: a section already carrying ``RA1``/``Dec1``
+        predefined children is left untouched. Returns True if a conversion
+        was made.
+        """
+        if (sequence.target or "").strip().lower() in (
+            "free time",
+            "freetime",
+            "free_time",
+            "free-time",
+        ):
+            return False
+
+        vis_section = sequence.payload_params.get("AcquireVisCamScienceData")
+        if vis_section is None:
+            return False
+
+        def _to_int(elem):
+            if elem is None or elem.text is None:
+                return None
+            try:
+                return int(float(elem.text))
+            except (ValueError, TypeError):
+                return None
+
+        max_rois = _to_int(vis_section.find("MaxNumStarRois"))
+        det_method = _to_int(vis_section.find("StarRoiDetMethod"))
+        if max_rois != 1 or det_method != 2:
+            return False
+
+        # Idempotency: only skip when an actual predefined ROI (RA1/Dec1) is
+        # already present, not a bare placeholder parent.
+        ra_parent = vis_section.find("PredefinedStarRoiRa")
+        dec_parent = vis_section.find("PredefinedStarRoiDec")
+        has_ra1 = ra_parent is not None and ra_parent.find("RA1") is not None
+        has_dec1 = dec_parent is not None and dec_parent.find("Dec1") is not None
+        if has_ra1 and has_dec1:
+            return False
+
+        # Resolve the target RA/Dec verbatim: prefer the VIS-section values,
+        # then fall back to the sequence's own coordinates.
+        def _usable(value):
+            return (
+                value is not None
+                and str(value).strip() != ""
+                and str(value).strip().lower() != "nan"
+            )
+
+        ra_elem = vis_section.find("TargetRA")
+        dec_elem = vis_section.find("TargetDEC")
+        ra = ra_elem.text if ra_elem is not None else None
+        dec = dec_elem.text if dec_elem is not None else None
+        if not _usable(ra) and sequence.ra is not None:
+            ra = self._format_payload_value(sequence.ra)
+        if not _usable(dec) and sequence.dec is not None:
+            dec = self._format_payload_value(sequence.dec)
+
+        prefix = self._seq_prefix(visit_id, sequence)
+        if not _usable(ra) or not _usable(dec):
+            self._print(
+                f"WARNING: {prefix} | SINGLE-ROI: no usable target RA/Dec "
+                f"(RA={ra!r}, Dec={dec!r}); left unchanged."
+            )
+            return False
+
+        ra = str(ra).strip()
+        dec = str(dec).strip()
+
+        # Switch to predefined-ROI method with a single ROI.
+        det_elem = vis_section.find("StarRoiDetMethod")
+        det_elem.text = "1"
+
+        num_elem = vis_section.find("numPredefinedStarRois")
+        if num_elem is None:
+            num_elem = ET.SubElement(vis_section, "numPredefinedStarRois")
+        num_elem.text = "1"
+
+        if ra_parent is None:
+            ra_parent = ET.SubElement(vis_section, "PredefinedStarRoiRa")
+        for stale in list(ra_parent):
+            ra_parent.remove(stale)
+        ET.SubElement(ra_parent, "RA1").text = ra
+
+        if dec_parent is None:
+            dec_parent = ET.SubElement(vis_section, "PredefinedStarRoiDec")
+        for stale in list(dec_parent):
+            dec_parent.remove(stale)
+        ET.SubElement(dec_parent, "Dec1").text = dec
+
+        self._print(
+            f"{prefix} | SINGLE-ROI: StarRoiDetMethod 2 -> 1, "
+            f"numPredefinedStarRois=1, RA1={ra}, Dec1={dec}"
+        )
+        return True
 
     def _update_VDA_integrations(
         self,

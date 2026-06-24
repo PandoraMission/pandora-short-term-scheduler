@@ -189,6 +189,74 @@ class TestObservationalParameterOverride:
         assert local(payload, "Observational_Parameters") is None
 
 
+class TestSingleRoiConversion:
+    """Convert single-ROI auto-detect VIS sections to predefined-ROI."""
+
+    def _sched(self):
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        sched.convert_single_roi_to_predefined = True
+        return sched
+
+    def _seq_single_auto(self, **vis_extra):
+        seq = _seq(priority=0)
+        vis = seq.payload_params[VisdaData.PAYLOAD_SECTION]
+        for tag in ("MaxNumStarRois", "StarRoiDetMethod"):
+            existing = vis.find(tag)
+            if existing is None:
+                existing = ET.SubElement(vis, tag)
+        vis.find("MaxNumStarRois").text = "1"
+        vis.find("StarRoiDetMethod").text = "2"
+        for tag, value in vis_extra.items():
+            elem = vis.find(tag)
+            if elem is None:
+                elem = ET.SubElement(vis, tag)
+            elem.text = str(value)
+        return seq
+
+    def test_converts_to_predefined(self):
+        seq = self._seq_single_auto()
+        assert self._sched()._convert_single_roi_to_predefined(seq) is True
+        vis = seq.payload_params[VisdaData.PAYLOAD_SECTION]
+        assert vis.find("StarRoiDetMethod").text == "1"
+        assert vis.find("numPredefinedStarRois").text == "1"
+        # RA/Dec come from the sequence's own coordinates (10.0/20.0).
+        assert vis.find("PredefinedStarRoiRa").find("RA1").text == "10"
+        assert vis.find("PredefinedStarRoiDec").find("Dec1").text == "20"
+
+    def test_prefers_target_radec_verbatim(self):
+        seq = self._seq_single_auto(TargetRA="123.456", TargetDEC="-7.89")
+        assert self._sched()._convert_single_roi_to_predefined(seq) is True
+        vis = seq.payload_params[VisdaData.PAYLOAD_SECTION]
+        assert vis.find("PredefinedStarRoiRa").find("RA1").text == "123.456"
+        assert vis.find("PredefinedStarRoiDec").find("Dec1").text == "-7.89"
+
+    def test_idempotent_when_already_predefined(self):
+        seq = self._seq_single_auto()
+        sched = self._sched()
+        assert sched._convert_single_roi_to_predefined(seq) is True
+        # A second pass finds RA1/Dec1 already present and StarRoiDetMethod 1.
+        assert sched._convert_single_roi_to_predefined(seq) is False
+
+    def test_skips_non_single_roi(self):
+        seq = self._seq_single_auto()
+        seq.payload_params[VisdaData.PAYLOAD_SECTION].find(
+            "MaxNumStarRois"
+        ).text = "9"
+        assert self._sched()._convert_single_roi_to_predefined(seq) is False
+
+    def test_skips_non_autodetect_method(self):
+        seq = self._seq_single_auto()
+        seq.payload_params[VisdaData.PAYLOAD_SECTION].find(
+            "StarRoiDetMethod"
+        ).text = "1"
+        assert self._sched()._convert_single_roi_to_predefined(seq) is False
+
+    def test_skips_free_time(self):
+        seq = self._seq_single_auto()
+        seq.target = "Free Time"
+        assert self._sched()._convert_single_roi_to_predefined(seq) is False
+
+
 class TestNormalizePriorityKeys:
     def test_int_and_string_keys(self):
         norm = ScheduleProcessor._normalize_priority_keys(
