@@ -210,7 +210,10 @@ class VisdaData:
             Number of frames that fit in the available time, floored to a
             whole number of coadds.
         data : Quantity[byte]
-            Total raw data volume for those frames.
+            Total raw data volume *downlinked* for those frames. On-board
+            coadding combines ``frames_per_coadd`` consecutive frames into a
+            single saved frame, so the saved volume is the number of coadds
+            times ``frame_bytes`` (not the raw pre-coadd frame count).
         data_compressed : Quantity[byte]
             Total compressed data volume.
         """
@@ -243,7 +246,11 @@ class VisdaData:
         if self.frames_per_coadd > 0:
             frames = max(0, frames - (frames % self.frames_per_coadd))
 
-        data = frames * self.frame_bytes
+        if self.frames_per_coadd > 0:
+            coadds = frames // self.frames_per_coadd
+        else:
+            coadds = frames
+        data = coadds * self.frame_bytes
         return (frames, data, data * self.compression_ratio)
 
     def solve_duration(
@@ -266,7 +273,8 @@ class VisdaData:
         duration : Quantity[second]
             Total wall-clock time needed, including all overheads.
         data : Quantity[byte]
-            Total raw data volume for those frames.
+            Total raw data volume *downlinked* for those frames (net of
+            on-board coadding; see :meth:`solve_integrations`).
         data_compressed : Quantity[byte]
             Total compressed data volume.
         """
@@ -282,7 +290,11 @@ class VisdaData:
             + overhead.visda_post_overhead_time
             + self.additional_overhead_time
         )
-        data = integrations * self.frame_bytes
+        if self.frames_per_coadd > 0:
+            coadds = integrations // self.frames_per_coadd
+        else:
+            coadds = integrations
+        data = coadds * self.frame_bytes
 
         if integrations == 0:
             duration = 0.0 * u.s
