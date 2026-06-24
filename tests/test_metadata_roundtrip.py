@@ -77,3 +77,38 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     assert "tle_line1" in attrs or "tle_line1".lower() in attrs
     assert "tle_line2" in attrs or "tle_line2".lower() in attrs
     assert "created" in attrs or "created".lower() in attrs
+
+    # The short-term scheduler version must be stamped into the calendar.
+    assert "short_term_scheduler_version" in attrs
+    assert attrs["short_term_scheduler_version"] == shortschedule.get_version()
+
+
+def test_version_written_with_default_metadata(tmp_path):
+    """The version is stamped even for a calendar with no source metadata."""
+    from astropy.time import Time, TimeDelta
+
+    from shortschedule.models import (
+        ObservationSequence,
+        ScienceCalendar,
+        Visit,
+    )
+
+    start = Time("2026-03-01T00:00:00", scale="utc")
+    seq = ObservationSequence(
+        id="001",
+        target="T",
+        priority=0,
+        start_time=start,
+        stop_time=start + TimeDelta(3600, format="sec"),
+        ra=1.0,
+        dec=2.0,
+        payload_params={},
+    )
+    cal = ScienceCalendar(metadata={}, visits=[Visit("0001", [seq])])
+    out_file = tmp_path / "v.xml"
+    XMLWriter().write_calendar(cal, str(out_file))
+
+    root = ET.parse(str(out_file)).getroot()
+    meta = next(c for c in root if c.tag.endswith("Meta"))
+    attrs = {k.lower(): v for k, v in meta.attrib.items()}
+    assert attrs["short_term_scheduler_version"] == shortschedule.get_version()

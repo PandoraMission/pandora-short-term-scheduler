@@ -13,4 +13,5 @@
 - Adds several progress bars during various slower processing sections.
 - Adds helper method to generate diagnostic data file.
   - Diag file contains a observation file manifest including compressed fits file names.
+- Adds short term scheduler to processed calendar meta data.
 - Adds tests for all of these changes.

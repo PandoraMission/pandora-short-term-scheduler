@@ -134,6 +134,19 @@ class XMLWriter:
         """Add metadata element to root."""
         meta = ET.SubElement(root, "Meta")
 
+        # Stamp the short-term scheduler version that produced this calendar.
+        # Imported lazily to avoid a circular import at package init time.
+        version = metadata.get("short_term_scheduler_version")
+        if not version:
+            try:
+                from . import get_version
+
+                version = get_version()
+            except Exception:
+                version = None
+        if version:
+            meta.set("Short_Term_Scheduler_Version", str(version))
+
         # Standard metadata fields mapping
         meta_mapping = {
             "valid_from": "Valid_From",
