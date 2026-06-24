@@ -17,7 +17,9 @@ import copy
 import logging
 import uuid
 import warnings
+from collections import defaultdict
 from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2819,6 +2821,366 @@ class ScheduleProcessor:
         vis_bar.close()
 
         return issues
+
+    # ------------------------------------------------------------------
+    # Per-day diagnostics (.diag)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _diag_choose_day(start_dt: datetime, stop_dt: datetime) -> str:
+        """Assign an observation to the UTC day with the largest overlap."""
+        if stop_dt <= start_dt:
+            return start_dt.date().isoformat()
+        day_seconds: Dict[str, float] = defaultdict(float)
+        cursor = start_dt
+        while cursor < stop_dt:
+            next_midnight = datetime(
+                cursor.year, cursor.month, cursor.day
+            ) + timedelta(days=1)
+            chunk_end = min(next_midnight, stop_dt)
+            day_seconds[cursor.date().isoformat()] += (
+                chunk_end - cursor
+            ).total_seconds()
+            cursor = chunk_end
+        return max(day_seconds.items(), key=lambda kv: kv[1])[0]
+
+    @staticmethod
+    def _fits_files_for_sequence(
+        seq: ObservationSequence,
+        overhead: OverheadTiming,
+        nirda: Optional[NirdaData],
+        sc_integrations: int,
+        visda: Optional[VisdaData],
+        num_total_frames: int,
+    ) -> List[str]:
+        """Return the FITS product filenames packaged in a sequence's ``.bin``.
+
+        Names follow the Pandora flight-software conventions (InfImg from
+        ``MACIEMain.cpp``, VisSci from ``PCOCameraMain.cpp``) built from the
+        observation's payload parameters. The per-detector capture-start
+        timestamps are the sequence start plus the detector pre-overhead.
+        """
+        files: List[str] = []
+        target = seq.target
+
+        # NIRDA: InfImg cube (only if integrations were scheduled).
+        if nirda is not None and sc_integrations > 0:
+            nir_start = (
+                seq.start_time + overhead.nirda_pre_overhead_time.to(u.s)
+            ).datetime
+            nir_date = nir_start.strftime("%Y-%m-%d__%H-%M-%S")
+            cube_depth = sc_integrations * nirda.groups
+            files.append(
+                f"{nir_date}_InfImg_{target}_"
+                f"d{nirda.roi_x_size:04d}x{nirda.roi_y_size:04d}"
+                f"x{cube_depth:04d}_b1_e01"
+                f"_i{sc_integrations:02d}_g{nirda.groups:02d}"
+                f"_d{nirda.drop_frames_2:02d}_r{nirda.read_frames:02d}.fits"
+            )
+
+        # VISDA: VisSci cube (only if frames were requested).
+        if visda is not None and num_total_frames > 0:
+            vis_start = (
+                seq.start_time + overhead.visda_pre_overhead_time.to(u.s)
+            ).datetime
+            vis_date = vis_start.strftime("%Y-%m-%d__%H-%M-%S")
+            exp_us = int(visda.exposure_time_s.to(u.us).value)
+            files.append(
+                f"{vis_date}_VisSci_{target}_"
+                f"d{visda.roi_dimension:03d}_n{visda.num_rois:03d}"
+                f"_f{num_total_frames:05d}_e{exp_us:09d}us.fits"
+            )
+
+        # Engineering housekeeping file (timestamp only; downlink time is not
+        # known here, so the sequence start is used as a best-effort stamp).
+        eng_date = seq.start_time.datetime.strftime("%Y_%m_%dT%H_%M_%S")
+        files.append(f"{eng_date}_engineering.fits")
+
+        return files
+
+    def generate_diagnostics(
+        self,
+        calendar: ScienceCalendar,
+        output_path: Optional[Any] = None,
+        pass_data_volume_mb: Optional[float] = None,
+    ) -> str:
+        """Build a per-day ``.diag`` report and (optionally) write it.
+
+        Mirrors the legacy CalendarCleaner diagnostic: a week summary
+        followed by a per-day breakdown of observation counts (by priority),
+        unique targets, NIR/VIS frame and data totals (compressed and
+        uncompressed), observing/gap minutes (with percentages), and a
+        per-day file manifest. Data volumes are computed from the
+        ``NirdaData``/``VisdaData`` models built from each observation's
+        payload, so they stay consistent with the scheduler.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar to summarize (typically the processed calendar).
+        output_path : str or pathlib.Path, optional
+            Where to write the ``.diag`` file (its suffix is forced to
+            ``.diag``). If omitted, the calendar's ``source_path`` metadata
+            is used; if that is also missing, nothing is written and only
+            the text is returned.
+        pass_data_volume_mb : float, optional
+            Downlink volume of a single pass (MB). When given, "Required
+            Passes" is reported; otherwise it shows "N/A".
+
+        Returns
+        -------
+        str
+            The full diagnostic text.
+        """
+        mib = 1024.0 * 1024.0
+
+        def fmt(value: float) -> str:
+            value = float(value)
+            if value.is_integer():
+                return str(int(value))
+            return f"{value:.3f}".rstrip("0").rstrip(".")
+
+        def data_str(data_bytes: float) -> str:
+            data_mb = data_bytes / mib
+            if pass_data_volume_mb and pass_data_volume_mb > 0:
+                passes = data_mb / pass_data_volume_mb
+                return f"{fmt(data_mb)} MB (Required Passes: {fmt(passes)})"
+            return f"{fmt(data_mb)} MB (Required Passes: N/A)"
+
+        def to_int(value: Any) -> int:
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return 0
+
+        def new_bucket() -> Dict[str, Any]:
+            return {
+                "count": 0,
+                "priority_counts": {0: 0, 1: 0, 2: 0},
+                "targets": set(),
+                "nir_frames": 0,
+                "vis_frames": 0,
+                "nir_data": 0.0,
+                "vis_data": 0.0,
+                "nir_data_unc": 0.0,
+                "vis_data_unc": 0.0,
+                "timelines": [],
+                "manifest": [],
+            }
+
+        daily: Dict[str, Dict[str, Any]] = {}
+
+        # Per-detector capture-start offsets for FITS filenames.
+        overhead = getattr(self, "overhead", None) or OverheadTiming()
+
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                start_dt = seq.start_time.datetime
+                stop_dt = seq.stop_time.datetime
+                day = self._diag_choose_day(start_dt, stop_dt)
+                bucket = daily.setdefault(day, new_bucket())
+
+                bucket["count"] += 1
+                if seq.priority in bucket["priority_counts"]:
+                    bucket["priority_counts"][seq.priority] += 1
+                bucket["targets"].add(seq.target)
+                bucket["timelines"].append((start_dt, stop_dt))
+
+                # NIRDA frames + data from the NirdaData model.
+                nirda, _ = self._build_payload_data(seq, (), NirdaData)
+                sc_integrations = to_int(
+                    seq.get_payload_parameter(
+                        "AcquireInfCamImages", "SC_Integrations"
+                    )
+                )
+                if nirda is not None and sc_integrations > 0:
+                    nir_frames = (
+                        sc_integrations
+                        * nirda.other_integration_saved_frames
+                    )
+                    nir_unc = (
+                        sc_integrations * nirda.integration_data
+                    ).to(u.byte).value
+                    bucket["nir_frames"] += int(nir_frames)
+                    bucket["nir_data_unc"] += nir_unc
+                    bucket["nir_data"] += nir_unc * nirda.compression_ratio
+
+                # VISDA frames (coadds) + data from the VisdaData model.
+                visda, _ = self._build_payload_data(
+                    seq,
+                    (),
+                    VisdaData,
+                    extra_kwargs={"read_time_per_frame_s": 0 * u.s},
+                )
+                num_total_frames = to_int(
+                    seq.get_payload_parameter(
+                        "AcquireVisCamScienceData", "NumTotalFramesRequested"
+                    )
+                )
+                if visda is not None and num_total_frames > 0:
+                    coadds = (
+                        num_total_frames // visda.frames_per_coadd
+                        if visda.frames_per_coadd > 0
+                        else num_total_frames
+                    )
+                    vis_unc = (coadds * visda.frame_bytes).to(u.byte).value
+                    bucket["vis_frames"] += int(coadds)
+                    bucket["vis_data_unc"] += vis_unc
+                    bucket["vis_data"] += vis_unc * visda.compression_ratio
+
+                # Manifest: the downlinked .bin plus the individual FITS
+                # products it contains (named from payload parameters).
+                stamp = start_dt.strftime("%Y%m%dT%H%M%S")
+                bin_path = f"/mnt/data/sci/{stamp}_{seq.target}.bin"
+                fits_files = self._fits_files_for_sequence(
+                    seq,
+                    overhead,
+                    nirda,
+                    sc_integrations,
+                    visda,
+                    num_total_frames,
+                )
+                bucket["manifest"].append((bin_path, fits_files))
+
+        text = self._render_diagnostics(daily, fmt, data_str)
+
+        # Resolve where to write the .diag file.
+        base = output_path
+        if base is None:
+            base = (calendar.metadata or {}).get("source_path")
+        if base is not None:
+            diag_path = Path(base).with_suffix(".diag")
+            diag_path.write_text(text, encoding="utf-8")
+            self._print(f"Wrote diagnostics to {diag_path}")
+
+        return text
+
+    @staticmethod
+    def _diag_observing_and_gaps(timelines: List[Tuple]) -> Tuple[float, float]:
+        """Return (observing_minutes, gap_minutes) for a day's timelines."""
+        observing = 0.0
+        gaps = 0.0
+        previous_stop = None
+        for start_dt, stop_dt in sorted(timelines, key=lambda t: (t[0], t[1])):
+            observing += max(0.0, (stop_dt - start_dt).total_seconds() / 60.0)
+            if previous_stop is not None and start_dt > previous_stop:
+                gaps += (start_dt - previous_stop).total_seconds() / 60.0
+            previous_stop = (
+                stop_dt
+                if previous_stop is None
+                else max(previous_stop, stop_dt)
+            )
+        return observing, gaps
+
+    def _render_diagnostics(self, daily, fmt, data_str) -> str:
+        """Render the diagnostic text from the per-day buckets."""
+        sorted_days = sorted(daily.keys())
+        if not sorted_days:
+            return "No observations were available for diagnostic generation.\n"
+
+        def pct(part: float, whole: float) -> str:
+            return f"{(100.0 * part / whole):.1f}" if whole > 0 else "0.0"
+
+        # Finalize per-day observing/gap minutes and accumulate week totals.
+        summary = {
+            "count": 0,
+            "priority_counts": {0: 0, 1: 0, 2: 0},
+            "nir_data": 0.0,
+            "vis_data": 0.0,
+            "nir_data_unc": 0.0,
+            "vis_data_unc": 0.0,
+            "observing": 0.0,
+            "gaps": 0.0,
+        }
+        for day in sorted_days:
+            item = daily[day]
+            observing, gaps = self._diag_observing_and_gaps(item["timelines"])
+            item["observing"] = observing
+            item["gaps"] = gaps
+            summary["count"] += item["count"]
+            for p in (0, 1, 2):
+                summary["priority_counts"][p] += item["priority_counts"][p]
+            summary["nir_data"] += item["nir_data"]
+            summary["vis_data"] += item["vis_data"]
+            summary["nir_data_unc"] += item["nir_data_unc"]
+            summary["vis_data_unc"] += item["vis_data_unc"]
+            summary["observing"] += observing
+            summary["gaps"] += gaps
+
+        lines: List[str] = []
+
+        # ── Week summary ───────────────────────────────────────────
+        sum_total = summary["nir_data"] + summary["vis_data"]
+        sum_total_unc = summary["nir_data_unc"] + summary["vis_data_unc"]
+        sum_span = summary["observing"] + summary["gaps"]
+        lines.append(
+            f"Calendar Summary {sorted_days[0]} : {sorted_days[-1]}"
+        )
+        lines.append(f"Total Observations: {summary['count']}")
+        lines.append(f"  - Priority 0 = {summary['priority_counts'][0]}")
+        lines.append(f"  - Priority 1 = {summary['priority_counts'][1]}")
+        lines.append(f"  - Priority 2 = {summary['priority_counts'][2]}")
+        lines.append(
+            f"Total Gaps: {fmt(summary['gaps'])} Mins "
+            f"({pct(summary['gaps'], sum_span)}%)"
+        )
+        lines.append(
+            f"Total Observing: {fmt(summary['observing'])} Mins "
+            f"({pct(summary['observing'], sum_span)}%)"
+        )
+        lines.append("Total NIR Data = " + data_str(summary["nir_data"]))
+        lines.append("Total Vis Data = " + data_str(summary["vis_data"]))
+        lines.append("Total Data = " + data_str(sum_total))
+        lines.append("Uncompressed Data")
+        lines.append("Total NIR Data = " + data_str(summary["nir_data_unc"]))
+        lines.append("Total Vis Data = " + data_str(summary["vis_data_unc"]))
+        lines.append("Total Data = " + data_str(sum_total_unc))
+        lines.append("")
+
+        # ── Per-day breakdown ──────────────────────────────────────
+        for day in sorted_days:
+            item = daily[day]
+            day_total = item["nir_data"] + item["vis_data"]
+            day_total_unc = item["nir_data_unc"] + item["vis_data_unc"]
+            span = item["observing"] + item["gaps"]
+
+            lines.append(day)
+            lines.append(f"Number of Observations: {item['count']}")
+            lines.append(f"  - Priority 0 = {item['priority_counts'][0]}")
+            lines.append(f"  - Priority 1 = {item['priority_counts'][1]}")
+            lines.append(f"  - Priority 2 = {item['priority_counts'][2]}")
+            lines.append("List of Unique Targets:")
+            for target in sorted(item["targets"]):
+                lines.append(f"  - {target}")
+            lines.append(f"Total NIR Frames = {fmt(item['nir_frames'])}")
+            lines.append(f"Total Vis Frames = {fmt(item['vis_frames'])}")
+            lines.append(
+                f"Total Gaps: {fmt(item['gaps'])} Mins "
+                f"({pct(item['gaps'], span)}%)"
+            )
+            lines.append(
+                f"Total Observing: {fmt(item['observing'])} Mins "
+                f"({pct(item['observing'], span)}%)"
+            )
+            lines.append("Total NIR Data = " + data_str(item["nir_data"]))
+            lines.append("Total Vis Data = " + data_str(item["vis_data"]))
+            lines.append("Total Data = " + data_str(day_total))
+            lines.append("Uncompressed Data")
+            lines.append("Total NIR Data = " + data_str(item["nir_data_unc"]))
+            lines.append("Total Vis Data = " + data_str(item["vis_data_unc"]))
+            lines.append("Total Data = " + data_str(day_total_unc))
+            lines.append("")
+            lines.append("Manifest of Files for the Day:")
+            for bin_path, fits_files in sorted(
+                item["manifest"], key=lambda entry: entry[0]
+            ):
+                lines.append(f"- {bin_path}")
+                for fits_name in fits_files:
+                    lines.append(f"\t- {fits_name}")
+            lines.append("")
+            lines.append("----")
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
 
     def validate_target_names(
         self, calendar: ScienceCalendar, report_issues: bool = True

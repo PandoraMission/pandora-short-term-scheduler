@@ -135,6 +135,17 @@ scheduler.print_gap_summary()
 scheduler.print_validation_summary(processed_calendar)
 processed_calendar.get_summary_stats()
 
+# Per-day ".diag" report (week summary + per-day data volumes, priority
+# counts, unique targets, observing/gap minutes and percentages, and a file
+# manifest). Written next to the input calendar as "<calendar>.diag" when
+# output_path is omitted; pass pass_data_volume_mb to report required passes.
+print("\n\nGenerating .diag report...")
+scheduler.generate_diagnostics(
+    processed_calendar,
+    output_path=xml_file_path,
+    pass_data_volume_mb=281.3,
+)
+
 
 # ---------------------------------------------------------------------------
 # Write the scheduled calendar back out as XML
