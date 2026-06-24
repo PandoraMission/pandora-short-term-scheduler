@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from astropy import units as u
 from astropy.units import Quantity
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
@@ -200,8 +200,20 @@ class NirdaData:
     integration_data: Quantity = field(init=False)
     reset_frame_time: Quantity = field(init=False)
 
+    # Optional logger. When provided (e.g. by ScheduleProcessor) warnings are
+    # sent to it so they share the run log; otherwise ``warnings.warn`` is
+    # used. Excluded from repr/equality so it never affects data comparisons.
+    logger: Any = field(default=None, repr=False, compare=False)
+
     def __post_init__(self):
         self._update_derived()
+
+    def _warn(self, message: str) -> None:
+        """Emit a warning via the attached logger, or ``warnings.warn``."""
+        if self.logger is not None:
+            self.logger.warning(message)
+        else:
+            warn(message)
 
     def _update_derived(self):
         """Recompute all derived timing and data-volume attributes."""
@@ -255,7 +267,7 @@ class NirdaData:
             + self.reset_frame_time.to(u.s).value * self.reset_frames_1,
         ) * u.s
         if self.first_integration_time == 0 * u.s:
-            warn("NIRDA: First integration time found to be 0.")
+            self._warn("NIRDA: First integration time found to be 0.")
 
         self.other_integration_time = max(
             0,
@@ -263,7 +275,7 @@ class NirdaData:
             + self.reset_frame_time.to(u.s).value * self.reset_frames_2,
         ) * u.s
         if self.other_integration_time == 0 * u.s:
-            warn("NIRDA: Other integration time found to be 0.")
+            self._warn("NIRDA: Other integration time found to be 0.")
 
         # If we drop any integrations then the duration of those drops will always be equal to the "other"
         # integration time.
@@ -289,7 +301,7 @@ class NirdaData:
         ) * u.byte
         
         if self.integration_data == 0 * u.byte:
-            warn("NIRDA: Data size per integration was found to be 0.")
+            self._warn("NIRDA: Data size per integration was found to be 0.")
 
     def update_for_vitl(self, vitl_settling_time: Quantity):
         """Adjust ``reset_frames_1`` to cover a VITL settling time and recompute.
@@ -311,7 +323,7 @@ class NirdaData:
         MIN_RESET1 = 2
         if self.reset_frame_time.to(u.s).value == 0.0:
             # Have at least 2 reset1
-            warn(f"NIRDA Reset frame time is approx. 0. Using default ``reset1={MIN_RESET1}.``")
+            self._warn(f"NIRDA Reset frame time is approx. 0. Using default ``reset1={MIN_RESET1}.``")
             self.reset_frames_1 = MIN_RESET1
         else:
             self.reset_frames_1 = max(

@@ -249,7 +249,7 @@ class TestProcessCalendarMergeKwarg:
         return cal
 
     @pytest.mark.slow
-    def test_merge_reduces_sequence_count(self, monkeypatch):
+    def test_merge_reduces_sequence_count(self, monkeypatch, tmp_path):
         """Enabling the merge never increases the sequence count and
         produces no zero-length result."""
         monkeypatch.setattr(
@@ -265,6 +265,7 @@ class TestProcessCalendarMergeKwarg:
             window_start=first_seq.start_time.isot,
             window_duration_days=1,
             merge_similar_observations=False,
+            log_path=tmp_path / "off",
         )
 
         sched_on = ScheduleProcessor("L1", "L2")
@@ -273,6 +274,7 @@ class TestProcessCalendarMergeKwarg:
             window_start=first_seq.start_time.isot,
             window_duration_days=1,
             merge_similar_observations=True,
+            log_path=tmp_path / "on",
         )
 
         n_off = sum(len(v.sequences) for v in off.visits)
@@ -281,7 +283,7 @@ class TestProcessCalendarMergeKwarg:
         assert n_on > 0
 
     @pytest.mark.slow
-    def test_merge_disabled_by_default(self, monkeypatch):
+    def test_merge_disabled_by_default(self, monkeypatch, tmp_path):
         """Omitting the kwarg leaves merging off (no error, processes)."""
         monkeypatch.setattr(
             "shortschedule.scheduler.Visibility",
@@ -294,5 +296,6 @@ class TestProcessCalendarMergeKwarg:
             cal,
             window_start=first_seq.start_time.isot,
             window_duration_days=1,
+            log_path=tmp_path / "run",
         )
         assert processed is not None

@@ -49,7 +49,11 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
 
     sched = ScheduleProcessor("LINE1_EXAMPLE", "LINE2_EXAMPLE")
     processed = sched.process_calendar(
-        cal, window_start=window_start, window_duration_days=1, verbose=False
+        cal,
+        window_start=window_start,
+        window_duration_days=1,
+        log_path=tmp_path / "run",
+        verbose=False,
     )
 
     out_file = tmp_path / "processed_meta.xml"

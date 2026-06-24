@@ -14,9 +14,11 @@ are provided. The processor performs these high-level steps:
 
 # Standard library
 import copy
+import logging
 import uuid
 import warnings
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party
@@ -336,6 +338,7 @@ class ScheduleProcessor:
         window_start: Optional[Any] = None,
         window_duration_days: int = 21,
         merge_similar_observations: bool = False,
+        log_path: Optional[Any] = None,
         verbose: bool = False,
     ) -> ScienceCalendar:
         """Process a `ScienceCalendar` and return an updated calendar.
@@ -365,8 +368,16 @@ class ScheduleProcessor:
             share the same target and pointing are merged into a single
             longer sequence.
             Defaults to False.
+        log_path : str or pathlib.Path, optional
+            Base path for the run log files. The ".log" (everything) and
+            ".errors.log" (warnings/errors only, created lazily) files are
+            named after this path's stem. When omitted, the input calendar's
+            ``source_path`` is used; if that is unavailable, only console
+            logging is produced.
         verbose : bool, optional
-            Print diagnostics when True.
+            When True, INFO-level diagnostics are echoed to the console; the
+            ".log" file always captures them regardless. Warnings and
+            errors are shown on the console either way.
 
         Returns
         -------
@@ -374,13 +385,15 @@ class ScheduleProcessor:
             Processed calendar with updated sequences and metadata.
         """
 
+        # Configure logging for this run (console + per-calendar log files).
+        self._setup_run_logging(calendar, verbose, log_path)
+
         # Clear previous gap report
         self._initialize_gap_report()
 
-        if verbose:
-            print("Processing calendar with TLE:")
-            print(f"  Line 1: {self.tle_line1}")
-            print(f"  Line 2: {self.tle_line2}")
+        self._print("Processing calendar with TLE:")
+        self._print(f"  Line 1: {self.tle_line1}")
+        self._print(f"  Line 2: {self.tle_line2}")
 
         # Extract windowed calendar FIRST
         windowed_calendar = self._extract_time_window(
@@ -483,18 +496,18 @@ class ScheduleProcessor:
 
         # Print compact validation summary
         if validation_counts:
-            print(
+            self._print(
                 f"\n--- Validation: {calendar_status} "
                 f"({sum(validation_counts.values())} issues) ---"
             )
             for cat, cnt in validation_counts.items():
-                print(f"  {cat}: {cnt}")
-            print(
+                self._print(f"  {cat}: {cnt}")
+            self._print(
                 "Run print_validation_summary(calendar) "
                 "for actionable details.\n"
             )
         else:
-            print(f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n")
+            self._print(f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n")
 
         new_metadata = copy.deepcopy(processed_calendar.metadata)
         new_metadata.update(
@@ -536,15 +549,14 @@ class ScheduleProcessor:
         self.window_start = window_start
         self.window_end = window_end
 
-        if verbose:
-            print(f"Extracting window: {window_start} to {window_end}")
+        self._print(f"Extracting window: {window_start} to {window_end}")
 
         # Find sequences within window
         windowed_visits = []
         for visit in calendar.visits:
             # complain if there are empty visits
             if not visit.sequences:
-                print(f"Warning: Empty sequence list for visit {visit.id}")
+                self._print(f"Warning: Empty sequence list for visit {visit.id}")
             windowed_sequences = []
             for seq in visit.sequences:
                 seq_start = seq.start_time
@@ -598,17 +610,23 @@ class ScheduleProcessor:
         for visit_index, visit in enumerate(calendar.visits, start=1):
             new_visit_id = f"{visit_index:04d}"
             if visit.id != new_visit_id:
+                self._print(
+                    f"RENUMBER visit ID '{visit.id}' -> '{new_visit_id}'"
+                )
                 visit.id = new_visit_id
                 changed += 1
 
             for seq_index, seq in enumerate(visit.sequences, start=1):
                 new_seq_id = f"{seq_index:03d}"
                 if seq.id != new_seq_id:
+                    self._print(
+                        f"{self._seq_prefix(visit.id, seq)} | RENUMBER "
+                        f"observation ID '{seq.id}' -> '{new_seq_id}'"
+                    )
                     seq.id = new_seq_id
                     changed += 1
 
-        if verbose:
-            print(f"Renumbered IDs: {changed} identifier(s) updated.")
+        self._print(f"Renumbered IDs: {changed} identifier(s) updated.")
 
         return calendar
 
@@ -657,13 +675,12 @@ class ScheduleProcessor:
                 if merged_sequences and self._can_merge(merged_sequences[-1], seq):
                     # Extend the previous (kept) sequence over this one.
                     previous = merged_sequences[-1]
-                    if verbose:
-                        print(
-                            f"Merging visit {visit.id} sequence {seq.id} "
-                            f"into {previous.id} "
-                            f"(target {previous.target}): stop "
-                            f"{previous.stop_time_str} -> {seq.stop_time_str}"
-                        )
+                    self._print(
+                        f"{self._seq_prefix(visit.id, previous)} | MERGE: "
+                        f"absorbing sequence {seq.id} "
+                        f"({self._seq_prefix(visit.id, seq)}); stop "
+                        f"{previous.stop_time_str} -> {seq.stop_time_str}"
+                    )
                     previous.stop_time = seq.stop_time
                     merged_count += 1
                 else:
@@ -672,11 +689,10 @@ class ScheduleProcessor:
 
             new_visits.append(Visit(id=visit.id, sequences=merged_sequences))
 
-        if verbose:
-            print(
-                f"Merged {merged_count} similar observation sequence(s) "
-                f"across {len(calendar.visits)} visit(s)."
-            )
+        self._print(
+            f"Merged {merged_count} similar observation sequence(s) "
+            f"across {len(calendar.visits)} visit(s)."
+        )
 
         return ScienceCalendar(
             metadata=calendar.metadata,
@@ -732,6 +748,14 @@ class ScheduleProcessor:
 
         working_calendar = deepcopy(calendar)
 
+        # Snapshot each sequence's original timing so any shrink/elongate
+        # performed by the gap-fill / trim passes below can be logged.
+        original_timing = {
+            (visit.id, seq.id): (seq.start_time, seq.stop_time)
+            for visit in working_calendar.visits
+            for seq in visit.sequences
+        }
+
         # ── Pre-compute best roll per target per visit ──────────
         # Only run the sweep when star-tracker constraints are active;
         # boresight-only constraints are roll-independent.
@@ -744,9 +768,8 @@ class ScheduleProcessor:
                     min_power_frac=self.min_power_frac,
                 )
                 self._computed_target_rolls[visit.id] = visit_rolls
-                if verbose:
-                    for tgt, r in visit_rolls.items():
-                        print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
+                for tgt, r in visit_rolls.items():
+                    self._print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
 
         # Use initial time grid for processing
         total_minutes, start_time, end_time, time_grid = (
@@ -767,10 +790,11 @@ class ScheduleProcessor:
                     np.rint((seq.start_time - last_stop).sec / 60.0)
                 )
                 if gap_length > 0:
-                    if verbose:
-                        print(
-                            f"Filling {gap_length} min gap before sequence {seq.id}"
-                        )
+                    self._print(
+                        f"{self._seq_prefix(visit.id, seq)} | GAP-FILL: "
+                        f"extending start earlier by {gap_length} min to "
+                        f"fill gap before this sequence"
+                    )
 
                     if not self.force_gap_fill:
                         seq = self._fill_gaps(
@@ -804,8 +828,7 @@ class ScheduleProcessor:
         # Fill remaining time after last sequence
         if i < total_minutes:
             all_minutes_bool[i:] = False
-            if verbose:
-                print(f"Filled trailing {total_minutes - i} minutes as False")
+            self._print(f"Filled trailing {total_minutes - i} minutes as False")
 
         self.all_minutes_bool = (
             all_minutes_bool  # this is only necessary for testing.
@@ -831,10 +854,46 @@ class ScheduleProcessor:
                 working_calendar
             )
 
+        # Report any timing changes (shrink/elongate) made above.
+        self._log_timing_changes(working_calendar, original_timing)
+
         # last thing is to update all the payload parameters
         working_calendar = self._update_payload_parameters(working_calendar)
 
         return working_calendar
+
+    def _log_timing_changes(
+        self, calendar: ScienceCalendar, original_timing: Dict[Any, Any]
+    ) -> None:
+        """Log per-sequence shrink/elongate vs the snapshot in
+        *original_timing* (keyed by ``(visit_id, sequence_id)``)."""
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                orig = original_timing.get((visit.id, seq.id))
+                if orig is None:
+                    continue
+                old_start, old_stop = orig
+                d_start = (seq.start_time - old_start).sec
+                d_stop = (seq.stop_time - old_stop).sec
+                if abs(d_start) < 1.0 and abs(d_stop) < 1.0:
+                    continue
+
+                parts = []
+                if abs(d_start) >= 1.0:
+                    where = "earlier" if d_start < 0 else "later"
+                    parts.append(f"start {where} {abs(d_start) / 60:.1f} min")
+                if abs(d_stop) >= 1.0:
+                    where = "later" if d_stop > 0 else "earlier"
+                    parts.append(f"stop {where} {abs(d_stop) / 60:.1f} min")
+
+                old_dur = (old_stop - old_start).sec / 60.0
+                new_dur = seq.duration.sec / 60.0
+                verb = "ELONGATED" if new_dur > old_dur else "SHRANK"
+                self._print(
+                    f"{self._seq_prefix(visit.id, seq)} | {verb}: "
+                    + ", ".join(parts)
+                    + f" (duration {old_dur:.1f} -> {new_dur:.1f} min)"
+                )
 
     def _fill_gaps(
         self,
@@ -2079,7 +2138,9 @@ class ScheduleProcessor:
             visit_id = visit.id
             for seq in visit.sequences:
                 sequence_id = seq.id
-                new_sequence = self._update_payload_parameters_sequence(seq)
+                new_sequence = self._update_payload_parameters_sequence(
+                    seq, visit_id=visit_id
+                )
                 calendar.replace_sequence(visit_id, sequence_id, new_sequence)
 
         return calendar
@@ -2116,6 +2177,9 @@ class ScheduleProcessor:
         override_fields = set(override_fields or ())
         default_config = data_cls().get_config()
         kwargs: Dict[str, Any] = dict(extra_kwargs or {})
+        # Share the run logger so the data class's own warnings (zero frame
+        # time, oversize, VITL fallback, ...) land in the same log.
+        kwargs.setdefault("logger", getattr(self, "logger", None))
         writeback: Dict[str, str] = {}
         missing: List[str] = []
 
@@ -2146,47 +2210,49 @@ class ScheduleProcessor:
         detector: str,
         data: u.Quantity,
         data_compressed: u.Quantity,
+        visit_id: Any = None,
     ) -> None:
         """Warn if a sequence's computed data volume exceeds the limits.
 
         Compares the *uncompressed* ``data`` against
         ``max_file_size_uncompressed`` and the *compressed*
-        ``data_compressed`` against ``max_file_size_compressed``, emitting a
-        ``UserWarning`` for each limit that is exceeded.
+        ``data_compressed`` against ``max_file_size_compressed``. Each
+        breach is emitted both as a ``UserWarning`` (for programmatic
+        consumers) and through the run logger so it lands in the console and
+        the ``.errors.log``.
         """
         max_uncompressed = getattr(self, "max_file_size_uncompressed", None)
         max_compressed = getattr(self, "max_file_size_compressed", None)
 
-        seq_id = (
-            f"{detector} sequence {sequence.id} "
-            f"({sequence.target} @ {sequence.start_time.isot})"
-        )
+        prefix = self._seq_prefix(visit_id, sequence)
 
         if (
             max_uncompressed is not None
             and data.to(u.byte).value > max_uncompressed.to(u.byte).value
         ):
-            warnings.warn(
-                f"{seq_id}: uncompressed data "
+            msg = (
+                f"{prefix} | {detector} uncompressed data "
                 f"{data.to(u.byte).value / 1e6:.1f} MB exceeds limit "
-                f"{max_uncompressed.to(u.byte).value / 1e6:.1f} MB",
-                stacklevel=2,
+                f"{max_uncompressed.to(u.byte).value / 1e6:.1f} MB"
             )
+            self._print(f"Warning: {msg}")
+            warnings.warn(msg, stacklevel=2)
 
         if (
             max_compressed is not None
             and data_compressed.to(u.byte).value
             > max_compressed.to(u.byte).value
         ):
-            warnings.warn(
-                f"{seq_id}: compressed data "
+            msg = (
+                f"{prefix} | {detector} compressed data "
                 f"{data_compressed.to(u.byte).value / 1e6:.1f} MB exceeds "
-                f"limit {max_compressed.to(u.byte).value / 1e6:.1f} MB",
-                stacklevel=2,
+                f"limit {max_compressed.to(u.byte).value / 1e6:.1f} MB"
             )
+            self._print(f"Warning: {msg}")
+            warnings.warn(msg, stacklevel=2)
 
     def _update_payload_parameters_sequence(
-        self, sequence: ObservationSequence
+        self, sequence: ObservationSequence, visit_id: Any = None
     ) -> ObservationSequence:
         # Pass sequence.duration (TimeDelta) so both helpers receive the
         # correct type and the overhead subtraction uses a consistent unit.
@@ -2200,17 +2266,21 @@ class ScheduleProcessor:
         nirda_fields = nirda_overrides.get(sequence.priority, ())
         visda_fields = visda_overrides.get(sequence.priority, ())
 
+        overhead = getattr(self, "overhead", None)
+
         sequence = self._update_VDA_integrations(
             sequence,
             duration,
-            overhead=self.overhead,
+            overhead=overhead,
             override_fields=visda_fields,
+            visit_id=visit_id,
         )
         sequence = self._update_NIRDA_integrations(
             sequence,
             duration,
-            overhead=self.overhead,
+            overhead=overhead,
             override_fields=nirda_fields,
+            visit_id=visit_id,
         )
 
         return sequence
@@ -2221,6 +2291,7 @@ class ScheduleProcessor:
         duration: TimeDelta,
         overhead: Optional[OverheadTiming] = None,
         override_fields: Any = (),
+        visit_id: Any = None,
     ) -> ObservationSequence:
         """Set NumTotalFramesRequested using a ``VisdaData`` model.
 
@@ -2249,24 +2320,35 @@ class ScheduleProcessor:
             VisdaData,
             extra_kwargs={"read_time_per_frame_s": 0 * u.s},
         )
+        prefix = self._seq_prefix(visit_id, sequence)
         if visda is None:
-            print(
-                f"Warning: Missing VDA parameters for sequence "
-                f"{sequence.id} {sequence.start_time}: {', '.join(info)}"
+            self._print(
+                f"Warning: {prefix} | Missing VDA parameters: "
+                f"{', '.join(info)}"
             )
             return sequence
 
-        # Write any overridden parameters back onto the observation.
+        # Write any overridden parameters back onto the observation, logging
+        # each forced change.
         for tag, text in info.items():
+            old = sequence.get_payload_parameter(
+                "AcquireVisCamScienceData", tag
+            )
             sequence.set_payload_parameter(
                 "AcquireVisCamScienceData", tag, text
             )
+            self._print(
+                f"{prefix} | VISDA OVERRIDE: {tag} '{old}' -> '{text}'"
+            )
 
+        old_frames = sequence.get_payload_parameter(
+            "AcquireVisCamScienceData", "NumTotalFramesRequested"
+        )
         frames, data, data_compressed = visda.solve_integrations(
             duration.to(u.s), overhead
         )
         self._warn_if_data_exceeds_limits(
-            sequence, "VISDA", data, data_compressed
+            sequence, "VISDA", data, data_compressed, visit_id=visit_id
         )
 
         success = sequence.set_payload_parameter(
@@ -2274,10 +2356,15 @@ class ScheduleProcessor:
             "NumTotalFramesRequested",
             str(int(frames)),
         )
-        if not success:
-            print(
-                f"Warning: Failed to update NumTotalFramesRequested for "
-                f"sequence {sequence.id} {sequence.start_time}"
+        if success:
+            self._print(
+                f"{prefix} | VISDA NumTotalFramesRequested "
+                f"'{old_frames}' -> '{int(frames)}'"
+            )
+        else:
+            self._print(
+                f"Warning: {prefix} | Failed to update "
+                f"NumTotalFramesRequested"
             )
         return sequence
 
@@ -2287,6 +2374,7 @@ class ScheduleProcessor:
         duration: TimeDelta,
         overhead: Optional[OverheadTiming] = None,
         override_fields: Any = (),
+        visit_id: Any = None,
     ) -> ObservationSequence:
         """Set SC_Integrations using a ``NirdaData`` model.
 
@@ -2307,56 +2395,73 @@ class ScheduleProcessor:
         if overhead is None:
             overhead = getattr(self, "overhead", None) or OverheadTiming()
 
+        prefix = self._seq_prefix(visit_id, sequence)
+
         nirda, info = self._build_payload_data(
             sequence,
             override_fields,
             NirdaData,
         )
         if nirda is None:
-            seq_identifier = (
-                f"{sequence.id} ({sequence.target} @ "
-                f"{sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
+            self._print(
+                f"Warning: {prefix} | Missing NIRDA parameters: "
+                f"{', '.join(info)}"
             )
-            print(
-                f"Warning: Missing NIRDA parameters for sequence "
-                f"{seq_identifier}"
-            )
-            print(f"Missing parameters: {', '.join(info)}")
             return sequence
 
-        # Write any overridden parameters back onto the observation.
+        # Write any overridden parameters back onto the observation, logging
+        # each forced change.
         for tag, text in info.items():
+            old = sequence.get_payload_parameter("AcquireInfCamImages", tag)
             sequence.set_payload_parameter("AcquireInfCamImages", tag, text)
+            self._print(
+                f"{prefix} | NIRDA OVERRIDE: {tag} '{old}' -> '{text}'"
+            )
 
         # Optionally adjust reset_frames_1 to cover the VITL settling time
         # before computing integrations, and persist the new SC_Resets1.
-        # This affects number of integrations so needs to be set before 
+        # This affects number of integrations so needs to be set before
         # those are calculated.
         if getattr(self, "update_nirda_reset1_for_vitl", False):
             vitl_settling_time = getattr(
                 self, "vitl_settling_time", 60.0 * u.s
             )
-            nirda.update_for_vitl(vitl_settling_time)
-            sequence.set_payload_parameter(
-                "AcquireInfCamImages",
-                "SC_Resets1",
-                str(int(nirda.reset_frames_1)),
+            old_resets1 = sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Resets1"
             )
+            nirda.update_for_vitl(vitl_settling_time)
+            new_resets1 = str(int(nirda.reset_frames_1))
+            sequence.set_payload_parameter(
+                "AcquireInfCamImages", "SC_Resets1", new_resets1
+            )
+            if str(old_resets1) != new_resets1:
+                self._print(
+                    f"{prefix} | VITL: SC_Resets1 '{old_resets1}' -> "
+                    f"'{new_resets1}' to cover "
+                    f"{vitl_settling_time.to(u.s).value:.1f} s settling"
+                )
 
+        old_integrations = sequence.get_payload_parameter(
+            "AcquireInfCamImages", "SC_Integrations"
+        )
         integrations, data, data_compressed = nirda.solve_integrations(
             duration.to(u.s), overhead
         )
         self._warn_if_data_exceeds_limits(
-            sequence, "NIRDA", data, data_compressed
+            sequence, "NIRDA", data, data_compressed, visit_id=visit_id
         )
 
         success = sequence.set_payload_parameter(
             "AcquireInfCamImages", "SC_Integrations", str(int(integrations))
         )
-        if not success:
-            print(
-                f"Warning: Failed to update SC_Integrations for sequence "
-                f"{sequence.id} {sequence.start_time}"
+        if success:
+            self._print(
+                f"{prefix} | NIRDA SC_Integrations "
+                f"'{old_integrations}' -> '{int(integrations)}'"
+            )
+        else:
+            self._print(
+                f"Warning: {prefix} | Failed to update SC_Integrations"
             )
 
         return sequence
@@ -2644,7 +2749,7 @@ class ScheduleProcessor:
                     issues.append(issue)
 
                     if report_issues:
-                        print(message)
+                        self._print(message)
 
         return issues
 
@@ -2681,11 +2786,130 @@ class ScheduleProcessor:
                     issues.append(issue)
 
                     if report_issues:
-                        print(
+                        self._print(
                             f"Target name issue: '{seq.target}' contains spaces (sequence {seq.id}, visit {visit.id})"
                         )
 
         return issues
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+    def _print(self, *args, **kwargs) -> None:
+        """Route a ``print``-style call through the run logger.
+
+        Joins *args* like ``print`` and logs the result. Messages whose
+        (stripped) text begins with "warning" or "error" are logged at
+        WARNING/ERROR level so they reach the console and the
+        ``.errors.log`` file; everything else is logged at INFO and only
+        reaches the console when ``verbose`` was set. If no run logger has
+        been configured (e.g. a bare processor in a unit test), falls back
+        to the builtin ``print``.
+        """
+        sep = kwargs.get("sep", " ")
+        message = sep.join(str(a) for a in args)
+
+        logger = getattr(self, "logger", None)
+        if logger is None:
+            print(message)
+            return
+
+        head = message.lstrip().lower()
+        if head.startswith("error"):
+            logger.error(message)
+        elif head.startswith("warning"):
+            logger.warning(message)
+        else:
+            logger.info(message)
+
+    def _setup_run_logging(
+        self,
+        calendar: ScienceCalendar,
+        verbose: bool,
+        log_path: Optional[Any] = None,
+    ) -> None:
+        """Configure ``self.logger`` for a processing run.
+
+        Two log files are written alongside (and named after) the input
+        calendar: ``<stem>.log`` captures everything, and
+        ``<stem>.errors.log`` captures only warnings/errors and is created
+        lazily (so it never appears when the run is clean).
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Used to discover the source calendar path via
+            ``metadata['source_path']`` when *log_path* is not given.
+        verbose : bool
+            When True the console receives INFO and above; otherwise the
+            console receives only WARNING and above. The ``.log`` file
+            always receives INFO and above.
+        log_path : str or pathlib.Path, optional
+            Explicit base path for the log file. Its suffix is replaced with
+            ``.log``. If omitted, the calendar's ``source_path`` is used.
+            If neither is available, only console logging is configured.
+        """
+        logger = logging.getLogger(f"shortschedule.run.{id(self)}")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        # Drop any handlers from a previous run on this processor.
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+        fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+        # Console handler: gated by verbose for INFO, always shows warnings.
+        console = logging.StreamHandler()
+        console.setLevel(logging.INFO if verbose else logging.WARNING)
+        console.setFormatter(fmt)
+        logger.addHandler(console)
+
+        # Resolve the log file base path.
+        base = log_path
+        if base is None:
+            source = (calendar.metadata or {}).get("source_path")
+            base = source
+        if base is not None:
+            base = Path(base)
+            log_file = base.with_suffix(".log")
+            errors_file = base.with_suffix(".errors.log")
+
+            file_handler = logging.FileHandler(
+                log_file, mode="w", encoding="utf-8"
+            )
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+
+            # delay=True means the file is only created on first emit, so a
+            # clean run leaves no (empty) errors log behind.
+            errors_handler = logging.FileHandler(
+                errors_file, mode="w", encoding="utf-8", delay=True
+            )
+            errors_handler.setLevel(logging.WARNING)
+            errors_handler.setFormatter(fmt)
+            logger.addHandler(errors_handler)
+
+            self.logger = logger
+            self.logger.info(f"Logging to {log_file}")
+        else:
+            self.logger = logger
+
+    @staticmethod
+    def _seq_prefix(visit_id: Any, seq: ObservationSequence) -> str:
+        """Return the standard log prefix for an observation.
+
+        Format: ``<start datetime>-<target id>-<visit id>-<observation id>``.
+        """
+        try:
+            start = seq.start_time.isot
+        except Exception:
+            start = str(getattr(seq, "start_time", "?"))
+        return f"{start}-{seq.target}-{visit_id}-{seq.id}"
 
     def _initialize_gap_report(self) -> None:
         """Initialize/reset the gap report structure."""
@@ -2766,10 +2990,10 @@ class ScheduleProcessor:
                 original_gaps.append(gap_info)
                 total_gap_time += gap_duration
 
-                if verbose:
-                    print(
-                        f"Original gap: {gap_duration:.1f} min between {current_seq.id} and {next_seq.id}"
-                    )
+                self._print(
+                    f"Original gap: {gap_duration:.1f} min between "
+                    f"{current_seq.id} and {next_seq.id}"
+                )
 
         self.gap_report["visibility_analysis"]["original_gaps"] = original_gaps
         self.gap_report["processing_summary"][
@@ -2823,43 +3047,43 @@ class ScheduleProcessor:
         report = self.gap_report
         summary = report["processing_summary"]
 
-        print("\n" + "=" * 60)
-        print("VISIBILITY GAP ANALYSIS SUMMARY")
-        print("=" * 60)
+        self._print("\n" + "=" * 60)
+        self._print("VISIBILITY GAP ANALYSIS SUMMARY")
+        self._print("=" * 60)
 
-        print("\nORIGINAL CALENDAR:")
-        print(
+        self._print("\nORIGINAL CALENDAR:")
+        self._print(
             f"  Total Sequences: {report['original_calendar_stats']['total_sequences']}"
         )
-        print(
+        self._print(
             f"  Total Duration: {report['original_calendar_stats']['total_duration_hours']:.1f} hours"
         )
-        print(
+        self._print(
             f"  Duty Cycle: {report['original_calendar_stats']['duty_cycle_percent']:.1f}%"
         )
 
-        print("\nPROCESSED CALENDAR:")
-        print(
+        self._print("\nPROCESSED CALENDAR:")
+        self._print(
             f"  Total Sequences: {report['processed_calendar_stats']['total_sequences']}"
         )
-        print(
+        self._print(
             f"  Total Duration: {report['processed_calendar_stats']['total_duration_hours']:.1f} hours"
         )
-        print(
+        self._print(
             f"  Duty Cycle: {report['processed_calendar_stats']['duty_cycle_percent']:.1f}%"
         )
 
-        print("\nIMPROVEMENTS:")
-        print(
+        self._print("\nIMPROVEMENTS:")
+        self._print(
             f"  Duration Gained: {summary.get('duration_improvement_hours', 0):.1f} hours"
         )
-        print(
+        self._print(
             f"  Duty Cycle Improved: {summary.get('duty_cycle_improvement_percent', 0):.1f}%"
         )
-        print(f"  Sequences Modified: {summary.get('sequences_modified', 0)}")
+        self._print(f"  Sequences Modified: {summary.get('sequences_modified', 0)}")
 
         if "gaps_filled" in summary:
-            print(
+            self._print(
                 f"  Gaps Filled: {summary['gaps_filled']}/{summary['gaps_filled'] + summary['gaps_remaining']}"
             )
 
@@ -2886,18 +3110,18 @@ class ScheduleProcessor:
                 break
 
         if not target_seq:
-            print(f"Sequence {sequence_id} not found")
+            self._print(f"Sequence {sequence_id} not found")
             return
 
-        print(f"\n{'='*60}")
-        print(f"DEBUGGING SEQUENCE {sequence_id}: {target_seq.target}")
-        print(f"{'='*60}")
-        print(f"Visit ID: {target_visit_id}")
-        print(f"Start Time: {target_seq.start_time}")
-        print(f"Stop Time: {target_seq.stop_time}")
-        print(f"Duration: {target_seq.duration.sec/60:.1f} minutes")
-        print(f"Target: {target_seq.target}")
-        print(f"RA/Dec: {target_seq.ra:.3f}, {target_seq.dec:.3f}")
+        self._print(f"\n{'='*60}")
+        self._print(f"DEBUGGING SEQUENCE {sequence_id}: {target_seq.target}")
+        self._print(f"{'='*60}")
+        self._print(f"Visit ID: {target_visit_id}")
+        self._print(f"Start Time: {target_seq.start_time}")
+        self._print(f"Stop Time: {target_seq.stop_time}")
+        self._print(f"Duration: {target_seq.duration.sec/60:.1f} minutes")
+        self._print(f"Target: {target_seq.target}")
+        self._print(f"RA/Dec: {target_seq.ra:.3f}, {target_seq.dec:.3f}")
 
         # Check visibility minute by minute
         n_mins = int(np.rint(target_seq.duration.sec / 60.0))
@@ -2909,15 +3133,15 @@ class ScheduleProcessor:
 
         vis = self.visibility.get_visibility(target_coord, times)
 
-        print("\nMinute-by-minute visibility:")
+        self._print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):
             status = "✓ VISIBLE" if visible else "✗ NOT VISIBLE"
-            print(f"  Minute {i+1}: {time.isot} - {status}")
+            self._print(f"  Minute {i+1}: {time.isot} - {status}")
 
-        print("\nVisibility Summary:")
-        print(f"  Total minutes: {len(vis)}")
-        print(f"  Visible minutes: {np.sum(vis)}")
-        print(f"  Visibility fraction: {np.sum(vis)/len(vis):.3f}")
+        self._print("\nVisibility Summary:")
+        self._print(f"  Total minutes: {len(vis)}")
+        self._print(f"  Visible minutes: {np.sum(vis)}")
+        self._print(f"  Visibility fraction: {np.sum(vis)/len(vis):.3f}")
 
         return {
             "sequence": target_seq,
@@ -3000,7 +3224,7 @@ class ScheduleProcessor:
                 overlaps.append(overlap_issue)
 
                 if report_issues:
-                    print(message)
+                    self._print(message)
 
         return overlaps
 
@@ -3125,53 +3349,53 @@ class ScheduleProcessor:
 
         # Report issues if requested
         if report_issues:
-            print("\n" + "=" * 60)
-            print("SEQUENCE TIMING VALIDATION REPORT")
-            print("=" * 60)
+            self._print("\n" + "=" * 60)
+            self._print("SEQUENCE TIMING VALIDATION REPORT")
+            self._print("=" * 60)
 
             summary = issues["timing_summary"]
-            print(
+            self._print(
                 f"Total sequences analyzed: " f"{summary['total_sequences']}"
             )
-            print(f"Total timing issues found: " f"{summary['total_issues']}")
-            print()
+            self._print(f"Total timing issues found: " f"{summary['total_issues']}")
+            self._print()
 
             if issues["overlaps"]:
-                print(f"OVERLAPS ({len(issues['overlaps'])} found):")
+                self._print(f"OVERLAPS ({len(issues['overlaps'])} found):")
                 for i, ov in enumerate(issues["overlaps"]):
-                    print(f"  {i+1}. {ov['message']}")
+                    self._print(f"  {i+1}. {ov['message']}")
             else:
-                print("\u2713 OVERLAPS: None found")
+                self._print("\u2713 OVERLAPS: None found")
 
-            print()
+            self._print()
 
             if issues["short_sequences"]:
-                print(
+                self._print(
                     f"SHORT SEQUENCES "
                     f"({len(issues['short_sequences'])} found, "
                     f"< {min_dur_min:.0f} min):"
                 )
                 for i, sh in enumerate(issues["short_sequences"]):
-                    print(f"  {i+1}. {sh['message']}")
+                    self._print(f"  {i+1}. {sh['message']}")
             else:
-                print("\u2713 SHORT SEQUENCES: None found")
+                self._print("\u2713 SHORT SEQUENCES: None found")
 
-            print()
+            self._print()
 
             if issues["large_gaps"]:
-                print(
+                self._print(
                     f"LARGE GAPS ({len(issues['large_gaps'])} "
                     f"found, > 2 min):"
                 )
                 for i, gap in enumerate(issues["large_gaps"][:5]):
-                    print(f"  {i+1}. {gap['message']}")
+                    self._print(f"  {i+1}. {gap['message']}")
                 if len(issues["large_gaps"]) > 5:
-                    print(
+                    self._print(
                         f"     ... and "
                         f"{len(issues['large_gaps']) - 5} more"
                     )
             else:
-                print("\u2713 LARGE GAPS: None found")
+                self._print("\u2713 LARGE GAPS: None found")
 
         return issues
 
@@ -3269,7 +3493,7 @@ class ScheduleProcessor:
                                 }
                             )
                             if report_issues:
-                                print(msg)
+                                self._print(msg)
 
                         if num_frames is not None:
                             try:
@@ -3321,7 +3545,7 @@ class ScheduleProcessor:
                                         }
                                     )
                                     if report_issues:
-                                        print(msg)
+                                        self._print(msg)
                             except (ValueError, TypeError):
                                 pass
 
@@ -3367,7 +3591,7 @@ class ScheduleProcessor:
                                         }
                                     )
                                     if report_issues:
-                                        print(msg)
+                                        self._print(msg)
                             except (ValueError, TypeError):
                                 pass
 
@@ -3417,7 +3641,7 @@ class ScheduleProcessor:
                                 }
                             )
                             if report_issues:
-                                print(msg)
+                                self._print(msg)
 
         return issues
 
@@ -3512,7 +3736,7 @@ class ScheduleProcessor:
                                 }
                                 issues.append(issue)
                                 if report_issues:
-                                    print(
+                                    self._print(
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod=2 but "
                                         f"numPredefinedStarRois={num_predefined_val} (should be 0)"
@@ -3528,7 +3752,7 @@ class ScheduleProcessor:
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(
+                                self._print(
                                     f"STAR ROI ISSUE: sequence {seq.id} "
                                     f"numPredefinedStarRois='{num_predefined}' cannot be parsed as integer"
                                 )
@@ -3547,7 +3771,7 @@ class ScheduleProcessor:
                                 }
                                 issues.append(issue)
                                 if report_issues:
-                                    print(
+                                    self._print(
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod=2 but "
                                         f"MaxNumStarRois={max_num_val} (should be > 0)"
@@ -3563,7 +3787,7 @@ class ScheduleProcessor:
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(
+                                self._print(
                                     f"STAR ROI ISSUE: sequence {seq.id} "
                                     f"MaxNumStarRois='{max_num}' cannot be parsed as integer"
                                 )
@@ -3586,7 +3810,7 @@ class ScheduleProcessor:
                                 }
                                 issues.append(issue)
                                 if report_issues:
-                                    print(
+                                    self._print(
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod={method}, "
                                         f"MaxNumStarRois ({max_num_val}) != "
@@ -3605,7 +3829,7 @@ class ScheduleProcessor:
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(
+                                self._print(
                                     f"STAR ROI ISSUE: sequence {seq.id} "
                                     f"numPredefinedStarRois='{num_predefined}' or "
                                     f"MaxNumStarRois='{max_num}' cannot be parsed as integers"
@@ -3689,7 +3913,7 @@ class ScheduleProcessor:
                         }
                     )
                     if report_issues:
-                        print(msg)
+                        self._print(msg)
 
         return issues
 
@@ -3706,7 +3930,7 @@ class ScheduleProcessor:
                     status = "PASS" if info["passes"] else "FAIL"
                     side = info.get("side", "")
                     side_label = f" [{side}]" if side else ""
-                    print(
+                    self._print(
                         f"{indent}{body:<12} {status}  "
                         f"required: >= {info['required_deg']:.1f}°"
                         f"{side_label}  "
@@ -3716,7 +3940,7 @@ class ScheduleProcessor:
             nv = item.get("non_visible_minutes")
             tot = item.get("total_minutes")
             if frac is not None:
-                print(
+                self._print(
                     f"{indent}{'visibility':<12}       "
                     f"required: 100%  "
                     f"actual: {frac:.1%}  "
@@ -3727,7 +3951,7 @@ class ScheduleProcessor:
             dur = item.get("duration_minutes")
             req = item.get("minimum_required_minutes")
             if dur is not None and req is not None:
-                print(
+                self._print(
                     f"{indent}duration     "
                     f"required: >= {req:.0f} min  "
                     f"actual: {dur:.1f} min  "
@@ -3737,7 +3961,7 @@ class ScheduleProcessor:
         elif category == "large_gaps":
             gap = item.get("gap_duration_minutes")
             if gap is not None:
-                print(
+                self._print(
                     f"{indent}gap          "
                     f"required: <= 2.0 min  "
                     f"actual: {gap:.1f} min  "
@@ -3747,7 +3971,7 @@ class ScheduleProcessor:
         elif category == "overlaps":
             ov = item.get("overlap_duration_minutes")
             if ov is not None:
-                print(
+                self._print(
                     f"{indent}overlap      "
                     f"required: 0.0 min  "
                     f"actual: {ov:.1f} min"
@@ -3758,7 +3982,7 @@ class ScheduleProcessor:
             eff_dur = item.get("effective_duration_seconds")
             oh = item.get("overhead_seconds")
             if seq_dur is not None:
-                print(
+                self._print(
                     f"{indent}sequence     "
                     f"{seq_dur:.0f}s total  "
                     f"- {oh:.0f}s overhead  "
@@ -3766,7 +3990,7 @@ class ScheduleProcessor:
                 )
             if "exposure_seconds" in item:
                 exp = item["exposure_seconds"]
-                print(
+                self._print(
                     f"{indent}single exp   "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {exp:.3f}s"
@@ -3774,7 +3998,7 @@ class ScheduleProcessor:
             if "total_exposure_seconds" in item:
                 tot = item["total_exposure_seconds"]
                 max_f = item.get("suggested_max_frames", "?")
-                print(
+                self._print(
                     f"{indent}total exp    "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {tot:.1f}s  "
@@ -3782,7 +4006,7 @@ class ScheduleProcessor:
                 )
             if "coadd_exposure_seconds" in item:
                 coadd = item["coadd_exposure_seconds"]
-                print(
+                self._print(
                     f"{indent}coadd exp    "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {coadd:.1f}s"
@@ -3790,7 +4014,7 @@ class ScheduleProcessor:
             if "value_seconds" in item:
                 val = item["value_seconds"]
                 field = item.get("field", "?")
-                print(
+                self._print(
                     f"{indent}{field}  "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {val:.3f}s"
@@ -3800,7 +4024,7 @@ class ScheduleProcessor:
             spread = item.get("max_difference_deg")
             suggested = item.get("suggested_roll")
             if spread is not None:
-                print(
+                self._print(
                     f"{indent}roll spread  "
                     f"required: <= 0.001°  "
                     f"actual: {spread:.3f}°  "
@@ -3810,7 +4034,7 @@ class ScheduleProcessor:
         elif category == "target_name":
             tgt = item.get("target", "")
             if tgt:
-                print(
+                self._print(
                     f"{indent}target name  "
                     f"required: no spaces  "
                     f"actual: '{tgt}'"
@@ -3882,7 +4106,7 @@ class ScheduleProcessor:
         status = "VALID" if total == 0 else "INVALID"
 
         # ── Print ──
-        print(
+        self._print(
             f"\n{'=' * 60}\n"
             f"  VALIDATION SUMMARY: {status} "
             f"({total} issues)\n"
@@ -3890,7 +4114,7 @@ class ScheduleProcessor:
         )
 
         if total == 0:
-            print("  All checks passed.\n")
+            self._print("  All checks passed.\n")
             return {
                 "status": status,
                 "counts": counts,
@@ -3898,7 +4122,7 @@ class ScheduleProcessor:
             }
 
         for cat, cnt in counts.items():
-            print(f"\n  [{cat.upper()}] — {cnt} issue(s)")
+            self._print(f"\n  [{cat.upper()}] — {cnt} issue(s)")
             items = results[cat]
 
             # Sequence timing has a nested structure
@@ -3911,7 +4135,7 @@ class ScheduleProcessor:
                     for item in items.get(sub_key, []):
                         msg = item.get("message", "")
                         if msg:
-                            print(f"    • {msg}")
+                            self._print(f"    • {msg}")
                         self._print_issue_details(sub_key, item)
                 continue
 
@@ -3920,10 +4144,10 @@ class ScheduleProcessor:
                 for item in items:
                     msg = item.get("message", "")
                     if msg:
-                        print(f"    • {msg}")
+                        self._print(f"    • {msg}")
                     self._print_issue_details(cat, item)
 
-        print(f"\n{'=' * 60}\n")
+        self._print(f"\n{'=' * 60}\n")
         return {
             "status": status,
             "counts": counts,
@@ -3936,17 +4160,17 @@ class ScheduleProcessor:
         summary = issues["timing_summary"]
 
         if summary["total_issues"] == 0:
-            print("✓ All sequence timing validation checks passed")
+            self._print("✓ All sequence timing validation checks passed")
         else:
-            print(f"✗ Found {summary['total_issues']} timing issues:")
+            self._print(f"✗ Found {summary['total_issues']} timing issues:")
             if summary["overlaps_found"]:
-                print(f"  - {summary['overlaps_found']} overlaps")
+                self._print(f"  - {summary['overlaps_found']} overlaps")
             if summary["short_sequences_found"]:
-                print(
+                self._print(
                     f"  - {summary['short_sequences_found']} sequences too short"
                 )
             if summary["large_gaps_found"]:
-                print(f"  - {summary['large_gaps_found']} large gaps")
+                self._print(f"  - {summary['large_gaps_found']} large gaps")
 
 
 def _find_false_blocks(vis_bool, time_grid, return_index=False):

@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from astropy import units as u
 from astropy.units import Quantity
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
@@ -148,8 +148,20 @@ class VisdaData:
     single_frame_time: Quantity = field(init=False)
     dropped_integration_time: Quantity = field(init=False)
 
+    # Optional logger. When provided (e.g. by ScheduleProcessor) warnings are
+    # sent to it so they share the run log; otherwise ``warnings.warn`` is
+    # used. Excluded from repr/equality so it never affects data comparisons.
+    logger: Any = field(default=None, repr=False, compare=False)
+
     def __post_init__(self):
         self._update_derived()
+
+    def _warn(self, message: str) -> None:
+        """Emit a warning via the attached logger, or ``warnings.warn``."""
+        if self.logger is not None:
+            self.logger.warning(message)
+        else:
+            warn(message)
 
     def _update_derived(self):
         """Recompute all derived timing and data-volume attributes."""
@@ -166,14 +178,14 @@ class VisdaData:
         ) * u.byte
         self.coadd_bytes = self.frame_bytes * self.frames_per_coadd
         if self.coadd_bytes == 0.0 * u.s:
-            warn("VISDA: Data size of one coadd was found to be 0.")
+            self._warn("VISDA: Data size of one coadd was found to be 0.")
 
         self.single_frame_time = max(
             0,
             (self.exposure_time_s.to(u.s) + self.read_time_per_frame_s.to(u.s)).value,
         ) * u.s
         if self.single_frame_time == 0.0 * u.s:
-            warn("VISDA: Single frame time found to be 0.")
+            self._warn("VISDA: Single frame time found to be 0.")
 
         self.dropped_integration_time = self.dropped_frames * self.single_frame_time
 

@@ -77,6 +77,7 @@ def parse_science_calendar(
             ),
             "created": meta.get("Created"),
             "delivery_id": meta.get("Delivery_Id"),
+            "source_path": str(xml_path),
         }
         if verbose:
             print(
@@ -85,7 +86,7 @@ def parse_science_calendar(
     else:
         if verbose:
             print("Warning: No Meta element found")
-        metadata = {}
+        metadata = {"source_path": str(xml_path)}
 
     # Parse visits using namespace
     visits = []

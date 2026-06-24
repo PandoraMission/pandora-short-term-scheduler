@@ -48,7 +48,11 @@ def test_process_calendar_with_mocked_visibility(monkeypatch, tmp_path):
     sched = ScheduleProcessor("LINE1", "LINE2")
 
     processed = sched.process_calendar(
-        cal, window_start=window_start, window_duration_days=1, verbose=False
+        cal,
+        window_start=window_start,
+        window_duration_days=1,
+        log_path=tmp_path / "run",
+        verbose=False,
     )
 
     # Basic assertions: processed_calendar object and gap_report present

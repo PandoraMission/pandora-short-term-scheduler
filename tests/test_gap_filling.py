@@ -430,7 +430,7 @@ class TestRollAwareGapFilling:
         ]
         assert 42.0 in roll_values
 
-    def test_end_to_end_roll_sensitive(self, monkeypatch):
+    def test_end_to_end_roll_sensitive(self, monkeypatch, tmp_path):
         """Full process_calendar with roll-sensitive visibility."""
         import shortschedule
 
@@ -457,6 +457,7 @@ class TestRollAwareGapFilling:
             cal,
             window_start=first_seq.start_time.isot,
             window_duration_days=1,
+            log_path=tmp_path / "run",
             verbose=False,
         )
 
