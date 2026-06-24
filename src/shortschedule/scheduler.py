@@ -29,6 +29,22 @@ from astropy.coordinates import get_body
 from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm is an optional
+    tqdm = None
+
+
+class _NullProgress:
+    """No-op stand-in for a tqdm bar (used when tqdm is unavailable)."""
+
+    def update(self, n: int = 1) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 from .models import ObservationSequence, ScienceCalendar, Visit
 from .nirda import NirdaData
 from .overhead import OverheadTiming
@@ -760,7 +776,11 @@ class ScheduleProcessor:
         # Only run the sweep when star-tracker constraints are active;
         # boresight-only constraints are roll-independent.
         if self._roll_sweep_enabled:
-            for visit in working_calendar.visits:
+            for visit in self._progress(
+                working_calendar.visits,
+                desc="Roll sweep",
+                total=len(working_calendar.visits),
+            ):
                 visit_rolls = find_best_rolls_for_visit(
                     self.visibility,
                     visit,
@@ -780,6 +800,10 @@ class ScheduleProcessor:
         i = 0
         last_stop = deepcopy(start_time)
 
+        vis_bar = self._progress_bar(
+            sum(len(v.sequences) for v in working_calendar.visits),
+            desc="Computing visibility",
+        )
         for visit in working_calendar.visits:
             visit_rolls = self._computed_target_rolls.get(visit.id, {})
 
@@ -824,6 +848,8 @@ class ScheduleProcessor:
 
                 i += len(vis)
                 last_stop = seq.stop_time
+                vis_bar.update(1)
+        vis_bar.close()
 
         # Fill remaining time after last sequence
         if i < total_minutes:
@@ -987,7 +1013,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx, (visit_id, seq) in enumerate(all_sequences):
+        for idx, (visit_id, seq) in self._progress(
+            list(enumerate(all_sequences)),
+            desc="Trimming non-visible heads",
+            total=len(all_sequences),
+        ):
             n_mins = int(np.rint(seq.duration.sec / 60.0))
             if n_mins <= 0:
                 continue
@@ -1128,7 +1158,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx, (visit_id, seq) in enumerate(all_sequences):
+        for idx, (visit_id, seq) in self._progress(
+            list(enumerate(all_sequences)),
+            desc="Trimming non-visible tails",
+            total=len(all_sequences),
+        ):
             n_mins = int(np.rint(seq.duration.sec / 60.0))
             if n_mins <= 0:
                 continue
@@ -1382,7 +1416,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx, (visit_id, seq) in enumerate(all_sequences):
+        for idx, (visit_id, seq) in self._progress(
+            list(enumerate(all_sequences)),
+            desc="Trimming to longest visible block",
+            total=len(all_sequences),
+        ):
             analysis = self._analyze_mid_sequence_visibility(visit_id, seq)
             if analysis is None:
                 continue
@@ -1721,7 +1759,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx in range(len(all_sequences) - 1):
+        for idx in self._progress(
+            range(len(all_sequences) - 1),
+            desc="Force-filling gaps",
+            total=len(all_sequences) - 1,
+        ):
             prev_vid, prev_seq = all_sequences[idx]
             next_vid, next_seq = all_sequences[idx + 1]
 
@@ -1894,7 +1936,9 @@ class ScheduleProcessor:
             return assignments[idx]["ra"], assignments[idx]["dec"]
 
         # Process each visibility gap
-        for gap_start_idx, gap_end_idx in false_idx:
+        for gap_start_idx, gap_end_idx in self._progress(
+            false_idx, desc="Fixing visibility gaps", total=gaps_total
+        ):
             # Get times for this gap
             gap_times = []
             for x in range(0, gap_end_idx - gap_start_idx):
@@ -2507,6 +2551,10 @@ class ScheduleProcessor:
         """
         issues = []
 
+        vis_bar = self._progress_bar(
+            sum(len(v.sequences) for v in calendar.visits),
+            desc="Validating visibility",
+        )
         for visit in calendar.visits:
             visit_rolls = self._computed_target_rolls.get(visit.id, {})
             for seq in visit.sequences:
@@ -2767,6 +2815,9 @@ class ScheduleProcessor:
                     if report_issues:
                         self._print(message)
 
+                vis_bar.update(1)
+        vis_bar.close()
+
         return issues
 
     def validate_target_names(
@@ -2926,6 +2977,29 @@ class ScheduleProcessor:
         except Exception:
             start = str(getattr(seq, "start_time", "?"))
         return f"{start}-{seq.target}-{visit_id}-{seq.id}"
+
+    def _progress(self, iterable, desc: str, total: Optional[int] = None):
+        """Wraps iterables in a tqdm progress bar when available.
+
+        Falls back to the plain iterable if ``tqdm`` is not installed. The
+        bar auto-disables on non-interactive streams (``disable=None``), so
+        it shows during real runs but stays silent under pytest/CI.
+        """
+        if tqdm is None:
+            return iterable
+        return tqdm(
+            iterable, desc=desc, total=total, disable=None, leave=False
+        )
+
+    def _progress_bar(self, total: int, desc: str):
+        """Return a manually-updated progress bar (or a no-op fallback).
+
+        Use when a single bar must span a nested loop: call ``.update()``
+        per item and ``.close()`` when done.
+        """
+        if tqdm is None:
+            return _NullProgress()
+        return tqdm(total=total, desc=desc, disable=None, leave=False)
 
     def _initialize_gap_report(self) -> None:
         """Initialize/reset the gap report structure."""
