@@ -74,6 +74,7 @@ scheduler = ScheduleProcessor(
     min_power_frac=0.68,          # min acceptable orbit-average power fraction
     force_gap_fill=False,         # if True, aggressively fill scheduling gaps
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
+    fix_bad_data=True,            # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------
     # Per-priority payload overrides, by literal XML tag (CalendarCleaner
     # config.json format): {priority: {section: {xml_tag: value}}}. These are

@@ -257,6 +257,52 @@ class TestSingleRoiConversion:
         assert self._sched()._convert_single_roi_to_predefined(seq) is False
 
 
+class TestFixBadData:
+    """Replace invalid name symbols and flag NaN-like field values."""
+
+    def _sched(self):
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        sched.fix_bad_data = True
+        sched.logger = None
+        return sched
+
+    def test_replaces_plus_in_target_attribute(self):
+        seq = _seq(target="WASP+12b")
+        self._sched()._fix_bad_data(seq)
+        assert seq.target == "WASP_12b"
+
+    def test_replaces_plus_in_target_payload_tags(self):
+        seq = _seq()
+        vis = seq.payload_params[VisdaData.PAYLOAD_SECTION]
+        ET.SubElement(vis, "TargetID").text = "TOI+674b"
+        self._sched()._fix_bad_data(seq)
+        assert vis.find("TargetID").text == "TOI_674b"
+
+    def test_nan_in_numeric_field_warns(self, capsys):
+        seq = _seq()
+        seq.payload_params[VisdaData.PAYLOAD_SECTION].find(
+            "FramesPerCoadd"
+        ).text = "nan"
+        self._sched()._fix_bad_data(seq)
+        out = capsys.readouterr().out
+        assert "NaN-like value" in out and "FramesPerCoadd" in out
+
+    def test_nan_in_name_field_not_flagged(self, capsys):
+        seq = _seq()
+        vis = seq.payload_params[VisdaData.PAYLOAD_SECTION]
+        ET.SubElement(vis, "TargetID").text = "nan"
+        self._sched()._fix_bad_data(seq)
+        assert "NaN-like value" not in capsys.readouterr().out
+
+    def test_free_time_nan_skipped(self, capsys):
+        seq = _seq(target="Free Time")
+        seq.payload_params[VisdaData.PAYLOAD_SECTION].find(
+            "FramesPerCoadd"
+        ).text = "nan"
+        self._sched()._fix_bad_data(seq)
+        assert "NaN-like value" not in capsys.readouterr().out
+
+
 class TestNormalizePriorityKeys:
     def test_int_and_string_keys(self):
         norm = ScheduleProcessor._normalize_priority_keys(

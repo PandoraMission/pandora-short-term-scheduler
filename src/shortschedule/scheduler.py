@@ -55,6 +55,31 @@ from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
 from .visda import VisdaData
 
 
+# Characters that are not allowed in target name fields (``Target`` /
+# ``TargetID``) because they break downstream filename and identifier
+# handling. Each bad symbol is mapped to its safe replacement and substituted
+# by the ``fix_bad_data`` pass.
+BAD_NAME_SYMBOLS = {
+    "+": "_",
+}
+
+# Tag names whose values are expected to be non-numeric (names, IDs,
+# timestamps, TLE lines). They are excluded from the NaN-like value scan run
+# by the ``fix_bad_data`` pass.
+NON_NUMERIC_TAGS = frozenset(
+    {
+        "Target",
+        "TargetID",
+        "ID",
+        "Start",
+        "Stop",
+        "TLE_Line1",
+        "TLE_Line2",
+        "Calendar_Status",
+    }
+)
+
+
 class ScheduleProcessor:
     """Main class for processing and adjusting science calendars with updated TLE.
 
@@ -98,6 +123,7 @@ class ScheduleProcessor:
         update_nirda_reset1_for_vitl: bool = True,
         vitl_settling_time: u.Quantity = 60.0 * u.s,
         convert_single_roi_to_predefined: bool = True,
+        fix_bad_data: bool = True,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -191,6 +217,13 @@ class ScheduleProcessor:
             method (``StarRoiDetMethod == 1``) with the target RA/Dec written
             as the single predefined ROI (``numPredefinedStarRois == 1``,
             ``PredefinedStarRoiRa/RA1``, ``PredefinedStarRoiDec/Dec1``).
+        fix_bad_data : bool, optional
+            When True (default), each observation's target name fields
+            (``Target``/``TargetID``) have invalid symbols replaced per
+            ``BAD_NAME_SYMBOLS`` (e.g. ``+`` -> ``_``), and all other
+            (numeric) fields are scanned for NaN-like values, which are logged
+            as warnings. Free-time observations are exempt from the NaN scan
+            because their RA/Dec are expected to be NaN.
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -364,6 +397,11 @@ class ScheduleProcessor:
         # converted to the predefined-ROI method (StarRoiDetMethod == 1) with
         # the target RA/Dec supplied as the single predefined ROI.
         self.convert_single_roi_to_predefined = convert_single_roi_to_predefined
+
+        # Bad-data fixes: when enabled, target name fields have invalid
+        # symbols (see BAD_NAME_SYMBOLS) replaced, and all other fields are
+        # scanned for NaN-like values (reported as warnings).
+        self.fix_bad_data = fix_bad_data
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -2507,7 +2545,80 @@ class ScheduleProcessor:
         if getattr(self, "convert_single_roi_to_predefined", False):
             self._convert_single_roi_to_predefined(sequence, visit_id=visit_id)
 
+        # Fix bad data (invalid name symbols + NaN-like value reporting).
+        if getattr(self, "fix_bad_data", False):
+            self._fix_bad_data(sequence, visit_id=visit_id)
+
         return sequence
+
+    def _fix_bad_data(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> None:
+        """Replace invalid name symbols and report NaN-like field values.
+
+        Mirrors the CalendarCleaner ``Fix_Bad_Data`` step:
+
+        - ``Target``/``TargetID`` fields (the sequence's ``target`` attribute
+          and any ``Target``/``TargetID`` payload tags) have each symbol in
+          ``BAD_NAME_SYMBOLS`` replaced by its safe substitute.
+        - Every other field is scanned for NaN-like text; matches in tags not
+          listed in ``NON_NUMERIC_TAGS`` are logged as warnings. Free-time
+          observations are skipped here because their RA/Dec are expected to
+          be NaN.
+        """
+        prefix = self._seq_prefix(visit_id, sequence)
+
+        # 1) Replace invalid symbols in the sequence's target name.
+        if sequence.target:
+            fixed = sequence.target
+            for bad, good in BAD_NAME_SYMBOLS.items():
+                fixed = fixed.replace(bad, good)
+            if fixed != sequence.target:
+                self._print(
+                    f"{prefix} | BAD DATA: Target "
+                    f"'{sequence.target}' -> '{fixed}'"
+                )
+                sequence.target = fixed
+
+        # 2) Replace invalid symbols in any Target/TargetID payload tags.
+        for section_elem in sequence.payload_params.values():
+            if not isinstance(section_elem, ET.Element):
+                continue
+            for elem in section_elem.iter():
+                tag = elem.tag.rsplit("}", 1)[-1]
+                if tag not in ("Target", "TargetID") or not elem.text:
+                    continue
+                fixed = elem.text
+                for bad, good in BAD_NAME_SYMBOLS.items():
+                    fixed = fixed.replace(bad, good)
+                if fixed != elem.text:
+                    self._print(
+                        f"{prefix} | BAD DATA: {tag} "
+                        f"'{elem.text}' -> '{fixed}'"
+                    )
+                    elem.text = fixed
+
+        # 3) Scan numeric fields for NaN-like values (report only). Free-time
+        # observations legitimately carry NaN RA/Dec, so skip them.
+        if (sequence.target or "").strip().lower() in (
+            "free time",
+            "freetime",
+            "free_time",
+            "free-time",
+        ):
+            return
+        for section, section_elem in sequence.payload_params.items():
+            if not isinstance(section_elem, ET.Element):
+                continue
+            for elem in section_elem.iter():
+                tag = elem.tag.rsplit("}", 1)[-1]
+                if tag in NON_NUMERIC_TAGS or not elem.text:
+                    continue
+                if elem.text.strip().lower() == "nan":
+                    self._print(
+                        f"WARNING: {prefix} | BAD DATA: {section}/{tag} "
+                        f"has NaN-like value '{elem.text.strip()}'"
+                    )
 
     def _convert_single_roi_to_predefined(
         self, sequence: ObservationSequence, visit_id: Any = None
