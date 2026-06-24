@@ -19,6 +19,7 @@ single coadd before downlink.
 
 from __future__ import annotations
 
+from warnings import warn
 import math
 from dataclasses import dataclass, field
 
@@ -138,7 +139,7 @@ class VisdaData:
     visimg_bytes_per_pixel: Quantity = 2 * u.byte
     read_time_per_frame_s: Quantity = 1.0e-6 * u.s  # This is not correct but this parameter is effectively 0 compared to the exposure time.
     additional_overhead_time: Quantity = 0 * u.s
-    dropped_frames: int = 0
+    dropped_frames: int = 1  # TODO: As a buffer we drop one VISDA frame
 
     # Derived attributes: computed in _update_derived, not constructor arguments
     pixels_per_frame: int = field(init=False)
@@ -160,14 +161,20 @@ class VisdaData:
             bytes_per_pixel = self.visimg_bytes_per_pixel
 
         self.frame_bytes = max(
-            0, (self.pixels_per_frame * bytes_per_pixel).to(u.byte).value
+            0,
+            (self.pixels_per_frame * bytes_per_pixel).to(u.byte).value
         ) * u.byte
         self.coadd_bytes = self.frame_bytes * self.frames_per_coadd
+        if self.coadd_bytes == 0.0 * u.s:
+            warn("VISDA: Data size of one coadd was found to be 0.")
 
         self.single_frame_time = max(
             0,
             (self.exposure_time_s.to(u.s) + self.read_time_per_frame_s.to(u.s)).value,
         ) * u.s
+        if self.single_frame_time == 0.0 * u.s:
+            warn("VISDA: Single frame time found to be 0.")
+
         self.dropped_integration_time = self.dropped_frames * self.single_frame_time
 
     def solve_integrations(

@@ -23,6 +23,7 @@ shorter ``reset_frames_2``).
 from __future__ import annotations
 
 import math
+from warnings import warn
 from dataclasses import dataclass, field
 
 from astropy import units as u
@@ -181,7 +182,7 @@ class NirdaData:
     roi_y_buffer_pixels: int = 2
     read_time_per_pixel: Quantity = 1.0e-5 * u.s
     bytes_per_pixel: Quantity = 2 * u.byte
-    dropped_integrations: int = 0
+    dropped_integrations: int = 1  # TODO: As a buffer we are dropping one NIRDA integration.
     compression_ratio: float = 0.8
     global_reset_method: str = 'off'
     global_reset_lbl_rows: int = 256
@@ -253,19 +254,24 @@ class NirdaData:
             common_integration_time
             + self.reset_frame_time.to(u.s).value * self.reset_frames_1,
         ) * u.s
+        if self.first_integration_time == 0 * u.s:
+            warn("NIRDA: First integration time found to be 0.")
 
         self.other_integration_time = max(
             0,
             common_integration_time
             + self.reset_frame_time.to(u.s).value * self.reset_frames_2,
         ) * u.s
+        if self.other_integration_time == 0 * u.s:
+            warn("NIRDA: Other integration time found to be 0.")
 
         # If we drop any integrations then the duration of those drops will always be equal to the "other"
         # integration time.
         self.dropped_integration_time = self.other_integration_time
 
         bytes_per_frame = max(
-            0, (self.bytes_per_pixel * self.pixels_per_frame).to(u.byte).value
+            0,
+            (self.bytes_per_pixel * self.pixels_per_frame).to(u.byte).value
         ) * u.byte
 
         if self.average_groups:
@@ -278,8 +284,12 @@ class NirdaData:
             self.integration_data = bytes_per_frame * self.groups * self.read_frames
 
         self.integration_data = max(
-            0, self.integration_data.to(u.byte).value
+            0,
+            self.integration_data.to(u.byte).value
         ) * u.byte
+        
+        if self.integration_data == 0 * u.byte:
+            warn("NIRDA: Data size per integration was found to be 0.")
 
     def update_for_vitl(self, vitl_settling_time: Quantity):
         """Adjust ``reset_frames_1`` to cover a VITL settling time and recompute.
@@ -298,12 +308,14 @@ class NirdaData:
         
         # TODO: Open Question! Do we add the global reset time to this?
 
+        MIN_RESET1 = 2
         if self.reset_frame_time.to(u.s).value == 0.0:
             # Have at least 2 reset1
-            self.reset_frames_1 = 2
+            warn(f"NIRDA Reset frame time is approx. 0. Using default ``reset1={MIN_RESET1}.``")
+            self.reset_frames_1 = MIN_RESET1
         else:
             self.reset_frames_1 = max(
-                1,
+                MIN_RESET1,
                 math.ceil((vitl_settling_time / self.reset_frame_time).decompose().value),
             )
 
