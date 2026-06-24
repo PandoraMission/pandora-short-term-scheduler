@@ -2070,18 +2070,50 @@ class ScheduleProcessor:
             return {"times": [], "assignments": [], "summary": {}}
 
         # Time tolerance for comparisons (1 second)
-        time_tolerance = 1.0 * u.s
+        tol = 1.0  # seconds
 
-        # Generate time grid
-        times = []
+        # Build the minute grid once (vectorised). Both materialising scalar
+        # Time objects (``list(times)``) and per-scalar ``isot`` formatting
+        # are very slow, so keep ``times`` as a single Time array and format
+        # all ISOT strings in one vectorised call.
+        times = start_time + np.arange(total_minutes) * u.min
+        isot_values = np.atleast_1d(times.isot)
+
+        # Pre-compute each sequence's [start, stop) window in seconds relative
+        # to ``start_time``, sorted by start. Doing the (slow) astropy Time
+        # subtraction once per sequence — rather than once per (minute,
+        # sequence) — and then walking a forward pointer keeps this O(minutes
+        # + sequences) instead of O(minutes * sequences). The latter is why
+        # the per-minute scan slowed down as it advanced through the window:
+        # each later minute had to skip every already-finished sequence
+        # before reaching its owner.
+        intervals = []
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                s0 = (seq.start_time - start_time).to(u.s).value
+                s1 = (seq.stop_time - start_time).to(u.s).value
+                intervals.append((s0, s1, seq, visit.id))
+        intervals.sort(key=lambda iv: iv[0])
+        n_intervals = len(intervals)
+
         assignments = []
+        lo = 0  # index of the earliest sequence that may still own a minute
 
-        for minute_idx in range(total_minutes):
-            current_time = start_time + minute_idx * u.min
-            times.append(current_time)
+        for minute_idx in self._progress(
+            range(total_minutes),
+            desc="Mapping minute assignments",
+            total=total_minutes,
+        ):
+            current = float(minute_idx) * 60.0
+
+            # Retire sequences whose window has ended: once a minute is at or
+            # past stop - tol, that sequence (and, by sort order, none before
+            # it) can own this or any later minute.
+            while lo < n_intervals and current >= intervals[lo][1] - tol:
+                lo += 1
 
             assignment = {
-                "time": current_time.isot,
+                "time": isot_values[minute_idx],
                 "minute_index": minute_idx,
                 "sequence_id": None,
                 "target": None,
@@ -2092,39 +2124,23 @@ class ScheduleProcessor:
                 "status": "unassigned",
             }
 
-            # Find the sequence that owns this minute
-            assigned_sequence = None
-            visit_id = None
-
-            for visit in calendar.visits:
-                for seq in visit.sequences:
-                    start_diff = current_time - seq.start_time
-                    stop_diff = current_time - seq.stop_time
-
-                    starts_at_or_after = start_diff >= -time_tolerance
-                    ends_before = stop_diff < -time_tolerance
-                    starts_exactly = abs(start_diff) <= time_tolerance
-
-                    if (starts_at_or_after and ends_before) or starts_exactly:
-                        assigned_sequence = seq
-                        visit_id = visit.id
-                        break
-
-                if assigned_sequence:
-                    break
-
-            if assigned_sequence:
-                assignment.update(
-                    {
-                        "sequence_id": assigned_sequence.id,
-                        "target": assigned_sequence.target,
-                        "visit_id": visit_id,
-                        "ra": assigned_sequence.ra,
-                        "dec": assigned_sequence.dec,
-                        "priority": assigned_sequence.priority,
-                        "status": "assigned",
-                    }
-                )
+            if lo < n_intervals:
+                s0, s1, seq, visit_id = intervals[lo]
+                starts_at_or_after = current >= s0 - tol
+                ends_before = current < s1 - tol
+                starts_exactly = abs(current - s0) <= tol
+                if (starts_at_or_after and ends_before) or starts_exactly:
+                    assignment.update(
+                        {
+                            "sequence_id": seq.id,
+                            "target": seq.target,
+                            "visit_id": visit_id,
+                            "ra": seq.ra,
+                            "dec": seq.dec,
+                            "priority": seq.priority,
+                            "status": "assigned",
+                        }
+                    )
 
             assignments.append(assignment)
 

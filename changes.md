@@ -9,4 +9,5 @@
 - Adds dependence on NIRDA reset1 for VITL settling time. These parameters are all adjustable.
 - Adds helper that renumbers both visits and sequencies to fix any misnumbering after merges.
 - Adds log file to track changes, info, and warnings raised by the short term scheduler.
+- Fixes minute-by-minute parsing to improve processing time.
 - Adds tests for all of these changes.
