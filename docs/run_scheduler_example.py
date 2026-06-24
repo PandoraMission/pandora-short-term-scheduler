@@ -161,28 +161,6 @@ processed_calendar = scheduler.process_calendar(
     merge_similar_observations=True
 )
 
-# ---------------------------------------------------------------------------
-# Validate the result
-# ---------------------------------------------------------------------------
-# process_calendar already runs these checks internally; they are repeated
-# here explicitly so the output can be inspected.
-print("\n\nValidating visibility...")
-issues = scheduler.validate_visibility(processed_calendar)
-print("visibility issues:", issues)
-
-print("\n\nValidating exposures...")
-exposure_issues = scheduler.validate_payload_exposures(processed_calendar, report_issues=True)
-print("exposure issues:", exposure_issues)
-
-# Quick overlap check (analogous to validate_visibility).
-print("\n\nValidating overlaps...")
-overlap_issues = scheduler.validate_no_overlaps_astropy(processed_calendar)
-print(f"Found {len(overlap_issues)} overlaps")
-
-# Comprehensive sequence-timing validation.
-print("\n\nValidating timing...")
-all_timing_issues = scheduler.validate_sequence_timing(processed_calendar)
-
 # Human-readable summaries.
 print("\n\nPrinting diagnostics...")
 scheduler.print_timing_summary(processed_calendar)
