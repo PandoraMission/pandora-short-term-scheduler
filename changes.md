@@ -7,3 +7,4 @@
 - Adds ability to merge back-to-back observations of the same target.
 - Adds ability to override payload parameters set by original long-term calendar on a per-priority type basis.
 - Adds warnings if single NIRDA or VISDA data file exceeds payload limits.
+- Adds dependence on NIRDA reset1 for VITL settling time. These parameters are all adjustable.

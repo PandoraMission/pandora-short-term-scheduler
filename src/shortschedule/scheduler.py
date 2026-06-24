@@ -73,6 +73,8 @@ class ScheduleProcessor:
         override_visda_parameters: Optional[Dict[int, List[str]]] = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
+        update_nirda_reset1_for_vitl: bool = True,
+        vitl_settling_time: u.Quantity = 60.0 * u.s,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -136,6 +138,14 @@ class ScheduleProcessor:
             sequence. A warning is raised if a sequence's computed compressed
             NIRDA or VISDA data exceeds this.
             Defaults to 255 MB.
+        update_nirda_reset1_for_vitl : bool, optional
+            When True (default), each NIRDA observation's ``reset_frames_1``
+            is adjusted via ``NirdaData.update_for_vitl`` to cover
+            ``vitl_settling_time`` before its integration count is computed,
+            and the resulting ``SC_Resets1`` is written back to the payload.
+        vitl_settling_time : Quantity[second], optional
+            Minimum VITL detector settling time used when
+            ``update_nirda_reset1_for_vitl`` is True. Defaults to 60 s.
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -289,6 +299,12 @@ class ScheduleProcessor:
         # exceeds these.
         self.max_file_size_uncompressed = max_file_size_uncompressed
         self.max_file_size_compressed = max_file_size_compressed
+
+        # VITL settling: when enabled, each NIRDA observation has its
+        # reset_frames_1 adjusted to cover vitl_settling_time before its
+        # integration count is computed.
+        self.update_nirda_reset1_for_vitl = update_nirda_reset1_for_vitl
+        self.vitl_settling_time = vitl_settling_time
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -2265,6 +2281,21 @@ class ScheduleProcessor:
         # Write any overridden parameters back onto the observation.
         for tag, text in info.items():
             sequence.set_payload_parameter("AcquireInfCamImages", tag, text)
+
+        # Optionally adjust reset_frames_1 to cover the VITL settling time
+        # before computing integrations, and persist the new SC_Resets1.
+        # This affects number of integrations so needs to be set before 
+        # those are calculated.
+        if getattr(self, "update_nirda_reset1_for_vitl", False):
+            vitl_settling_time = getattr(
+                self, "vitl_settling_time", 60.0 * u.s
+            )
+            nirda.update_for_vitl(vitl_settling_time)
+            sequence.set_payload_parameter(
+                "AcquireInfCamImages",
+                "SC_Resets1",
+                str(int(nirda.reset_frames_1)),
+            )
 
         integrations, data, data_compressed = nirda.solve_integrations(
             duration.to(u.s), overhead

@@ -954,6 +954,83 @@ def _sched_with_limits(max_uncompressed, max_compressed):
     return sched
 
 
+class TestVitlReset1:
+    """update_nirda_reset1_for_vitl adjusts SC_Resets1 before solving."""
+
+    _KW = dict(
+        roi_x=100,
+        roi_y=256,
+        sc_resets1=1,
+        sc_resets2=1,
+        sc_drop1=0,
+        sc_drop2=0,
+        sc_drop3=0,
+        sc_read=5,
+        sc_groups=3,
+    )
+
+    def _sched(self, enabled, vitl=60.0 * u.s):
+        sched = ScheduleProcessor.__new__(ScheduleProcessor)
+        sched.update_nirda_reset1_for_vitl = enabled
+        sched.vitl_settling_time = vitl
+        return sched
+
+    def test_reset1_updated_when_enabled(self):
+        """SC_Resets1 is set to cover the VITL settling time."""
+        seq = _make_nirda_seq(duration_sec=2000, **self._KW)
+        sched = self._sched(enabled=True, vitl=60.0 * u.s)
+        out = sched._update_NIRDA_integrations(
+            seq, seq.duration, overhead=_overhead()
+        )
+        reset1 = int(
+            out.get_payload_parameter("AcquireInfCamImages", "SC_Resets1")
+        )
+        # Expected value comes from NirdaData.update_for_vitl itself.
+        expected = _nirda_from_kwargs(**self._KW)
+        expected.update_for_vitl(60.0 * u.s)
+        assert reset1 == expected.reset_frames_1
+        assert reset1 > 1  # the seq started at sc_resets1=1
+
+    def test_reset1_untouched_when_disabled(self):
+        """With the flag off, SC_Resets1 keeps the observation's value."""
+        seq = _make_nirda_seq(duration_sec=2000, **self._KW)
+        sched = self._sched(enabled=False)
+        out = sched._update_NIRDA_integrations(
+            seq, seq.duration, overhead=_overhead()
+        )
+        reset1 = int(
+            out.get_payload_parameter("AcquireInfCamImages", "SC_Resets1")
+        )
+        assert reset1 == 1
+
+    def test_longer_settling_needs_more_resets(self):
+        """A longer VITL settling time requires at least as many resets."""
+        seq_short = _make_nirda_seq(duration_sec=2000, **self._KW)
+        seq_long = _make_nirda_seq(duration_sec=2000, **self._KW)
+        r_short = int(
+            self._sched(True, 30.0 * u.s)
+            ._update_NIRDA_integrations(
+                seq_short, seq_short.duration, overhead=_overhead()
+            )
+            .get_payload_parameter("AcquireInfCamImages", "SC_Resets1")
+        )
+        r_long = int(
+            self._sched(True, 120.0 * u.s)
+            ._update_NIRDA_integrations(
+                seq_long, seq_long.duration, overhead=_overhead()
+            )
+            .get_payload_parameter("AcquireInfCamImages", "SC_Resets1")
+        )
+        assert r_long >= r_short
+
+    def test_defaults_stored_via_constructor(self):
+        """Constructor enables VITL reset adjustment with a 60 s default."""
+        with mock.patch("shortschedule.scheduler.Visibility"):
+            proc = ScheduleProcessor("L1", "L2")
+        assert proc.update_nirda_reset1_for_vitl is True
+        assert proc.vitl_settling_time == 60.0 * u.s
+
+
 class TestDataSizeWarnings:
     """The scheduler warns when computed data exceeds the size limits."""
 

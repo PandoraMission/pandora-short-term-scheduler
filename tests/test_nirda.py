@@ -417,11 +417,11 @@ class TestUpdateForVitl:
         nd.update_for_vitl(settling)
         assert nd.reset_frames_1 >= 1
 
-    def test_zero_settling_gives_one_frame(self):
-        """Zero settling time should still require one reset frame."""
+    def test_zero_settling_gives_floor_resets(self):
+        """Zero settling time should still apply the minimum reset-frame floor."""
         nd = _make()
         nd.update_for_vitl(0.0 * u.s)
-        assert nd.reset_frames_1 == 1
+        assert nd.reset_frames_1 == 2
 
     def test_derived_attributes_recomputed(self):
         """Derived attributes should be updated after update_for_vitl."""
