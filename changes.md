@@ -5,6 +5,7 @@
 - Adds baseline short-term calendar runner script to docs/
 - Adds ability to merge back-to-back observations of the same target.
 - Adds ability to override payload parameters set by original long-term calendar on a per-priority type basis.
+  - Overrides can be taken from user provided dict or from the visda/nirda class defaults.
 - Adds warnings if single NIRDA or VISDA data file exceeds payload limits.
 - Adds dependence on NIRDA reset1 for VITL settling time. These parameters are all adjustable.
 - Adds helper that renumbers both visits and sequencies to fix any misnumbering after merges.

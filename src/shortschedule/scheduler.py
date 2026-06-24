@@ -89,8 +89,8 @@ class ScheduleProcessor:
         vda_post_sequence_overhead: u.Quantity | None = None,
         nirda_pre_sequence_overhead: u.Quantity | None = None,
         nirda_post_sequence_overhead: u.Quantity | None = None,
-        override_nirda_parameters: Optional[Dict[int, List[str]]] = None,
-        override_visda_parameters: Optional[Dict[int, List[str]]] = None,
+        override_nirda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
+        override_visda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
@@ -131,23 +131,25 @@ class ScheduleProcessor:
             NIRDA post-sequence overhead (default is None which will use the overhead defaults).
         override_nirda_parameters : dict, optional
             Per-priority NIRDA payload overrides applied during the
-            payload-update step. Maps an observation priority to a list of
-            ``NirdaData`` field names whose values should be replaced by the
-            ``NirdaData`` defaults instead of being read from the
-            observation. For example:
-                ``{0: ['drop_frames_1', 'drop_frames_3']}``
-                    means: for every priority-0 observation, use the default-class
-                    values for ``drop_frames_1`` and ``drop_frames_3``
-                    (and write them back onto the observation) before
-                    recomputing SC_Integrations.
-            Field names are ``NirdaData`` attribute names; the corresponding XML
-            tags are updated automatically.
-            Defaults to no overrides.
+            payload-update step. Maps an observation priority to a mapping of
+            ``NirdaData`` field names to the values to force; a value of
+            ``None`` means "use the ``NirdaData`` default". For example:
+                ``{0: {'drop_frames_1': 2, 'drop_frames_3': None},
+                   1: {'reset_frames_1': 30}}``
+                    means: for every priority-0 observation set
+                    ``drop_frames_1`` to 2 and ``drop_frames_3`` to the class
+                    default; for priority 1 set ``reset_frames_1`` to 30. The
+                    overridden values are written back onto the observation
+                    before recomputing SC_Integrations.
+            Field names are ``NirdaData`` attribute names; the corresponding
+            XML tags are updated automatically. An iterable of field names is
+            also accepted (treated as all-default, e.g.
+            ``{0: ['drop_frames_1']}``). Defaults to no overrides.
         override_visda_parameters : dict, optional
             Per-priority VISDA payload overrides, structured identically to
-            ``override_nirda_parameters`` but using ``VisdaData`` field
-            names (e.g. ``frames_per_coadd``, ``exposure_time_s``).
-            Defaults to no overrides.
+            ``override_nirda_parameters`` but using ``VisdaData`` field names
+            (e.g. ``{0: {'frames_per_coadd': 5}}``). Defaults to no
+            overrides.
         max_file_size_uncompressed : Quantity[byte], optional
             Maximum allowed *uncompressed* data volume per detector per
             sequence. A warning is raised during the payload-update step if a
@@ -306,11 +308,13 @@ class ScheduleProcessor:
         )
 
         # Per-priority payload overrides applied during the payload-update
-        # step. Structure: { priority: [data_class_field_name, ...] }
-        self._override_nirda_parameters: Dict[int, List[str]] = (
+        # step. Structure: { priority: {field_name: value-or-None} }, where a
+        # None value means "use the data-class default". An iterable of field
+        # names is also accepted (treated as all-default).
+        self._override_nirda_parameters: Dict[int, Any] = (
             override_nirda_parameters or {}
         )
-        self._override_visda_parameters: Dict[int, List[str]] = (
+        self._override_visda_parameters: Dict[int, Any] = (
             override_visda_parameters or {}
         )
 
@@ -2220,10 +2224,14 @@ class ScheduleProcessor:
         taken from the data class itself (``PAYLOAD_SECTION``,
         ``CONFIG_SPEC``, ``REQUIRED_CONFIG_FIELDS``). For each config field
         the value is read from the observation's payload XML and converted
-        to the data-class field. Fields named in *override_fields* are
-        instead taken from a default ``data_cls()`` instance (via
-        ``get_config``) and queued to be written back to the observation so
-        the calendar reflects the override.
+        to the data-class field. Fields in *override_fields* are instead
+        forced and queued to be written back to the observation so the
+        calendar reflects the override.
+
+        *override_fields* may be either a mapping ``{field_name: value}``
+        (a non-``None`` value is used directly; ``None`` means "use the
+        ``data_cls`` default") or an iterable of field names (treated as
+        "use the default" for each).
 
         Returns
         -------
@@ -2236,7 +2244,14 @@ class ScheduleProcessor:
         spec = data_cls.CONFIG_SPEC
         required_fields = data_cls.REQUIRED_CONFIG_FIELDS
 
-        override_fields = set(override_fields or ())
+        # Normalize override_fields to a {field: value-or-None} mapping. A
+        # dict supplies explicit values (None -> class default); an iterable
+        # of names means "use the default" for each.
+        if isinstance(override_fields, dict):
+            overrides = dict(override_fields)
+        else:
+            overrides = {field: None for field in (override_fields or ())}
+
         default_config = data_cls().get_config()
         kwargs: Dict[str, Any] = dict(extra_kwargs or {})
         # Share the run logger so the data class's own warnings (zero frame
@@ -2246,8 +2261,10 @@ class ScheduleProcessor:
         missing: List[str] = []
 
         for field, (tag, from_xml, to_xml) in spec.items():
-            if field in override_fields:
-                value = default_config[field]
+            if field in overrides:
+                # None -> class default; otherwise use the supplied value.
+                ov = overrides[field]
+                value = default_config[field] if ov is None else ov
                 kwargs[field] = value
                 writeback[tag] = to_xml(value)
                 continue

@@ -76,22 +76,23 @@ scheduler = ScheduleProcessor(
     # ----------------------------------------------------------------------
     # Optional per-priority payload overrides.
     #
-    # These force specific NIRDA/VISDA payload parameters to the values from
-    # the default NirdaData / VisdaData classes for every observation of a
-    # given priority, instead of using the values carried by the observation.
-    # Each maps a priority -> list of data-class field names to override; the
+    # These force specific NIRDA/VISDA payload parameters for every
+    # observation of a given priority, instead of using the values carried by
+    # the observation. Each maps a priority -> {field_name: value}; the
     # corresponding payload XML tags are updated and the integration counts
-    # are recomputed accordingly.
+    # are recomputed accordingly. A value of None means "use the default from
+    # the NirdaData / VisdaData class".
     #
-    # Example: for all priority-0 observations, replace drop_frames_1 and
-    # drop_frames_3 (NIRDA) and frames_per_coadd (VISDA) with class defaults.
+    # Example: for all priority-0 observations set drop_frames_1=2 and take
+    # drop_frames_3 from the class default; for priority 1 set
+    # reset_frames_1=30; and set VISDA frames_per_coadd=5 for priority 0.
     #
     # override_nirda_parameters={
-    #     0: ["drop_frames_1", "drop_frames_3"],
-    #     1: ["reset_frames_1"],
+    #     0: {"drop_frames_1": 2, "drop_frames_3": None},
+    #     1: {"reset_frames_1": 30},
     # },
     # override_visda_parameters={
-    #     0: ["frames_per_coadd"],
+    #     0: {"frames_per_coadd": 5},
     # },
 )
 

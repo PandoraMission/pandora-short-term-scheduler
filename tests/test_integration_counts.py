@@ -890,6 +890,99 @@ class TestVisdaParameterOverride:
         )
 
 
+class TestParameterOverrideValues:
+    """Dict-form overrides force explicit values (None -> class default)."""
+
+    def test_nirda_explicit_value_written(self):
+        defaults = NirdaData()
+        seq = _make_nirda_seq(
+            duration_sec=1800,
+            sc_drop1=5,
+            sc_drop3=7,
+            **{k: v for k, v in _NIRDA_KWARGS.items() if k not in
+               ("sc_drop1", "sc_drop3")},
+        )
+        sched = _sched()
+        out = sched._update_NIRDA_integrations(
+            seq,
+            seq.duration,
+            overhead=_overhead(),
+            # drop_frames_1 -> explicit 2; drop_frames_3 -> class default.
+            override_fields={"drop_frames_1": 2, "drop_frames_3": None},
+        )
+        drop1 = int(
+            out.get_payload_parameter("AcquireInfCamImages", "SC_DropFrames1")
+        )
+        drop3 = int(
+            out.get_payload_parameter("AcquireInfCamImages", "SC_DropFrames3")
+        )
+        assert drop1 == 2
+        assert drop3 == defaults.drop_frames_3
+
+    def test_nirda_explicit_reset_changes_count(self):
+        """An explicit reset_frames_1 value drives SC_Integrations."""
+        seq_default = _make_nirda_seq(
+            duration_sec=1800, **{**_NIRDA_KWARGS, "sc_resets1": 1}
+        )
+        seq_big = seq_default.copy()
+        sched = _sched()
+        n_small = int(
+            sched._update_NIRDA_integrations(
+                seq_default, seq_default.duration, overhead=_overhead(),
+                override_fields={"reset_frames_1": 1},
+            ).get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        n_big = int(
+            sched._update_NIRDA_integrations(
+                seq_big, seq_big.duration, overhead=_overhead(),
+                override_fields={"reset_frames_1": 5000},
+            ).get_payload_parameter(
+                "AcquireInfCamImages", "SC_Integrations"
+            )
+        )
+        # A much larger first-integration reset count fits fewer integrations.
+        assert n_big <= n_small
+
+    def test_visda_explicit_value_written(self):
+        seq = _make_vda_seq(
+            duration_sec=1800, exposure_us=500_000, frames_per_coadd=3
+        )
+        sched = _sched()
+        out = sched._update_VDA_integrations(
+            seq,
+            seq.duration,
+            overhead=_overhead(),
+            override_fields={"frames_per_coadd": 7},
+        )
+        fpc = int(
+            out.get_payload_parameter(
+                "AcquireVisCamScienceData", "FramesPerCoadd"
+            )
+        )
+        assert fpc == 7
+
+    def test_none_value_uses_default(self):
+        defaults = VisdaData()
+        seq = _make_vda_seq(
+            duration_sec=1800, exposure_us=500_000, frames_per_coadd=3
+        )
+        sched = _sched()
+        out = sched._update_VDA_integrations(
+            seq,
+            seq.duration,
+            overhead=_overhead(),
+            override_fields={"frames_per_coadd": None},
+        )
+        fpc = int(
+            out.get_payload_parameter(
+                "AcquireVisCamScienceData", "FramesPerCoadd"
+            )
+        )
+        assert fpc == defaults.frames_per_coadd
+
+
 class TestOverrideRoutingByPriority:
     """The wrapper applies overrides only to matching priorities."""
 
