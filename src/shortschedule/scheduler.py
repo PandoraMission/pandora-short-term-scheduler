@@ -66,6 +66,7 @@ from .visda import VisdaData
 # by the ``fix_bad_data`` pass.
 BAD_NAME_SYMBOLS = {
     "+": "_",
+    " ": "_",
 }
 
 # Tag names whose values are expected to be non-numeric (names, IDs,
@@ -499,6 +500,13 @@ class ScheduleProcessor:
         windowed_calendar = self._extract_time_window(
             calendar, window_start, window_duration_days, verbose
         )
+
+        # Normalize target names up front (before the roll sweep). The roll
+        # sweep keys its results by target name, so any +/space -> _ rename
+        # must happen before the sweep or the renamed targets lose their
+        # swept roll and fall back to the sun-derived value.
+        if getattr(self, "fix_bad_data", False):
+            self._normalize_target_names(windowed_calendar, verbose)
 
         # Capture windowed calendar statistics (not original full calendar)
         self._analyze_original_calendar(
@@ -2559,6 +2567,78 @@ class ScheduleProcessor:
 
         return sequence
 
+    @staticmethod
+    def _clean_name(name: str) -> str:
+        """Replace every :data:`BAD_NAME_SYMBOLS` character in *name*."""
+        for bad, good in BAD_NAME_SYMBOLS.items():
+            name = name.replace(bad, good)
+        return name
+
+    def _normalize_sequence_names(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> bool:
+        """Replace invalid symbols in a sequence's target name fields.
+
+        Substitutes every :data:`BAD_NAME_SYMBOLS` character (e.g. ``+`` and
+        space -> ``_``) in the sequence's ``target`` attribute and any
+        ``Target``/``TargetID`` payload tags. Returns ``True`` if anything
+        changed. Idempotent: re-running on an already-clean sequence is a
+        no-op. This runs up front (before the roll sweep) so the swept rolls,
+        which are keyed by target name, are not orphaned by a later rename.
+        """
+        prefix = self._seq_prefix(visit_id, sequence)
+        changed = False
+
+        # The sequence's target name attribute.
+        if sequence.target:
+            fixed = self._clean_name(sequence.target)
+            if fixed != sequence.target:
+                self._print(
+                    f"{prefix} | BAD DATA: Target "
+                    f"'{sequence.target}' -> '{fixed}'"
+                )
+                sequence.target = fixed
+                changed = True
+
+        # Any Target/TargetID payload tags.
+        for section_elem in sequence.payload_params.values():
+            if not isinstance(section_elem, ET.Element):
+                continue
+            for elem in section_elem.iter():
+                tag = elem.tag.rsplit("}", 1)[-1]
+                if tag not in ("Target", "TargetID") or not elem.text:
+                    continue
+                fixed = self._clean_name(elem.text)
+                if fixed != elem.text:
+                    self._print(
+                        f"{prefix} | BAD DATA: {tag} "
+                        f"'{elem.text}' -> '{fixed}'"
+                    )
+                    elem.text = fixed
+                    changed = True
+        return changed
+
+    def _normalize_target_names(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> None:
+        """Normalize target name fields across the whole calendar up front.
+
+        Runs immediately after windowing -- before the roll sweep -- so the
+        target names the roll sweep keys on match the names present when the
+        precomputed rolls are applied. Without this, a later ``+``/space ->
+        ``_`` rename would orphan a target's swept roll, dropping it back to
+        the sun-derived fallback.
+        """
+        n_changed = 0
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                if self._normalize_sequence_names(seq, visit_id=visit.id):
+                    n_changed += 1
+        if verbose and n_changed:
+            self._print(
+                f"Normalized invalid symbols in {n_changed} target name(s)."
+            )
+
     def _fix_bad_data(
         self, sequence: ObservationSequence, visit_id: Any = None
     ) -> None:
@@ -2568,7 +2648,9 @@ class ScheduleProcessor:
 
         - ``Target``/``TargetID`` fields (the sequence's ``target`` attribute
           and any ``Target``/``TargetID`` payload tags) have each symbol in
-          ``BAD_NAME_SYMBOLS`` replaced by its safe substitute.
+          ``BAD_NAME_SYMBOLS`` replaced by its safe substitute (see
+          :meth:`_normalize_sequence_names`; normally already applied up front
+          by :meth:`_normalize_target_names`, so this is a safety net).
         - Every other field is scanned for NaN-like text; matches in tags not
           listed in ``NON_NUMERIC_TAGS`` are logged as warnings. Free-time
           observations are skipped here because their RA/Dec are expected to
@@ -2576,35 +2658,8 @@ class ScheduleProcessor:
         """
         prefix = self._seq_prefix(visit_id, sequence)
 
-        # 1) Replace invalid symbols in the sequence's target name.
-        if sequence.target:
-            fixed = sequence.target
-            for bad, good in BAD_NAME_SYMBOLS.items():
-                fixed = fixed.replace(bad, good)
-            if fixed != sequence.target:
-                self._print(
-                    f"{prefix} | BAD DATA: Target "
-                    f"'{sequence.target}' -> '{fixed}'"
-                )
-                sequence.target = fixed
-
-        # 2) Replace invalid symbols in any Target/TargetID payload tags.
-        for section_elem in sequence.payload_params.values():
-            if not isinstance(section_elem, ET.Element):
-                continue
-            for elem in section_elem.iter():
-                tag = elem.tag.rsplit("}", 1)[-1]
-                if tag not in ("Target", "TargetID") or not elem.text:
-                    continue
-                fixed = elem.text
-                for bad, good in BAD_NAME_SYMBOLS.items():
-                    fixed = fixed.replace(bad, good)
-                if fixed != elem.text:
-                    self._print(
-                        f"{prefix} | BAD DATA: {tag} "
-                        f"'{elem.text}' -> '{fixed}'"
-                    )
-                    elem.text = fixed
+        # 1+2) Replace invalid symbols in the target name fields.
+        self._normalize_sequence_names(sequence, visit_id=visit_id)
 
         # 3) Scan numeric fields for NaN-like values (report only). Free-time
         # observations legitimately carry NaN RA/Dec, so skip them.
