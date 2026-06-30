@@ -229,7 +229,15 @@ class VisdaData:
             - overhead.visda_post_overhead_time
             - self.additional_overhead_time
         )
-        buffered_time = max(0, buffered_time.value) * u.s
+        # Snap to the nearest microsecond before flooring. astropy ``Time``
+        # subtraction (e.g. computing a merged sequence's duration) carries
+        # sub-microsecond floating-point noise that varies with the absolute
+        # epoch, so an exact integer frame count can land at, say,
+        # 11389.9999998 and floor down a whole frame, which the
+        # coadd-multiple flooring below then amplifies into a lost coadd.
+        # Microsecond precision is far finer than one exposure, so this snap
+        # is physically lossless.
+        buffered_time = max(0.0, round(buffered_time.to(u.s).value, 6)) * u.s
 
         # Find total number of frames that can fit into our observation time.
         if self.single_frame_time.to(u.s).value <= 0:

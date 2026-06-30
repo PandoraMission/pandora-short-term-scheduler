@@ -309,6 +309,30 @@ class TestSolveIntegrations:
         )
         assert abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-6
 
+    def test_subsecond_noise_does_not_drop_a_coadd(self):
+        """A duration a sub-microsecond below an exact frame boundary must
+        floor to the same count, not lose a whole coadd.
+
+        Regression: astropy ``Time`` subtraction (e.g. a merged sequence's
+        duration) carries sub-microsecond float noise that varies with the
+        absolute epoch. With exposure 0.2 s and 260/102 s overheads a 2640 s
+        observation fits exactly 11390 frames (a multiple of 5). Noise that
+        nudges the duration to 2639.9999995 s must not floor the count to
+        11389 and then drop to 11385 via the coadd-multiple flooring.
+        """
+        vd = _make(
+            exposure_time_s=0.2 * u.s,
+            read_time_per_frame_s=0.0 * u.s,
+            frames_per_coadd=5,
+        )
+        overhead = _visda_overhead(pre=260 * u.s, post=102 * u.s)
+
+        n_exact, _, _ = vd.solve_integrations(2640.0 * u.s, overhead)
+        n_noisy, _, _ = vd.solve_integrations((2640.0 - 5e-7) * u.s, overhead)
+
+        assert n_exact == 11390
+        assert n_noisy == n_exact
+
     def test_duration_shorter_than_one_coadd_gives_zero(self):
         """If less than one coadd fits, frame count should be zero."""
         vd = _make()
