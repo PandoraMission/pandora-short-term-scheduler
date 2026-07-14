@@ -89,9 +89,13 @@ class NirdaData:
     roi_y_start : int
         Starting row of the ROI on the full detector (pixels).
     roi_x_buffer_pixels : int
-        Extra columns read per row for detector reference pixels.
+        Extra columns read per row for detector reference pixels. These are
+        clocked out (affecting frame time) but are not saved or downlinked,
+        so they do not contribute to data volume.
     roi_y_buffer_pixels : int
-        Extra rows read per frame for detector reference pixels.
+        Extra rows read per frame for detector reference pixels. These are
+        clocked out (affecting frame time) but are not saved or downlinked,
+        so they do not contribute to data volume.
     read_time_per_pixel : Quantity[second]
         Detector clock period per pixel during readout.
     bytes_per_pixel : Quantity[byte]
@@ -117,7 +121,12 @@ class NirdaData:
     Attributes
     ----------
     pixels_per_frame : int
-        Total pixels clocked out per frame, including buffer pixels.
+        Total pixels clocked out per frame, including buffer pixels. Buffer
+        pixels are read out (so they cost time) but are not downlinked, so
+        this is used for timing only.
+    saved_pixels_per_frame : int
+        Science pixels saved per frame (``roi_x_size * roi_y_size``),
+        excluding buffer pixels. This is what drives data volume.
     single_frame_time : Quantity[second]
         Wall-clock duration of one detector frame.
     reset_frame_time : Quantity[second]
@@ -191,6 +200,7 @@ class NirdaData:
 
     # Derived attributes: computed in _update_derived, not constructor arguments
     pixels_per_frame: int = field(init=False)
+    saved_pixels_per_frame: int = field(init=False)
     single_frame_time: Quantity = field(init=False)
     first_integration_saved_frames: int = field(init=False)
     other_integration_saved_frames: int = field(init=False)
@@ -225,11 +235,16 @@ class NirdaData:
             + self.groups * self.read_frames
         )
 
+        # Buffer pixels are clocked out with the ROI (so they cost frame time)
+        # but they are not saved to memory, so they are excluded from the pixel
+        # count used for data volume.
         self.pixels_per_frame = max(
             0,
             (self.roi_x_size + self.roi_x_buffer_pixels)
             * (self.roi_y_size + self.roi_y_buffer_pixels),
         )
+
+        self.saved_pixels_per_frame = max(0, self.roi_x_size * self.roi_y_size)
 
         self.single_frame_time = max(
             0, (self.pixels_per_frame * self.read_time_per_pixel).to(u.s).value
@@ -283,7 +298,7 @@ class NirdaData:
 
         bytes_per_frame = max(
             0,
-            (self.bytes_per_pixel * self.pixels_per_frame).to(u.byte).value
+            (self.bytes_per_pixel * self.saved_pixels_per_frame).to(u.byte).value
         ) * u.byte
 
         if self.average_groups:

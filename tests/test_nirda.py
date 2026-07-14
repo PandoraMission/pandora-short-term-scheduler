@@ -36,8 +36,10 @@ def _nirda_overhead(pre=0 * u.s, post=0 * u.s):
 # Shared test fixture — small, round-number parameters for easy hand calculation
 #
 # roi_x_size=10, roi_y_size=10, roi_x_buffer_pixels=2, roi_y_buffer_pixels=4
-# pixels_per_frame = (10+2) * (10+4) = 168
+# pixels_per_frame = (10+2) * (10+4) = 168   (buffer pixels cost read time)
 # single_frame_time = 168 * 1e-5 s = 1.68e-3 s
+#
+# saved_pixels_per_frame = 10 * 10 = 100     (buffer pixels are not saved)
 #
 # reset_frames_1=5, reset_frames_2=1
 # drop_frames_1=1, drop_frames_2=2, drop_frames_3=3
@@ -88,10 +90,12 @@ _BYTES_PER_PIXEL = _SIMPLE['bytes_per_pixel'].to_value(u.byte)
 # Derived quantities (plain floats in SI units) computed straight from the
 # fixture, mirroring NirdaData._update_derived so the maths lives in one place.
 _PIXELS = (_ROI_X + _X_BUF) * (_ROI_Y + _Y_BUF)
+# Buffer pixels are clocked out (frame time) but never saved (data volume).
+_SAVED_PIXELS = _ROI_X * _ROI_Y
 _COMMON_FRAMES = (
     _DROP_1 + (_GROUPS - 1) * _DROP_2 + _DROP_3 + _GROUPS * _READ_FRAMES
 )
-_BYTES_PER_FRAME = _PIXELS * _BYTES_PER_PIXEL
+_BYTES_PER_FRAME = _SAVED_PIXELS * _BYTES_PER_PIXEL
 _FRAME_TIME = _PIXELS * _READ_TIME
 _FIRST_INT_TIME = _FRAME_TIME * (_COMMON_FRAMES + _RESET_1)
 _OTHER_INT_TIME = _FRAME_TIME * (_COMMON_FRAMES + _RESET_2)
@@ -184,6 +188,38 @@ class TestPixelsPerFrame:
             roi_x_size=0, roi_y_size=0, roi_x_buffer_pixels=0, roi_y_buffer_pixels=0
         )
         assert nd.pixels_per_frame == 0
+
+
+# ---------------------------------------------------------------------------
+# saved_pixels_per_frame
+# ---------------------------------------------------------------------------
+class TestSavedPixelsPerFrame:
+    """Buffer pixels are read out but not saved, so they never reach downlink."""
+
+    def test_excludes_buffer_pixels(self):
+        """saved_pixels_per_frame is the science ROI only."""
+        nd = _make()
+        assert nd.saved_pixels_per_frame == _SAVED_PIXELS
+        assert nd.saved_pixels_per_frame < nd.pixels_per_frame
+
+    def test_buffer_pixels_do_not_change_data_volume(self):
+        """Changing either buffer must leave integration_data untouched."""
+        nd_base = _make()
+        nd_big_buf = _make(roi_x_buffer_pixels=100, roi_y_buffer_pixels=50)
+        assert nd_big_buf.integration_data == nd_base.integration_data
+
+    def test_buffer_pixels_still_change_frame_time(self):
+        """Buffer pixels must still lengthen the frame (and integration) time."""
+        nd_base = _make()
+        nd_big_buf = _make(roi_x_buffer_pixels=100, roi_y_buffer_pixels=50)
+        assert nd_big_buf.single_frame_time > nd_base.single_frame_time
+        assert nd_big_buf.first_integration_time > nd_base.first_integration_time
+
+    def test_zero_roi_gives_zero(self):
+        """A zero-area ROI saves no pixels, even with buffer pixels present."""
+        nd = _make(roi_x_size=0, roi_y_size=0)
+        assert nd.saved_pixels_per_frame == 0
+        assert nd.integration_data.to(u.byte).value == 0
 
 
 # ---------------------------------------------------------------------------
@@ -703,9 +739,9 @@ class TestBytesPerPixel:
         ) < 1e-10
 
     def test_explicit_value_matches_pixels_times_groups(self):
-        """integration_data (averaged) == bytes_per_pixel * pixels * groups."""
+        """integration_data (averaged) == bytes_per_pixel * saved pixels * groups."""
         nd = _make(bytes_per_pixel=3 * u.byte, average_groups=True)
-        expected = 3 * _PIXELS * nd.groups
+        expected = 3 * _SAVED_PIXELS * nd.groups
         assert abs(nd.integration_data.to(u.byte).value - expected) < 1e-10
 
     def test_zero_bytes_per_pixel_gives_zero_data(self):
