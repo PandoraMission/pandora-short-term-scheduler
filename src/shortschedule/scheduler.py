@@ -146,6 +146,7 @@ class ScheduleProcessor:
         min_power_frac: float = 0.7,
         earthlimb_gap_tolerance: int = 0,
         st_gap_tolerance: int = 0,
+        use_dynamic_earthlimb: bool = False,
         force_gap_fill: bool = False,
         earthlimb_hard_floor: float = 5.0,
     ) -> None:
@@ -257,6 +258,9 @@ class ScheduleProcessor:
             Maximum number of contiguous minutes of star-tracker
             visibility violations to tolerate within a sequence
             (default 0).
+        use_dynamic_earthlimb : bool, default=true
+            If True, then uses the dynamic DPC boresight Earth limb.
+            This is the wedge shape keepout based on the Earth illumination.
         force_gap_fill : bool, optional
             When True, fill all gaps between sequences even if the
             extended time violates keepout constraints.  The
@@ -290,6 +294,7 @@ class ScheduleProcessor:
             st_earthlimb_min=self._to_deg(st_earthlimb_min),
             st1_earthlimb_min=self._to_deg(st1_earthlimb_min),
             st2_earthlimb_min=self._to_deg(st2_earthlimb_min),
+            use_dynamic_earthlimb=use_dynamic_earthlimb
         )
         # Only forward day/night earthlimb keepouts when explicitly set so that
         # Visibility falls back to earthlimb_min for whichever side is None.
