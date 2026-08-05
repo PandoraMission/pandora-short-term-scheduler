@@ -2342,7 +2342,7 @@ class ScheduleVisualizer:
 
         # Legend
         legend_items = [
-            Patch(facecolor="red", alpha=0.75, label="Non-visible"),
+            Patch(facecolor="black", label="Non-visible"),
         ]
         used_priorities = sorted(set(s.priority for _, s, _ in rows))
         for p in used_priorities:
