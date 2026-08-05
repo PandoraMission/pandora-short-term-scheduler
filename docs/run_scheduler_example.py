@@ -70,7 +70,7 @@ scheduler = ScheduleProcessor(
     st_sun_min=50,                # min star-tracker Sun angle (deg)
     st_moon_min=20,               # min star-tracker Moon angle (deg)
     st_earthlimb_min=30,          # min star-tracker Earth-limb angle (deg)
-    use_dynamic_earthlimb=False,  # Use dynamic DPC Earth Limb keepout flag.
+    use_dynamic_earthlimb=True,   # Use dynamic DPC Earth Limb keepout flag.
     roll_step=1.0,                # roll search step size (deg)
     min_power_frac=0.68,          # min acceptable orbit-average power fraction
     force_gap_fill=False,         # if True, aggressively fill scheduling gaps
@@ -95,7 +95,8 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeX": 80,
                 "ROI_SizeY": 250,
                 "SC_Resets2": 1,
-                "SC_DropFrames1": 1
+                "SC_DropFrames1": 1,
+                "SC_Groups": 2
             },
             "AcquireVisCamScienceData": {
                 "FramesPerCoadd": 50,
@@ -117,11 +118,12 @@ scheduler = ScheduleProcessor(
                 "RiceX": 5,
                 "RiceY": 28,
                 "SC_Resets2": 1,
-                "SC_DropFrames1": 1
+                "SC_DropFrames1": 1,
+                "SC_Groups": 2
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
-                "FramesPerCoadd": 5,
+                "FramesPerCoadd": 50,
             },
         },
         "Priority_2": {
@@ -136,11 +138,12 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeX": 80,
                 "ROI_SizeY": 250,
                 "SC_Resets2": 1,
-                "SC_DropFrames1": 1
+                "SC_DropFrames1": 1,
+                "SC_Groups": 2
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
-                "FramesPerCoadd": 5,
+                "FramesPerCoadd": 50,
             },
         },
     },
