@@ -720,8 +720,11 @@ class ScheduleProcessor:
             The same calendar instance, with IDs renumbered.
         """
         changed = 0
+        visit_id_map: Dict[str, str] = {}
         for visit_index, visit in enumerate(calendar.visits, start=1):
             new_visit_id = f"{visit_index:04d}"
+            if visit.id is not None:
+                visit_id_map[visit.id] = new_visit_id
             if visit.id != new_visit_id:
                 self._print(
                     f"RENUMBER visit ID '{visit.id}' -> '{new_visit_id}'"
@@ -738,6 +741,18 @@ class ScheduleProcessor:
                     )
                     seq.id = new_seq_id
                     changed += 1
+
+        # Re-key the precomputed roll cache onto the new visit IDs.  Anything
+        # that reads it after this point (validate_visibility, the visibility
+        # Gantt plot) looks up by the *renumbered* visit ID, so leaving the
+        # cache on the old IDs silently returns a neighbouring visit's rolls
+        # -- or none at all -- and reports bogus keepout violations.
+        cached_rolls = getattr(self, "_computed_target_rolls", None)
+        if visit_id_map and cached_rolls:
+            self._computed_target_rolls = {
+                visit_id_map.get(old_id, old_id): rolls
+                for old_id, rolls in cached_rolls.items()
+            }
 
         self._print(f"Renumbered IDs: {changed} identifier(s) updated.")
 
