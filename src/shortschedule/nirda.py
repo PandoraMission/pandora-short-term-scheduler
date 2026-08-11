@@ -182,9 +182,9 @@ class NirdaData:
     groups: int = 6
     average_groups: bool = True
     roi_x_size: int = 80
-    roi_y_size: int = 250
+    roi_y_size: int = 256
     roi_x_start: int = 1737
-    roi_y_start: int = 962
+    roi_y_start: int = 959
 
     # NIRDA detector configurations
     roi_x_buffer_pixels: int = 12

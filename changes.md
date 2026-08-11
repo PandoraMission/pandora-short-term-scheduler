@@ -1,3 +1,8 @@
+## v1.2.2 (2026-xxx)
+
+- Lance noted that our nirda size was not divisible by 1024 which may lead to edge case problems that could be causing nirda crashes.
+  - Changes y_size from 250 to 256 and y_start from 962 to 959.
+
 ## v1.2.1 (2026-xxx)
 
 - Adds in the ability to use the dynamic Earth limb keepout.

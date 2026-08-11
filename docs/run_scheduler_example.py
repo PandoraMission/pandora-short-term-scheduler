@@ -91,9 +91,9 @@ scheduler = ScheduleProcessor(
             },
             "AcquireInfCamImages": {
                 "ROI_StartX": 1737,
-                "ROI_StartY": 962,
+                "ROI_StartY": 959,
                 "ROI_SizeX": 80,
-                "ROI_SizeY": 250,
+                "ROI_SizeY": 256,
                 "SC_Resets2": 1,
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2
@@ -112,9 +112,9 @@ scheduler = ScheduleProcessor(
             },
             "AcquireInfCamImages": {
                 "ROI_StartX": 1737,
-                "ROI_StartY": 962,
+                "ROI_StartY": 959,
                 "ROI_SizeX": 80,
-                "ROI_SizeY": 250,
+                "ROI_SizeY": 256,
                 "RiceX": 5,
                 "RiceY": 28,
                 "SC_Resets2": 1,
@@ -134,9 +134,9 @@ scheduler = ScheduleProcessor(
             },
             "AcquireInfCamImages": {
                 "ROI_StartX": 1737,
-                "ROI_StartY": 962,
+                "ROI_StartY": 959,
                 "ROI_SizeX": 80,
-                "ROI_SizeY": 250,
+                "ROI_SizeY": 256,
                 "SC_Resets2": 1,
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2
