@@ -37,13 +37,13 @@ calendar_name = xml_file_path.stem
 
 # Observing window: the short-term schedule is built starting at ``window_start``
 # and spanning ``window_duration_days``.
-window_start = Time("2026-06-22T00:00:00Z")
+window_start = Time("2026-07-20T00:00:00Z")
 window_duration_days = 7
 
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
-new_tle1 = "1 67395U 80229J   26166.70761574  .00000000  00000-0  37770-3 0    09"
-new_tle2 = "2 67395  97.8045 165.3849 0006889 124.8823 324.4856 14.88069544    01"
+new_tle1 = "1 67395U 80229J   26196.69732639  .00000000  00000-0  37770-3 0    00"
+new_tle2 = "2 67395  97.8056 194.9117 0006480  50.2285  39.6294 14.88117629    09"
 
 # ---------------------------------------------------------------------------
 # Load the long-term calendar
@@ -70,6 +70,7 @@ scheduler = ScheduleProcessor(
     st_sun_min=50,                # min star-tracker Sun angle (deg)
     st_moon_min=20,               # min star-tracker Moon angle (deg)
     st_earthlimb_min=30,          # min star-tracker Earth-limb angle (deg)
+    use_dynamic_earthlimb=True,   # Use dynamic DPC Earth Limb keepout flag.
     roll_step=1.0,                # roll search step size (deg)
     min_power_frac=0.68,          # min acceptable orbit-average power fraction
     force_gap_fill=False,         # if True, aggressively fill scheduling gaps
@@ -94,7 +95,8 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeX": 80,
                 "ROI_SizeY": 250,
                 "SC_Resets2": 1,
-                "SC_DropFrames1": 1
+                "SC_DropFrames1": 1,
+                "SC_Groups": 2
             },
             "AcquireVisCamScienceData": {
                 "FramesPerCoadd": 50,
@@ -116,11 +118,12 @@ scheduler = ScheduleProcessor(
                 "RiceX": 5,
                 "RiceY": 28,
                 "SC_Resets2": 1,
-                "SC_DropFrames1": 1
+                "SC_DropFrames1": 1,
+                "SC_Groups": 2
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
-                "FramesPerCoadd": 5,
+                "FramesPerCoadd": 50,
             },
         },
         "Priority_2": {
@@ -135,11 +138,12 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeX": 80,
                 "ROI_SizeY": 250,
                 "SC_Resets2": 1,
-                "SC_DropFrames1": 1
+                "SC_DropFrames1": 1,
+                "SC_Groups": 2
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
-                "FramesPerCoadd": 5,
+                "FramesPerCoadd": 50,
             },
         },
     },
