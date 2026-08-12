@@ -134,6 +134,19 @@ class XMLWriter:
         """Add metadata element to root."""
         meta = ET.SubElement(root, "Meta")
 
+        # Stamp the short-term scheduler version that produced this calendar.
+        # Imported lazily to avoid a circular import at package init time.
+        version = metadata.get("short_term_scheduler_version")
+        if not version:
+            try:
+                from . import get_version
+
+                version = get_version()
+            except Exception:
+                version = None
+        if version:
+            meta.set("Short_Term_Scheduler_Version", str(version))
+
         # Standard metadata fields mapping
         meta_mapping = {
             "valid_from": "Valid_From",
@@ -203,12 +216,34 @@ class XMLWriter:
         if sequence.roll is not None:
             roll_elem = ET.SubElement(boresight_elem, "Roll")
             roll_elem.text = f"{sequence.roll:.6f}"
-        # PRI_CMD_DIR (always 9)
+        # PRI_CMD_DIR (default 9; may be overridden below)
         pri_cmd_dir_elem = ET.SubElement(boresight_elem, "PRI_CMD_DIR")
         pri_cmd_dir_elem.text = "9"
 
+        # Merge any Observational_Parameters override (e.g. a forced
+        # Boresight/PRI_CMD_DIR) into the block we just built.
+        obs_override = sequence.payload_params.get("Observational_Parameters")
+        if obs_override is not None:
+            self._merge_override_element(obs_params, obs_override)
+
         # Payload Parameters - copy the XML elements directly
         self._add_payload_parameters(seq_elem, sequence.payload_params)
+
+    def _merge_override_element(self, target, override):
+        """Recursively merge override children into ``target`` in place.
+
+        For each child of *override*, find or create the matching child in
+        *target*, copy its text when present, and recurse into nested
+        elements.
+        """
+        for child in override:
+            existing = target.find(child.tag)
+            if existing is None:
+                existing = ET.SubElement(target, child.tag)
+            if len(child):
+                self._merge_override_element(existing, child)
+            if child.text and child.text.strip():
+                existing.text = child.text.strip()
 
     def _add_payload_parameters(self, seq_elem, payload_params):
         """Add payload parameters section by copying XML elements."""
@@ -216,6 +251,10 @@ class XMLWriter:
 
         # Copy each payload parameter XML element directly
         for param_name, xml_element in payload_params.items():
+            # Observational_Parameters overrides are merged into the
+            # Observational_Parameters block elsewhere, not into Payload.
+            if param_name == "Observational_Parameters":
+                continue
             if xml_element is not None:
                 # Create a deep copy of the XML element
                 copied_element = self._deep_copy_xml_element(xml_element)

@@ -8,6 +8,9 @@ Covers:
 - Gap report structure verification
 """
 
+# Standard library
+from pathlib import Path
+
 # Third-party
 import numpy as np
 import pytest
@@ -427,13 +430,14 @@ class TestRollAwareGapFilling:
         ]
         assert 42.0 in roll_values
 
-    def test_end_to_end_roll_sensitive(self, monkeypatch):
+    def test_end_to_end_roll_sensitive(self, monkeypatch, tmp_path):
         """Full process_calendar with roll-sensitive visibility."""
         import shortschedule
 
-        pkgdir = shortschedule.__file__.rsplit("/", 1)[0]
         sample = (
-            pkgdir + "/data/Pandora_science_calendar_20251018_tsb-futz.xml"
+            Path(shortschedule.__file__).parent
+            / "data"
+            / "Pandora_science_calendar_20251018_tsb-futz.xml"
         )
 
         from shortschedule.parser import parse_science_calendar
@@ -453,6 +457,7 @@ class TestRollAwareGapFilling:
             cal,
             window_start=first_seq.start_time.isot,
             window_duration_days=1,
+            log_path=tmp_path / "run",
             verbose=False,
         )
 

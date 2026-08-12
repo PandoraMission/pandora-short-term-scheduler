@@ -11,6 +11,8 @@ Rules applied based on StarRoiDetMethod:
 - Method 2: numPredefinedStarRois = 0, MaxNumStarRois = max number of star boxes
 """
 
+from pathlib import Path
+
 from shortschedule.parser import parse_science_calendar
 from shortschedule.scheduler import ScheduleProcessor
 from shortschedule.writer import XMLWriter
@@ -18,7 +20,10 @@ from shortschedule.writer import XMLWriter
 
 def main():
     # Parse a science calendar
-    calendar_path = "./src/shortschedule/data/Pandora_science_calendar_20251018_tsb-futz.xml"
+    calendar_path = (
+        Path("src") / "shortschedule" / "data"
+        / "Pandora_science_calendar_20251018_tsb-futz.xml"
+    )
     print(f"Parsing calendar: {calendar_path}")
     cal = parse_science_calendar(calendar_path)
     print(

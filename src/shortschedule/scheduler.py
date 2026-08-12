@@ -14,8 +14,19 @@ are provided. The processor performs these high-level steps:
 
 # Standard library
 import copy
+import logging
 import uuid
+import warnings
+import xml.etree.ElementTree as ET
+from collections import defaultdict
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
+    ZoneInfo = None
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party
@@ -26,8 +37,53 @@ from astropy.coordinates import get_body
 from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm is an optional
+    tqdm = None
+
+
+class _NullProgress:
+    """No-op stand-in for a tqdm bar (used when tqdm is unavailable)."""
+
+    def update(self, n: int = 1) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 from .models import ObservationSequence, ScienceCalendar, Visit
+from .nirda import NirdaData
+from .overhead import OverheadTiming
 from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
+from .visda import VisdaData
+
+
+# Characters that are not allowed in target name fields (``Target`` /
+# ``TargetID``) because they break downstream filename and identifier
+# handling. Each bad symbol is mapped to its safe replacement and substituted
+# by the ``fix_bad_data`` pass.
+BAD_NAME_SYMBOLS = {
+    "+": "_",
+    " ": "_",
+}
+
+# Tag names whose values are expected to be non-numeric (names, IDs,
+# timestamps, TLE lines). They are excluded from the NaN-like value scan run
+# by the ``fix_bad_data`` pass.
+NON_NUMERIC_TAGS = frozenset(
+    {
+        "Target",
+        "TargetID",
+        "ID",
+        "Start",
+        "Stop",
+        "TLE_Line1",
+        "TLE_Line2",
+        "Calendar_Status",
+    }
+)
 
 
 class ScheduleProcessor:
@@ -61,10 +117,19 @@ class ScheduleProcessor:
         self,
         tle_line1: str,
         tle_line2: str,
-        vda_pre_sequence_overhead: u.Quantity = 260 * u.s,
-        vda_post_sequence_overhead: u.Quantity = 102 * u.s,
-        nirda_pre_sequence_overhead: u.Quantity = 258 * u.s,
-        nirda_post_sequence_overhead: u.Quantity = 102 * u.s,
+        vda_pre_sequence_overhead: u.Quantity | None = None,
+        vda_post_sequence_overhead: u.Quantity | None = None,
+        nirda_pre_sequence_overhead: u.Quantity | None = None,
+        nirda_post_sequence_overhead: u.Quantity | None = None,
+        override_nirda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
+        override_visda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
+        override_payload_parameters: Optional[Dict[Any, Dict[str, Dict[str, Any]]]] = None,
+        max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
+        max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
+        update_nirda_reset1_for_vitl: bool = True,
+        vitl_settling_time: u.Quantity = 60.0 * u.s,
+        convert_single_roi_to_predefined: bool = True,
+        fix_bad_data: bool = True,
         moon_min: Optional[float] = 20.0,
         sun_min: Optional[float] = 91.0,
         earthlimb_min: Optional[float] = 20.0,
@@ -92,13 +157,79 @@ class ScheduleProcessor:
         tle_line1, tle_line2 : str
             TLE lines for satellite
         vda_pre_sequence_overhead : Quantity, optional
-            VDA pre-sequence overhead (default 260 s).
+            VDA pre-sequence overhead (default is None which will use the overhead defaults).
         vda_post_sequence_overhead : Quantity, optional
-            VDA post-sequence overhead (default 102 s).
+            VDA post-sequence overhead (default is None which will use the overhead defaults).
         nirda_pre_sequence_overhead : Quantity, optional
-            NIRDA pre-sequence overhead (default 258 s).
+            NIRDA pre-sequence overhead (default is None which will use the overhead defaults).
         nirda_post_sequence_overhead : Quantity, optional
-            NIRDA post-sequence overhead (default 102 s).
+            NIRDA post-sequence overhead (default is None which will use the overhead defaults).
+        override_nirda_parameters : dict, optional
+            Per-priority NIRDA payload overrides applied during the
+            payload-update step. Maps an observation priority to a mapping of
+            ``NirdaData`` field names to the values to force; a value of
+            ``None`` means "use the ``NirdaData`` default". For example:
+                ``{0: {'drop_frames_1': 2, 'drop_frames_3': None},
+                   1: {'reset_frames_1': 30}}``
+                    means: for every priority-0 observation set
+                    ``drop_frames_1`` to 2 and ``drop_frames_3`` to the class
+                    default; for priority 1 set ``reset_frames_1`` to 30. The
+                    overridden values are written back onto the observation
+                    before recomputing SC_Integrations.
+            Field names are ``NirdaData`` attribute names; the corresponding
+            XML tags are updated automatically. An iterable of field names is
+            also accepted (treated as all-default, e.g.
+            ``{0: ['drop_frames_1']}``). Defaults to no overrides.
+        override_visda_parameters : dict, optional
+            Per-priority VISDA payload overrides, structured identically to
+            ``override_nirda_parameters`` but using ``VisdaData`` field names
+            (e.g. ``{0: {'frames_per_coadd': 5}}``). Defaults to no
+            overrides.
+        override_payload_parameters : dict, optional
+            General per-priority overrides written directly onto the payload
+            XML by tag name (the CalendarCleaner ``config.json`` format).
+            Structure: ``{priority: {section: {xml_tag: value}}}`` where
+            *section* is e.g. ``'AcquireInfCamImages'`` or
+            ``'AcquireVisCamScienceData'`` and *xml_tag* is a literal payload
+            tag (``ROI_StartX``, ``ROI_SizeX``, ``SC_Resets2``,
+            ``FramesPerCoadd``, ``RiceX`` ...). Tags missing from an
+            observation are created. Priority keys may be ints (``0``) or
+            ``'Priority_0'`` strings. These are applied *before* the
+            integration counts are recomputed, so size/coadd/reset changes
+            flow through. Free-time observations are skipped. Defaults to no
+            overrides.
+        max_file_size_uncompressed : Quantity[byte], optional
+            Maximum allowed *uncompressed* data volume per detector per
+            sequence. A warning is raised during the payload-update step if a
+            sequence's computed NIRDA or VISDA data exceeds this.
+            Defaults to 830 MB.
+        max_file_size_compressed : Quantity[byte], optional
+            Maximum allowed *compressed* data volume per detector per
+            sequence. A warning is raised if a sequence's computed compressed
+            NIRDA or VISDA data exceeds this.
+            Defaults to 255 MB.
+        update_nirda_reset1_for_vitl : bool, optional
+            When True (default), each NIRDA observation's ``reset_frames_1``
+            is adjusted via ``NirdaData.update_for_vitl`` to cover
+            ``vitl_settling_time`` before its integration count is computed,
+            and the resulting ``SC_Resets1`` is written back to the payload.
+        vitl_settling_time : Quantity[second], optional
+            Minimum VITL detector settling time used when
+            ``update_nirda_reset1_for_vitl`` is True. Defaults to 60 s.
+        convert_single_roi_to_predefined : bool, optional
+            When True (default), any observation whose VIS section requests a
+            single brightest-star auto-detect ROI (``MaxNumStarRois == 1`` and
+            ``StarRoiDetMethod == 2``) is converted to the predefined-ROI
+            method (``StarRoiDetMethod == 1``) with the target RA/Dec written
+            as the single predefined ROI (``numPredefinedStarRois == 1``,
+            ``PredefinedStarRoiRa/RA1``, ``PredefinedStarRoiDec/Dec1``).
+        fix_bad_data : bool, optional
+            When True (default), each observation's target name fields
+            (``Target``/``TargetID``) have invalid symbols replaced per
+            ``BAD_NAME_SYMBOLS`` (e.g. ``+`` -> ``_``), and all other
+            (numeric) fields are scanned for NaN-like values, which are logged
+            as warnings. Free-time observations are exempt from the NaN scan
+            because their RA/Dec are expected to be NaN.
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
         earthlimb_day_min : float, optional
@@ -201,8 +332,9 @@ class ScheduleProcessor:
         #   { visit_id: { target_name: roll_deg_or_None } }
         self._computed_target_rolls: Dict[str, Dict[str, Optional[float]]] = {}
 
-        # Payload overhead budgets — validate that each value carries time
-        # units so that downstream .to(u.s) / .to(u.us) calls succeed.
+        # Validate any explicitly supplied overheads carry time units so that
+        # downstream .to(u.s) / .to(u.us) calls succeed. ``None`` means "use
+        # the OverheadTiming default derived from the modelled MOC sequence".
         _overhead_params = {
             "vda_pre_sequence_overhead": vda_pre_sequence_overhead,
             "vda_post_sequence_overhead": vda_post_sequence_overhead,
@@ -210,9 +342,9 @@ class ScheduleProcessor:
             "nirda_post_sequence_overhead": nirda_post_sequence_overhead,
         }
         for _name, _val in _overhead_params.items():
-            if isinstance(_val, TimeDelta):
-                pass
-            elif isinstance(_val, u.Quantity):
+            if _val is None or isinstance(_val, TimeDelta):
+                continue
+            if isinstance(_val, u.Quantity):
                 try:
                     _val.to(u.s)
                 except u.UnitConversionError:
@@ -225,10 +357,57 @@ class ScheduleProcessor:
                     f"{_name} must be an astropy Quantity or TimeDelta "
                     f"with time units; got {type(_val).__name__!r}"
                 )
-        self.vda_pre_sequence_overhead = vda_pre_sequence_overhead
-        self.vda_post_sequence_overhead = vda_post_sequence_overhead
-        self.nirda_pre_sequence_overhead = nirda_pre_sequence_overhead
-        self.nirda_post_sequence_overhead = nirda_post_sequence_overhead
+
+        # Collect the overheads into a single OverheadTiming so the
+        # payload-update step can hand it straight to the NIRDA/VISDA data
+        # classes. Note OverheadTiming uses "visda" naming for the VDA fields
+        # and fills any None with its modelled default.
+        self.overhead = OverheadTiming(
+            visda_pre_overhead_time=vda_pre_sequence_overhead,
+            visda_post_overhead_time=vda_post_sequence_overhead,
+            nirda_pre_overhead_time=nirda_pre_sequence_overhead,
+            nirda_post_overhead_time=nirda_post_sequence_overhead,
+        )
+
+        # Per-priority payload overrides applied during the payload-update
+        # step. Structure: { priority: {field_name: value-or-None} }, where a
+        # None value means "use the data-class default". An iterable of field
+        # names is also accepted (treated as all-default).
+        self._override_nirda_parameters: Dict[int, Any] = (
+            override_nirda_parameters or {}
+        )
+        self._override_visda_parameters: Dict[int, Any] = (
+            override_visda_parameters or {}
+        )
+        # General per-priority XML-tag payload overrides (cleaner config.json
+        # format). Normalized to int priority keys.
+        self._override_payload_parameters: Dict[int, Any] = (
+            self._normalize_priority_keys(override_payload_parameters)
+        )
+
+        # Per-observation data-volume limits. A warning is raised during the
+        # payload-update step if a sequence's computed NIRDA/VISDA data
+        # exceeds these.
+        self.max_file_size_uncompressed = max_file_size_uncompressed
+        self.max_file_size_compressed = max_file_size_compressed
+
+        # VITL settling: when enabled, each NIRDA observation has its
+        # reset_frames_1 adjusted to cover vitl_settling_time before its
+        # integration count is computed.
+        self.update_nirda_reset1_for_vitl = update_nirda_reset1_for_vitl
+        self.vitl_settling_time = vitl_settling_time
+
+        # Single-ROI conversion: when enabled, any observation whose VIS
+        # section requests exactly one star ROI via the brightest-star
+        # auto-detect method (MaxNumStarRois == 1, StarRoiDetMethod == 2) is
+        # converted to the predefined-ROI method (StarRoiDetMethod == 1) with
+        # the target RA/Dec supplied as the single predefined ROI.
+        self.convert_single_roi_to_predefined = convert_single_roi_to_predefined
+
+        # Bad-data fixes: when enabled, target name fields have invalid
+        # symbols (see BAD_NAME_SYMBOLS) replaced, and all other fields are
+        # scanned for NaN-like values (reported as warnings).
+        self.fix_bad_data = fix_bad_data
 
         # Enhanced gap tracking with before/after comparison
         self.gap_report = {
@@ -259,6 +438,8 @@ class ScheduleProcessor:
         calendar: ScienceCalendar,
         window_start: Optional[Any] = None,
         window_duration_days: int = 21,
+        merge_similar_observations: bool = False,
+        log_path: Optional[Any] = None,
         verbose: bool = False,
     ) -> ScienceCalendar:
         """Process a `ScienceCalendar` and return an updated calendar.
@@ -283,8 +464,21 @@ class ScheduleProcessor:
             ISO string or Time object indicating the window start.
         window_duration_days : int, optional
             Number of days to include in the processing window.
+        merge_similar_observations : bool, optional
+            When True, adjacent observation sequences in the same visit that
+            share the same target and pointing are merged into a single
+            longer sequence.
+            Defaults to False.
+        log_path : str or pathlib.Path, optional
+            Base path for the run log files. The ".log" (everything) and
+            ".errors.log" (warnings/errors only, created lazily) files are
+            named after this path's stem. When omitted, the input calendar's
+            ``source_path`` is used; if that is unavailable, only console
+            logging is produced.
         verbose : bool, optional
-            Print diagnostics when True.
+            When True, INFO-level diagnostics are echoed to the console; the
+            ".log" file always captures them regardless. Warnings and
+            errors are shown on the console either way.
 
         Returns
         -------
@@ -292,18 +486,27 @@ class ScheduleProcessor:
             Processed calendar with updated sequences and metadata.
         """
 
+        # Configure logging for this run (console + per-calendar log files).
+        self._setup_run_logging(calendar, verbose, log_path)
+
         # Clear previous gap report
         self._initialize_gap_report()
 
-        if verbose:
-            print("Processing calendar with TLE:")
-            print(f"  Line 1: {self.tle_line1}")
-            print(f"  Line 2: {self.tle_line2}")
+        self._print("Processing calendar with TLE:")
+        self._print(f"  Line 1: {self.tle_line1}")
+        self._print(f"  Line 2: {self.tle_line2}")
 
         # Extract windowed calendar FIRST
         windowed_calendar = self._extract_time_window(
             calendar, window_start, window_duration_days, verbose
         )
+
+        # Normalize target names up front (before the roll sweep). The roll
+        # sweep keys its results by target name, so any +/space -> _ rename
+        # must happen before the sweep or the renamed targets lose their
+        # swept roll and fall back to the sun-derived value.
+        if getattr(self, "fix_bad_data", False):
+            self._normalize_target_names(windowed_calendar, verbose)
 
         # Capture windowed calendar statistics (not original full calendar)
         self._analyze_original_calendar(
@@ -327,6 +530,25 @@ class ScheduleProcessor:
             verbose=verbose,
             precomputed_rolls=self._computed_target_rolls,
         )
+
+        # Optionally merge back-to-back same-target sequences within each
+        # visit. This runs *after* all gap-filling, trimming, and other
+        # duration/timing adjustments so it operates on the final scheduled
+        # boundaries. Because merging extends a sequence over its neighbor,
+        # the merged sequences' payload integration counts are recomputed
+        # for their new combined durations.
+        if merge_similar_observations:
+            processed_calendar = self._merge_similar_observations(
+                processed_calendar, verbose
+            )
+            processed_calendar = self._update_payload_parameters(
+                processed_calendar
+            )
+
+        # Renumber visit and observation IDs sequentially. This runs last,
+        # after any merges/time changes that may have dropped IDs, so the
+        # delivered calendar always has contiguous, ordered identifiers.
+        self._renumber_ids(processed_calendar, verbose)
 
         # Analyze processed calendar
         self._analyze_processed_calendar(processed_calendar)
@@ -382,18 +604,18 @@ class ScheduleProcessor:
 
         # Print compact validation summary
         if validation_counts:
-            print(
+            self._print(
                 f"\n--- Validation: {calendar_status} "
                 f"({sum(validation_counts.values())} issues) ---"
             )
             for cat, cnt in validation_counts.items():
-                print(f"  {cat}: {cnt}")
-            print(
+                self._print(f"  {cat}: {cnt}")
+            self._print(
                 "Run print_validation_summary(calendar) "
                 "for actionable details.\n"
             )
         else:
-            print(f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n")
+            self._print(f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n")
 
         new_metadata = copy.deepcopy(processed_calendar.metadata)
         new_metadata.update(
@@ -435,15 +657,14 @@ class ScheduleProcessor:
         self.window_start = window_start
         self.window_end = window_end
 
-        if verbose:
-            print(f"Extracting window: {window_start} to {window_end}")
+        self._print(f"Extracting window: {window_start} to {window_end}")
 
         # Find sequences within window
         windowed_visits = []
         for visit in calendar.visits:
             # complain if there are empty visits
             if not visit.sequences:
-                print(f"Warning: Empty sequence list for visit {visit.id}")
+                self._print(f"Warning: Empty sequence list for visit {visit.id}")
             windowed_sequences = []
             for seq in visit.sequences:
                 seq_start = seq.start_time
@@ -465,6 +686,149 @@ class ScheduleProcessor:
         return ScienceCalendar(
             metadata=calendar.metadata, visits=windowed_visits
         )
+
+    # Tolerances used when deciding whether two sequences can be merged.
+    _MERGE_ADJACENCY_TOL_SEC = 1.0  # max stop-to-start gap (seconds)
+    _MERGE_POINTING_TOL_DEG = 1e-6  # max RA/Dec difference (degrees)
+
+    def _renumber_ids(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> ScienceCalendar:
+        """Renumber visit and observation IDs to be sequential.
+
+        Visits are numbered ``0001``, ``0002``, ... in their current order,
+        and within each visit the observation sequences are numbered
+        ``001``, ``002``, ... in their current order. This is run after all
+        time changes and merges so that any IDs dropped along the way are
+        replaced with a contiguous, ordered set.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar whose IDs are renumbered in place.
+        verbose : bool, optional
+            Print the number of IDs changed when True.
+
+        Returns
+        -------
+        ScienceCalendar
+            The same calendar instance, with IDs renumbered.
+        """
+        changed = 0
+        for visit_index, visit in enumerate(calendar.visits, start=1):
+            new_visit_id = f"{visit_index:04d}"
+            if visit.id != new_visit_id:
+                self._print(
+                    f"RENUMBER visit ID '{visit.id}' -> '{new_visit_id}'"
+                )
+                visit.id = new_visit_id
+                changed += 1
+
+            for seq_index, seq in enumerate(visit.sequences, start=1):
+                new_seq_id = f"{seq_index:03d}"
+                if seq.id != new_seq_id:
+                    self._print(
+                        f"{self._seq_prefix(visit.id, seq)} | RENUMBER "
+                        f"observation ID '{seq.id}' -> '{new_seq_id}'"
+                    )
+                    seq.id = new_seq_id
+                    changed += 1
+
+        self._print(f"Renumbered IDs: {changed} identifier(s) updated.")
+
+        return calendar
+
+    def _merge_similar_observations(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> ScienceCalendar:
+        """Merge back-to-back same-target sequences within each visit.
+
+        Two consecutive sequences (in start-time order) inside the same
+        visit are merged when they:
+
+        1. belong to the same visit (sequences are grouped per visit),
+        2. observe the same target with the same pointing (RA/Dec), and
+        3. are contiguous in time, the second sequence starts at (within
+           a tolerance of) the first sequence's stop time.
+
+        The merged sequence keeps the first sequence's identity, priority,
+        and payload parameters, and extends its ``stop_time`` to the second
+        sequence's ``stop_time``. Merging is applied transitively, so a run
+        of three or more contiguous same-target sequences collapses into a
+        single sequence.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar to merge in place-safe fashion (a new calendar with
+            new visits/sequences is returned; the input is not mutated).
+        verbose : bool, optional
+            If True, print a line for each merge performed.
+
+        Returns
+        -------
+        ScienceCalendar
+            Calendar with eligible sequences merged.
+        """
+        merged_count = 0
+        new_visits: List[Visit] = []
+
+        for visit in calendar.visits:
+            # Process sequences in chronological order so "right after each
+            # other" is well defined regardless of input ordering.
+            ordered = sorted(visit.sequences, key=lambda s: s.start_time)
+
+            merged_sequences: List[ObservationSequence] = []
+            for seq in ordered:
+                if merged_sequences and self._can_merge(merged_sequences[-1], seq):
+                    # Extend the previous (kept) sequence over this one.
+                    previous = merged_sequences[-1]
+                    self._print(
+                        f"{self._seq_prefix(visit.id, previous)} | MERGE: "
+                        f"absorbing sequence {seq.id} "
+                        f"({self._seq_prefix(visit.id, seq)}); stop "
+                        f"{previous.stop_time_str} -> {seq.stop_time_str}"
+                    )
+                    previous.stop_time = seq.stop_time
+                    merged_count += 1
+                else:
+                    # Copy so the returned calendar never aliases the input.
+                    merged_sequences.append(seq.copy())
+
+            new_visits.append(Visit(id=visit.id, sequences=merged_sequences))
+
+        self._print(
+            f"Merged {merged_count} similar observation sequence(s) "
+            f"across {len(calendar.visits)} visit(s)."
+        )
+
+        return ScienceCalendar(
+            metadata=calendar.metadata,
+            visits=new_visits,
+            visibility=calendar.visibility,
+        )
+
+    def _can_merge(
+        self, first: ObservationSequence, second: ObservationSequence
+    ) -> bool:
+        """Return True if ``second`` can be merged into ``first``.
+
+        See :meth:`_merge_similar_observations` for the merge criteria.
+        """
+        # Same target (case-insensitive, whitespace-insensitive).
+        if (first.target or "").strip().lower() != (second.target or "").strip().lower():
+            return False
+
+        # Same pointing.
+        if (
+            abs(first.ra - second.ra) > self._MERGE_POINTING_TOL_DEG
+            or abs(first.dec - second.dec) > self._MERGE_POINTING_TOL_DEG
+        ):
+            return False
+
+        # Contiguous in time: second starts when first stops.
+        gap_sec = (second.start_time - first.stop_time).sec
+        return abs(gap_sec) <= self._MERGE_ADJACENCY_TOL_SEC
 
     def _process_all_sequences(
         self, calendar: ScienceCalendar, verbose: bool = False
@@ -492,11 +856,23 @@ class ScheduleProcessor:
 
         working_calendar = deepcopy(calendar)
 
+        # Snapshot each sequence's original timing so any shrink/elongate
+        # performed by the gap-fill / trim passes below can be logged.
+        original_timing = {
+            (visit.id, seq.id): (seq.start_time, seq.stop_time)
+            for visit in working_calendar.visits
+            for seq in visit.sequences
+        }
+
         # ── Pre-compute best roll per target per visit ──────────
         # Only run the sweep when star-tracker constraints are active;
         # boresight-only constraints are roll-independent.
         if self._roll_sweep_enabled:
-            for visit in working_calendar.visits:
+            for visit in self._progress(
+                working_calendar.visits,
+                desc="Roll sweep",
+                total=len(working_calendar.visits),
+            ):
                 visit_rolls = find_best_rolls_for_visit(
                     self.visibility,
                     visit,
@@ -504,9 +880,8 @@ class ScheduleProcessor:
                     min_power_frac=self.min_power_frac,
                 )
                 self._computed_target_rolls[visit.id] = visit_rolls
-                if verbose:
-                    for tgt, r in visit_rolls.items():
-                        print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
+                for tgt, r in visit_rolls.items():
+                    self._print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
 
         # Use initial time grid for processing
         total_minutes, start_time, end_time, time_grid = (
@@ -517,6 +892,10 @@ class ScheduleProcessor:
         i = 0
         last_stop = deepcopy(start_time)
 
+        vis_bar = self._progress_bar(
+            sum(len(v.sequences) for v in working_calendar.visits),
+            desc="Computing visibility",
+        )
         for visit in working_calendar.visits:
             visit_rolls = self._computed_target_rolls.get(visit.id, {})
 
@@ -527,10 +906,11 @@ class ScheduleProcessor:
                     np.rint((seq.start_time - last_stop).sec / 60.0)
                 )
                 if gap_length > 0:
-                    if verbose:
-                        print(
-                            f"Filling {gap_length} min gap before sequence {seq.id}"
-                        )
+                    self._print(
+                        f"{self._seq_prefix(visit.id, seq)} | GAP-FILL: "
+                        f"extending start earlier by {gap_length} min to "
+                        f"fill gap before this sequence"
+                    )
 
                     if not self.force_gap_fill:
                         seq = self._fill_gaps(
@@ -560,12 +940,13 @@ class ScheduleProcessor:
 
                 i += len(vis)
                 last_stop = seq.stop_time
+                vis_bar.update(1)
+        vis_bar.close()
 
         # Fill remaining time after last sequence
         if i < total_minutes:
             all_minutes_bool[i:] = False
-            if verbose:
-                print(f"Filled trailing {total_minutes - i} minutes as False")
+            self._print(f"Filled trailing {total_minutes - i} minutes as False")
 
         self.all_minutes_bool = (
             all_minutes_bool  # this is only necessary for testing.
@@ -591,10 +972,46 @@ class ScheduleProcessor:
                 working_calendar
             )
 
+        # Report any timing changes (shrink/elongate) made above.
+        self._log_timing_changes(working_calendar, original_timing)
+
         # last thing is to update all the payload parameters
         working_calendar = self._update_payload_parameters(working_calendar)
 
         return working_calendar
+
+    def _log_timing_changes(
+        self, calendar: ScienceCalendar, original_timing: Dict[Any, Any]
+    ) -> None:
+        """Log per-sequence shrink/elongate vs the snapshot in
+        *original_timing* (keyed by ``(visit_id, sequence_id)``)."""
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                orig = original_timing.get((visit.id, seq.id))
+                if orig is None:
+                    continue
+                old_start, old_stop = orig
+                d_start = (seq.start_time - old_start).sec
+                d_stop = (seq.stop_time - old_stop).sec
+                if abs(d_start) < 1.0 and abs(d_stop) < 1.0:
+                    continue
+
+                parts = []
+                if abs(d_start) >= 1.0:
+                    where = "earlier" if d_start < 0 else "later"
+                    parts.append(f"start {where} {abs(d_start) / 60:.1f} min")
+                if abs(d_stop) >= 1.0:
+                    where = "later" if d_stop > 0 else "earlier"
+                    parts.append(f"stop {where} {abs(d_stop) / 60:.1f} min")
+
+                old_dur = (old_stop - old_start).sec / 60.0
+                new_dur = seq.duration.sec / 60.0
+                verb = "ELONGATED" if new_dur > old_dur else "SHRANK"
+                self._print(
+                    f"{self._seq_prefix(visit.id, seq)} | {verb}: "
+                    + ", ".join(parts)
+                    + f" (duration {old_dur:.1f} -> {new_dur:.1f} min)"
+                )
 
     def _fill_gaps(
         self,
@@ -688,7 +1105,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx, (visit_id, seq) in enumerate(all_sequences):
+        for idx, (visit_id, seq) in self._progress(
+            list(enumerate(all_sequences)),
+            desc="Trimming non-visible heads",
+            total=len(all_sequences),
+        ):
             n_mins = int(np.rint(seq.duration.sec / 60.0))
             if n_mins <= 0:
                 continue
@@ -829,7 +1250,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx, (visit_id, seq) in enumerate(all_sequences):
+        for idx, (visit_id, seq) in self._progress(
+            list(enumerate(all_sequences)),
+            desc="Trimming non-visible tails",
+            total=len(all_sequences),
+        ):
             n_mins = int(np.rint(seq.duration.sec / 60.0))
             if n_mins <= 0:
                 continue
@@ -1083,7 +1508,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx, (visit_id, seq) in enumerate(all_sequences):
+        for idx, (visit_id, seq) in self._progress(
+            list(enumerate(all_sequences)),
+            desc="Trimming to longest visible block",
+            total=len(all_sequences),
+        ):
             analysis = self._analyze_mid_sequence_visibility(visit_id, seq)
             if analysis is None:
                 continue
@@ -1422,7 +1851,11 @@ class ScheduleProcessor:
                 all_sequences.append((visit.id, seq))
         all_sequences.sort(key=lambda x: x[1].start_time)
 
-        for idx in range(len(all_sequences) - 1):
+        for idx in self._progress(
+            range(len(all_sequences) - 1),
+            desc="Force-filling gaps",
+            total=len(all_sequences) - 1,
+        ):
             prev_vid, prev_seq = all_sequences[idx]
             next_vid, next_seq = all_sequences[idx + 1]
 
@@ -1595,7 +2028,9 @@ class ScheduleProcessor:
             return assignments[idx]["ra"], assignments[idx]["dec"]
 
         # Process each visibility gap
-        for gap_start_idx, gap_end_idx in false_idx:
+        for gap_start_idx, gap_end_idx in self._progress(
+            false_idx, desc="Fixing visibility gaps", total=gaps_total
+        ):
             # Get times for this gap
             gap_times = []
             for x in range(0, gap_end_idx - gap_start_idx):
@@ -1771,18 +2206,50 @@ class ScheduleProcessor:
             return {"times": [], "assignments": [], "summary": {}}
 
         # Time tolerance for comparisons (1 second)
-        time_tolerance = 1.0 * u.s
+        tol = 1.0  # seconds
 
-        # Generate time grid
-        times = []
+        # Build the minute grid once (vectorised). Both materialising scalar
+        # Time objects (``list(times)``) and per-scalar ``isot`` formatting
+        # are very slow, so keep ``times`` as a single Time array and format
+        # all ISOT strings in one vectorised call.
+        times = start_time + np.arange(total_minutes) * u.min
+        isot_values = np.atleast_1d(times.isot)
+
+        # Pre-compute each sequence's [start, stop) window in seconds relative
+        # to ``start_time``, sorted by start. Doing the (slow) astropy Time
+        # subtraction once per sequence — rather than once per (minute,
+        # sequence) — and then walking a forward pointer keeps this O(minutes
+        # + sequences) instead of O(minutes * sequences). The latter is why
+        # the per-minute scan slowed down as it advanced through the window:
+        # each later minute had to skip every already-finished sequence
+        # before reaching its owner.
+        intervals = []
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                s0 = (seq.start_time - start_time).to(u.s).value
+                s1 = (seq.stop_time - start_time).to(u.s).value
+                intervals.append((s0, s1, seq, visit.id))
+        intervals.sort(key=lambda iv: iv[0])
+        n_intervals = len(intervals)
+
         assignments = []
+        lo = 0  # index of the earliest sequence that may still own a minute
 
-        for minute_idx in range(total_minutes):
-            current_time = start_time + minute_idx * u.min
-            times.append(current_time)
+        for minute_idx in self._progress(
+            range(total_minutes),
+            desc="Mapping minute assignments",
+            total=total_minutes,
+        ):
+            current = float(minute_idx) * 60.0
+
+            # Retire sequences whose window has ended: once a minute is at or
+            # past stop - tol, that sequence (and, by sort order, none before
+            # it) can own this or any later minute.
+            while lo < n_intervals and current >= intervals[lo][1] - tol:
+                lo += 1
 
             assignment = {
-                "time": current_time.isot,
+                "time": isot_values[minute_idx],
                 "minute_index": minute_idx,
                 "sequence_id": None,
                 "target": None,
@@ -1793,39 +2260,23 @@ class ScheduleProcessor:
                 "status": "unassigned",
             }
 
-            # Find the sequence that owns this minute
-            assigned_sequence = None
-            visit_id = None
-
-            for visit in calendar.visits:
-                for seq in visit.sequences:
-                    start_diff = current_time - seq.start_time
-                    stop_diff = current_time - seq.stop_time
-
-                    starts_at_or_after = start_diff >= -time_tolerance
-                    ends_before = stop_diff < -time_tolerance
-                    starts_exactly = abs(start_diff) <= time_tolerance
-
-                    if (starts_at_or_after and ends_before) or starts_exactly:
-                        assigned_sequence = seq
-                        visit_id = visit.id
-                        break
-
-                if assigned_sequence:
-                    break
-
-            if assigned_sequence:
-                assignment.update(
-                    {
-                        "sequence_id": assigned_sequence.id,
-                        "target": assigned_sequence.target,
-                        "visit_id": visit_id,
-                        "ra": assigned_sequence.ra,
-                        "dec": assigned_sequence.dec,
-                        "priority": assigned_sequence.priority,
-                        "status": "assigned",
-                    }
-                )
+            if lo < n_intervals:
+                s0, s1, seq, visit_id = intervals[lo]
+                starts_at_or_after = current >= s0 - tol
+                ends_before = current < s1 - tol
+                starts_exactly = abs(current - s0) <= tol
+                if (starts_at_or_after and ends_before) or starts_exactly:
+                    assignment.update(
+                        {
+                            "sequence_id": seq.id,
+                            "target": seq.target,
+                            "visit_id": visit_id,
+                            "ra": seq.ra,
+                            "dec": seq.dec,
+                            "priority": seq.priority,
+                            "status": "assigned",
+                        }
+                    )
 
             assignments.append(assignment)
 
@@ -1839,212 +2290,688 @@ class ScheduleProcessor:
             visit_id = visit.id
             for seq in visit.sequences:
                 sequence_id = seq.id
-                new_sequence = self._update_payload_parameters_sequence(seq)
+                new_sequence = self._update_payload_parameters_sequence(
+                    seq, visit_id=visit_id
+                )
                 calendar.replace_sequence(visit_id, sequence_id, new_sequence)
 
         return calendar
 
+    def _build_payload_data(
+        self,
+        sequence: ObservationSequence,
+        override_fields: Any,
+        data_cls: Any,
+        extra_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        """Build a NirdaData/VisdaData object from a sequence's payload.
+
+        The payload section, field<->XML mapping, and required fields are
+        taken from the data class itself (``PAYLOAD_SECTION``,
+        ``CONFIG_SPEC``, ``REQUIRED_CONFIG_FIELDS``). For each config field
+        the value is read from the observation's payload XML and converted
+        to the data-class field. Fields in *override_fields* are instead
+        forced and queued to be written back to the observation so the
+        calendar reflects the override.
+
+        *override_fields* may be either a mapping ``{field_name: value}``
+        (a non-``None`` value is used directly; ``None`` means "use the
+        ``data_cls`` default") or an iterable of field names (treated as
+        "use the default" for each).
+
+        Returns
+        -------
+        (data_obj, writeback) on success, where ``writeback`` maps XML tags
+        to the string values that should be written back to the payload for
+        overridden fields.  Returns ``(None, missing_tags)`` if any required
+        field is absent (e.g. a sequence with no payload for this section).
+        """
+        section = data_cls.PAYLOAD_SECTION
+        spec = data_cls.CONFIG_SPEC
+        required_fields = data_cls.REQUIRED_CONFIG_FIELDS
+
+        # Normalize override_fields to a {field: value-or-None} mapping. A
+        # dict supplies explicit values (None -> class default); an iterable
+        # of names means "use the default" for each.
+        if isinstance(override_fields, dict):
+            overrides = dict(override_fields)
+        else:
+            overrides = {field: None for field in (override_fields or ())}
+
+        default_config = data_cls().get_config()
+        kwargs: Dict[str, Any] = dict(extra_kwargs or {})
+        # Share the run logger so the data class's own warnings (zero frame
+        # time, oversize, VITL fallback, ...) land in the same log.
+        kwargs.setdefault("logger", getattr(self, "logger", None))
+        writeback: Dict[str, str] = {}
+        missing: List[str] = []
+
+        for field, (tag, from_xml, to_xml) in spec.items():
+            if field in overrides:
+                # None -> class default; otherwise use the supplied value.
+                ov = overrides[field]
+                value = default_config[field] if ov is None else ov
+                kwargs[field] = value
+                writeback[tag] = to_xml(value)
+                continue
+
+            raw = sequence.get_payload_parameter(section, tag)
+            if raw is None or raw == "":
+                if field in required_fields:
+                    missing.append(tag)
+                continue
+            try:
+                kwargs[field] = from_xml(raw)
+            except (ValueError, TypeError):
+                missing.append(tag)
+
+        if missing:
+            return None, missing
+        return data_cls(**kwargs), writeback
+
+    def _warn_if_data_exceeds_limits(
+        self,
+        sequence: ObservationSequence,
+        detector: str,
+        data: u.Quantity,
+        data_compressed: u.Quantity,
+        visit_id: Any = None,
+    ) -> None:
+        """Warn if a sequence's computed data volume exceeds the limits.
+
+        Compares the *uncompressed* ``data`` against
+        ``max_file_size_uncompressed`` and the *compressed*
+        ``data_compressed`` against ``max_file_size_compressed``. Each
+        breach is emitted both as a ``UserWarning`` (for programmatic
+        consumers) and through the run logger so it lands in the console and
+        the ``.errors.log``.
+        """
+        max_uncompressed = getattr(self, "max_file_size_uncompressed", None)
+        max_compressed = getattr(self, "max_file_size_compressed", None)
+
+        prefix = self._seq_prefix(visit_id, sequence)
+
+        if (
+            max_uncompressed is not None
+            and data.to(u.byte).value > max_uncompressed.to(u.byte).value
+        ):
+            msg = (
+                f"{prefix} | {detector} uncompressed data "
+                f"{data.to(u.byte).value / 1e6:.1f} MB exceeds limit "
+                f"{max_uncompressed.to(u.byte).value / 1e6:.1f} MB"
+            )
+            self._print(f"Warning: {msg}")
+            warnings.warn(msg, stacklevel=2)
+
+        if (
+            max_compressed is not None
+            and data_compressed.to(u.byte).value
+            > max_compressed.to(u.byte).value
+        ):
+            msg = (
+                f"{prefix} | {detector} compressed data "
+                f"{data_compressed.to(u.byte).value / 1e6:.1f} MB exceeds "
+                f"limit {max_compressed.to(u.byte).value / 1e6:.1f} MB"
+            )
+            self._print(f"Warning: {msg}")
+            warnings.warn(msg, stacklevel=2)
+
+    @staticmethod
+    def _normalize_priority_keys(raw: Optional[Dict[Any, Any]]) -> Dict[int, Any]:
+        """Coerce override priority keys to ints (accepts 'Priority_0', '0')."""
+        out: Dict[int, Any] = {}
+        for key, value in (raw or {}).items():
+            if isinstance(key, bool):
+                # bool is an int subclass; reject to avoid surprises.
+                raise ValueError(f"Invalid priority key: {key!r}")
+            if isinstance(key, int):
+                priority = key
+            elif isinstance(key, str):
+                token = key.strip()
+                if token.lower().startswith("priority_"):
+                    token = token.split("_", 1)[1]
+                priority = int(token)
+            else:
+                raise ValueError(f"Invalid priority key: {key!r}")
+            out[priority] = value
+        return out
+
+    @staticmethod
+    def _format_payload_value(value: Any) -> str:
+        """Format a Python value as payload XML text (cleaner-compatible)."""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float):
+            if value.is_integer():
+                return str(int(value))
+            return f"{value:.6f}".rstrip("0").rstrip(".")
+        return str(value)
+
+    def _set_override_element(
+        self,
+        parent: "ET.Element",
+        mapping: Dict[str, Any],
+        prefix: str,
+        path: str,
+    ) -> None:
+        """Recursively force *mapping* onto *parent*, creating missing tags.
+
+        Scalar values are written as element text; nested dicts create (or
+        descend into) child elements, supporting structures like
+        ``{'Boresight': {'PRI_CMD_DIR': 9}}``.
+        """
+        for tag, value in mapping.items():
+            child = parent.find(tag)
+            if child is None:
+                child = ET.SubElement(parent, tag)
+            if isinstance(value, dict):
+                self._set_override_element(
+                    child, value, prefix, f"{path}/{tag}"
+                )
+            else:
+                old = child.text
+                child.text = self._format_payload_value(value)
+                # Only report when the value actually changed.
+                old_norm = old.strip() if old is not None else None
+                if old_norm != child.text:
+                    self._print(
+                        f"{prefix} | PAYLOAD OVERRIDE: {path}/{tag} "
+                        f"'{old}' -> '{child.text}'"
+                    )
+
+    def _apply_payload_overrides(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> None:
+        """Force per-priority XML overrides onto a sequence.
+
+        Writes ``override_payload_parameters[priority][section][...]`` onto
+        the observation, creating any missing tag (or section). Values may be
+        nested dicts (e.g. ``Observational_Parameters -> Boresight ->
+        PRI_CMD_DIR``). The payload detector sections
+        (``AcquireInfCamImages`` / ``AcquireVisCamScienceData``) and an
+        ``Observational_Parameters`` override are all stored on
+        ``payload_params``; the writer merges the latter into the
+        Observational_Parameters block it builds. Free-time observations are
+        skipped. Runs before the integration recompute so size/coadd/reset
+        changes take effect.
+        """
+        overrides = getattr(self, "_override_payload_parameters", {}) or {}
+        if not overrides:
+            return
+        entry = overrides.get(sequence.priority)
+        if not entry:
+            return
+        if (sequence.target or "").strip().lower() in (
+            "free time",
+            "freetime",
+            "free_time",
+            "free-time",
+        ):
+            return
+
+        prefix = self._seq_prefix(visit_id, sequence)
+        for section, mapping in entry.items():
+            section_elem = sequence.payload_params.get(section)
+            if section_elem is None:
+                section_elem = ET.Element(section)
+                sequence.payload_params[section] = section_elem
+            self._set_override_element(section_elem, mapping, prefix, section)
+
     def _update_payload_parameters_sequence(
-        self, sequence: ObservationSequence
+        self, sequence: ObservationSequence, visit_id: Any = None
     ) -> ObservationSequence:
         # Pass sequence.duration (TimeDelta) so both helpers receive the
         # correct type and the overhead subtraction uses a consistent unit.
         duration = sequence.duration
 
+        # General XML-tag payload overrides first, so subsequent integration
+        # recomputation sees the forced ROI/coadd/reset values.
+        self._apply_payload_overrides(sequence, visit_id=visit_id)
+
+        # Per-priority parameter overrides (see process_calendar). Falls back
+        # to no overrides when the attributes are unset (e.g. when a bare
+        # ScheduleProcessor is constructed in tests).
+        nirda_overrides = getattr(self, "_override_nirda_parameters", {}) or {}
+        visda_overrides = getattr(self, "_override_visda_parameters", {}) or {}
+        nirda_fields = nirda_overrides.get(sequence.priority, ())
+        visda_fields = visda_overrides.get(sequence.priority, ())
+
+        overhead = getattr(self, "overhead", None)
+
         sequence = self._update_VDA_integrations(
             sequence,
             duration,
-            pre_sequence_overhead=self.vda_pre_sequence_overhead,
-            post_sequence_overhead=self.vda_post_sequence_overhead,
+            overhead=overhead,
+            override_fields=visda_fields,
+            visit_id=visit_id,
         )
         sequence = self._update_NIRDA_integrations(
             sequence,
             duration,
-            pre_sequence_overhead=self.nirda_pre_sequence_overhead,
-            post_sequence_overhead=self.nirda_post_sequence_overhead,
+            overhead=overhead,
+            override_fields=nirda_fields,
+            visit_id=visit_id,
         )
 
+        # Convert single-ROI auto-detect observations to the predefined-ROI
+        # method. Runs after the overrides above so a forced MaxNumStarRois of
+        # 1 is taken into account; the conversion does not change timing or
+        # data volume, so its position relative to the integration recompute
+        # is immaterial.
+        if getattr(self, "convert_single_roi_to_predefined", False):
+            self._convert_single_roi_to_predefined(sequence, visit_id=visit_id)
+
+        # Fix bad data (invalid name symbols + NaN-like value reporting).
+        if getattr(self, "fix_bad_data", False):
+            self._fix_bad_data(sequence, visit_id=visit_id)
+
         return sequence
+
+    @staticmethod
+    def _clean_name(name: str) -> str:
+        """Replace every :data:`BAD_NAME_SYMBOLS` character in *name*."""
+        for bad, good in BAD_NAME_SYMBOLS.items():
+            name = name.replace(bad, good)
+        return name
+
+    def _normalize_sequence_names(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> bool:
+        """Replace invalid symbols in a sequence's target name fields.
+
+        Substitutes every :data:`BAD_NAME_SYMBOLS` character (e.g. ``+`` and
+        space -> ``_``) in the sequence's ``target`` attribute and any
+        ``Target``/``TargetID`` payload tags. Returns ``True`` if anything
+        changed. Idempotent: re-running on an already-clean sequence is a
+        no-op. This runs up front (before the roll sweep) so the swept rolls,
+        which are keyed by target name, are not orphaned by a later rename.
+        """
+        prefix = self._seq_prefix(visit_id, sequence)
+        changed = False
+
+        # The sequence's target name attribute.
+        if sequence.target:
+            fixed = self._clean_name(sequence.target)
+            if fixed != sequence.target:
+                self._print(
+                    f"{prefix} | BAD DATA: Target "
+                    f"'{sequence.target}' -> '{fixed}'"
+                )
+                sequence.target = fixed
+                changed = True
+
+        # Any Target/TargetID payload tags.
+        for section_elem in sequence.payload_params.values():
+            if not isinstance(section_elem, ET.Element):
+                continue
+            for elem in section_elem.iter():
+                tag = elem.tag.rsplit("}", 1)[-1]
+                if tag not in ("Target", "TargetID") or not elem.text:
+                    continue
+                fixed = self._clean_name(elem.text)
+                if fixed != elem.text:
+                    self._print(
+                        f"{prefix} | BAD DATA: {tag} "
+                        f"'{elem.text}' -> '{fixed}'"
+                    )
+                    elem.text = fixed
+                    changed = True
+        return changed
+
+    def _normalize_target_names(
+        self, calendar: ScienceCalendar, verbose: bool = False
+    ) -> None:
+        """Normalize target name fields across the whole calendar up front.
+
+        Runs immediately after windowing -- before the roll sweep -- so the
+        target names the roll sweep keys on match the names present when the
+        precomputed rolls are applied. Without this, a later ``+``/space ->
+        ``_`` rename would orphan a target's swept roll, dropping it back to
+        the sun-derived fallback.
+        """
+        n_changed = 0
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                if self._normalize_sequence_names(seq, visit_id=visit.id):
+                    n_changed += 1
+        if verbose and n_changed:
+            self._print(
+                f"Normalized invalid symbols in {n_changed} target name(s)."
+            )
+
+    def _fix_bad_data(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> None:
+        """Replace invalid name symbols and report NaN-like field values.
+
+        Mirrors the CalendarCleaner ``Fix_Bad_Data`` step:
+
+        - ``Target``/``TargetID`` fields (the sequence's ``target`` attribute
+          and any ``Target``/``TargetID`` payload tags) have each symbol in
+          ``BAD_NAME_SYMBOLS`` replaced by its safe substitute (see
+          :meth:`_normalize_sequence_names`; normally already applied up front
+          by :meth:`_normalize_target_names`, so this is a safety net).
+        - Every other field is scanned for NaN-like text; matches in tags not
+          listed in ``NON_NUMERIC_TAGS`` are logged as warnings. Free-time
+          observations are skipped here because their RA/Dec are expected to
+          be NaN.
+        """
+        prefix = self._seq_prefix(visit_id, sequence)
+
+        # 1+2) Replace invalid symbols in the target name fields.
+        self._normalize_sequence_names(sequence, visit_id=visit_id)
+
+        # 3) Scan numeric fields for NaN-like values (report only). Free-time
+        # observations legitimately carry NaN RA/Dec, so skip them.
+        if (sequence.target or "").strip().lower() in (
+            "free time",
+            "freetime",
+            "free_time",
+            "free-time",
+        ):
+            return
+        for section, section_elem in sequence.payload_params.items():
+            if not isinstance(section_elem, ET.Element):
+                continue
+            for elem in section_elem.iter():
+                tag = elem.tag.rsplit("}", 1)[-1]
+                if tag in NON_NUMERIC_TAGS or not elem.text:
+                    continue
+                if elem.text.strip().lower() == "nan":
+                    self._print(
+                        f"WARNING: {prefix} | BAD DATA: {section}/{tag} "
+                        f"has NaN-like value '{elem.text.strip()}'"
+                    )
+
+    def _convert_single_roi_to_predefined(
+        self, sequence: ObservationSequence, visit_id: Any = None
+    ) -> bool:
+        """Convert a single-ROI auto-detect VIS section to predefined-ROI.
+
+        Mirrors the CalendarCleaner ``Fix_Single_ROI_Det`` step: when the
+        ``AcquireVisCamScienceData`` section requests exactly one star ROI via
+        the brightest-star auto-detect method (``MaxNumStarRois == 1`` and
+        ``StarRoiDetMethod == 2``), switch it to the predefined-ROI method
+        (``StarRoiDetMethod == 1``) and supply the target RA/Dec as the single
+        predefined ROI.
+
+        The target RA/Dec is resolved verbatim, preferring the VIS section's
+        ``TargetRA``/``TargetDEC``, then the sequence's ``ra``/``dec``. The
+        conversion is idempotent: a section already carrying ``RA1``/``Dec1``
+        predefined children is left untouched. Returns True if a conversion
+        was made.
+        """
+        if (sequence.target or "").strip().lower() in (
+            "free time",
+            "freetime",
+            "free_time",
+            "free-time",
+        ):
+            return False
+
+        vis_section = sequence.payload_params.get("AcquireVisCamScienceData")
+        if vis_section is None:
+            return False
+
+        def _to_int(elem):
+            if elem is None or elem.text is None:
+                return None
+            try:
+                return int(float(elem.text))
+            except (ValueError, TypeError):
+                return None
+
+        max_rois = _to_int(vis_section.find("MaxNumStarRois"))
+        det_method = _to_int(vis_section.find("StarRoiDetMethod"))
+        if max_rois != 1 or det_method != 2:
+            return False
+
+        # Idempotency: only skip when an actual predefined ROI (RA1/Dec1) is
+        # already present, not a bare placeholder parent.
+        ra_parent = vis_section.find("PredefinedStarRoiRa")
+        dec_parent = vis_section.find("PredefinedStarRoiDec")
+        has_ra1 = ra_parent is not None and ra_parent.find("RA1") is not None
+        has_dec1 = dec_parent is not None and dec_parent.find("Dec1") is not None
+        if has_ra1 and has_dec1:
+            return False
+
+        # Resolve the target RA/Dec verbatim: prefer the VIS-section values,
+        # then fall back to the sequence's own coordinates.
+        def _usable(value):
+            return (
+                value is not None
+                and str(value).strip() != ""
+                and str(value).strip().lower() != "nan"
+            )
+
+        ra_elem = vis_section.find("TargetRA")
+        dec_elem = vis_section.find("TargetDEC")
+        ra = ra_elem.text if ra_elem is not None else None
+        dec = dec_elem.text if dec_elem is not None else None
+        if not _usable(ra) and sequence.ra is not None:
+            ra = self._format_payload_value(sequence.ra)
+        if not _usable(dec) and sequence.dec is not None:
+            dec = self._format_payload_value(sequence.dec)
+
+        prefix = self._seq_prefix(visit_id, sequence)
+        if not _usable(ra) or not _usable(dec):
+            self._print(
+                f"WARNING: {prefix} | SINGLE-ROI: no usable target RA/Dec "
+                f"(RA={ra!r}, Dec={dec!r}); left unchanged."
+            )
+            return False
+
+        ra = str(ra).strip()
+        dec = str(dec).strip()
+
+        # Switch to predefined-ROI method with a single ROI.
+        det_elem = vis_section.find("StarRoiDetMethod")
+        det_elem.text = "1"
+
+        num_elem = vis_section.find("numPredefinedStarRois")
+        if num_elem is None:
+            num_elem = ET.SubElement(vis_section, "numPredefinedStarRois")
+        num_elem.text = "1"
+
+        if ra_parent is None:
+            ra_parent = ET.SubElement(vis_section, "PredefinedStarRoiRa")
+        for stale in list(ra_parent):
+            ra_parent.remove(stale)
+        ET.SubElement(ra_parent, "RA1").text = ra
+
+        if dec_parent is None:
+            dec_parent = ET.SubElement(vis_section, "PredefinedStarRoiDec")
+        for stale in list(dec_parent):
+            dec_parent.remove(stale)
+        ET.SubElement(dec_parent, "Dec1").text = dec
+
+        self._print(
+            f"{prefix} | SINGLE-ROI: StarRoiDetMethod 2 -> 1, "
+            f"numPredefinedStarRois=1, RA1={ra}, Dec1={dec}"
+        )
+        return True
 
     def _update_VDA_integrations(
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        pre_sequence_overhead: TimeDelta = 260 * u.s,
-        post_sequence_overhead: TimeDelta = 120 * u.s,
+        overhead: Optional[OverheadTiming] = None,
+        override_fields: Any = (),
+        visit_id: Any = None,
     ) -> ObservationSequence:
+        """Set NumTotalFramesRequested using a ``VisdaData`` model.
 
-        # Include VDA overheads at the start and end of the sequence using
-        # pre_sequence_overhead and post_sequence_overhead.
+        The VISDA detector configuration is built from the sequence's
+        ``AcquireVisCamScienceData`` payload (or, for any field listed in
+        *override_fields*, from the ``VisdaData`` defaults), and the frame
+        count that fits the sequence duration -- net of the pre/post
+        overheads in *overhead* -- is computed by
+        ``VisdaData.solve_integrations``.
 
-        # Get parameters
-        exposure_time_str = sequence.get_payload_parameter(
-            "AcquireVisCamScienceData", "ExposureTime_us"
+        Parameters
+        ----------
+        overhead : OverheadTiming, optional
+            Overhead timings to apply. Defaults to ``self.overhead`` (built
+            once at construction); a bare ``OverheadTiming`` is used only if
+            the processor has none.
+        """
+        if overhead is None:
+            overhead = getattr(self, "overhead", None) or OverheadTiming()
+
+        # Detector read time is not represented in the payload; the existing
+        # scheduling math treats a frame as taking exactly the exposure time.
+        visda, info = self._build_payload_data(
+            sequence,
+            override_fields,
+            VisdaData,
+            extra_kwargs={"read_time_per_frame_s": 0 * u.s},
         )
-        frames_per_coadd_str = sequence.get_payload_parameter(
-            "AcquireVisCamScienceData", "FramesPerCoadd"
+        prefix = self._seq_prefix(visit_id, sequence)
+        if visda is None:
+            self._print(
+                f"Warning: {prefix} | Missing VDA parameters: "
+                f"{', '.join(info)}"
+            )
+            return sequence
+
+        # Write any overridden parameters back onto the observation, logging
+        # each forced change.
+        for tag, text in info.items():
+            old = sequence.get_payload_parameter(
+                "AcquireVisCamScienceData", tag
+            )
+            sequence.set_payload_parameter(
+                "AcquireVisCamScienceData", tag, text
+            )
+            # Only report when the value actually changed.
+            if (old if old is None else str(old)) != text:
+                self._print(
+                    f"{prefix} | VISDA OVERRIDE: {tag} '{old}' -> '{text}'"
+                )
+
+        old_frames = sequence.get_payload_parameter(
+            "AcquireVisCamScienceData", "NumTotalFramesRequested"
+        )
+        frames, data, data_compressed = visda.solve_integrations(
+            duration.to(u.s), overhead
+        )
+        self._warn_if_data_exceeds_limits(
+            sequence, "VISDA", data, data_compressed, visit_id=visit_id
         )
 
-        if not exposure_time_str or not frames_per_coadd_str:
-            print(
-                f"Warning: Missing VDA parameters for sequence {sequence.id} {sequence.start_time}"
+        success = sequence.set_payload_parameter(
+            "AcquireVisCamScienceData",
+            "NumTotalFramesRequested",
+            str(int(frames)),
+        )
+        if success:
+            self._print(
+                f"{prefix} | VISDA NumTotalFramesRequested "
+                f"'{old_frames}' -> '{int(frames)}'"
             )
-            return sequence
-
-        try:
-            # Convert to proper types - exposure time is always integer microseconds
-            exposure_time = int(exposure_time_str) * u.us
-            frames_per_coadd = int(frames_per_coadd_str)
-
-            # Convert duration to microseconds for calculation
-            duration_us = (
-                duration.to(u.us)
-                - pre_sequence_overhead.to(u.us)
-                - post_sequence_overhead.to(u.us)
+        else:
+            self._print(
+                f"Warning: {prefix} | Failed to update "
+                f"NumTotalFramesRequested"
             )
-
-            # Guard: if overhead exceeds duration, no frames are possible
-            if duration_us.value <= 0:
-                sequence.set_payload_parameter(
-                    "AcquireVisCamScienceData",
-                    "NumTotalFramesRequested",
-                    "0",
-                )
-                return sequence
-
-            # Calculate maximum complete coadds that fit in duration
-            effective_exposure_time = exposure_time * frames_per_coadd
-            max_coadds = int(np.floor(duration_us / effective_exposure_time))
-
-            # Calculate total frames (must be multiple of FramesPerCoadd)
-            num_total_frames = max_coadds * frames_per_coadd
-
-            # Ensure at least one coadd if duration allows
-            if (
-                num_total_frames == 0
-                and duration_us >= effective_exposure_time
-            ):
-                num_total_frames = frames_per_coadd
-
-            # Set the parameter (convert to string)
-            success = sequence.set_payload_parameter(
-                "AcquireVisCamScienceData",
-                "NumTotalFramesRequested",
-                str(num_total_frames),
-            )
-
-            if not success:
-                print(
-                    f"Warning: Failed to update NumTotalFramesRequested for sequence {sequence.id} {sequence.start_time}"
-                )
-            return sequence
-
-        except (ValueError, TypeError, AttributeError) as e:
-            print(
-                f"Error updating VDA parameters for sequence {sequence.id} {sequence.start_time}: {e}"
-            )
-            return sequence
+        return sequence
 
     def _update_NIRDA_integrations(
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        pre_sequence_overhead: TimeDelta = 258 * u.s,
-        post_sequence_overhead: TimeDelta = 120 * u.s,
+        overhead: Optional[OverheadTiming] = None,
+        override_fields: Any = (),
+        visit_id: Any = None,
     ) -> ObservationSequence:
+        """Set SC_Integrations using a ``NirdaData`` model.
 
-        seq_identifier = (
-            f"{sequence.id} ({sequence.target} @ "
-            f"{sequence.start_time.datetime.strftime('%m/%d %H:%M')})"
+        The NIRDA detector configuration is built from the sequence's
+        ``AcquireInfCamImages`` payload (or, for any field listed in
+        *override_fields*, from the ``NirdaData`` defaults), and the number
+        of integrations that fit the sequence duration -- net of the
+        pre/post overheads in *overhead* -- is computed by
+        ``NirdaData.solve_integrations``.
+
+        Parameters
+        ----------
+        overhead : OverheadTiming, optional
+            Overhead timings to apply. Defaults to ``self.overhead`` (built
+            once at construction); a bare ``OverheadTiming`` is used only if
+            the processor has none.
+        """
+        if overhead is None:
+            overhead = getattr(self, "overhead", None) or OverheadTiming()
+
+        prefix = self._seq_prefix(visit_id, sequence)
+
+        nirda, info = self._build_payload_data(
+            sequence,
+            override_fields,
+            NirdaData,
         )
-
-        # Collect raw string values and guard against missing parameters
-        # *before* any int() conversion so that a sequence without NIRDA
-        # payload (e.g. a VDA-only sequence) returns cleanly instead of
-        # raising TypeError.
-        required_params = {
-            name: sequence.get_payload_parameter("AcquireInfCamImages", name)
-            for name in (
-                "ROI_SizeX",
-                "ROI_SizeY",
-                "SC_Resets1",
-                "SC_Resets2",
-                "SC_DropFrames1",
-                "SC_DropFrames2",
-                "SC_DropFrames3",
-                "SC_ReadFrames",
-                "SC_Groups",
+        if nirda is None:
+            self._print(
+                f"Warning: {prefix} | Missing NIRDA parameters: "
+                f"{', '.join(info)}"
             )
-        }
-
-        missing_params = [
-            name for name, value in required_params.items() if value is None
-        ]
-
-        if missing_params:
-            print(
-                f"Warning: Missing NIRDA parameters for sequence "
-                f"{seq_identifier}"
-            )
-            print(f"Missing parameters: {', '.join(missing_params)}")
             return sequence
 
-        # All parameters are present; convert to int.
-        ROI_SizeX = int(required_params["ROI_SizeX"])
-        ROI_SizeY = int(required_params["ROI_SizeY"])
-        SC_Resets1 = int(required_params["SC_Resets1"])
-        SC_Resets2 = int(required_params["SC_Resets2"])
-        SC_DropFrames1 = int(required_params["SC_DropFrames1"])
-        SC_DropFrames2 = int(required_params["SC_DropFrames2"])
-        SC_DropFrames3 = int(required_params["SC_DropFrames3"])
-        SC_ReadFrames = int(required_params["SC_ReadFrames"])
-        SC_Groups = int(required_params["SC_Groups"])
-
-        # per the payload users guide
-        frame_time = (ROI_SizeX + 12) * (ROI_SizeY + 2) * 1e-5 * u.s
-        NumFramesBase = (
-            SC_DropFrames1
-            + (SC_Groups - 1) * (SC_ReadFrames + SC_DropFrames2)
-            + SC_ReadFrames
-            + SC_DropFrames3
-        )
-        NumFramesFirst = NumFramesBase + SC_Resets1
-        NumFramesOther = NumFramesBase + SC_Resets2
-        first_integration_time = NumFramesFirst * frame_time
-        other_integration_time = NumFramesOther * frame_time
-
-        # Use the duration argument so callers can override the window
-        # (e.g. _update_payload_parameters_sequence passes sequence.duration).
-        duration_sequence_seconds = duration.to(u.s)
-
-        effective_duration_s = (
-            duration_sequence_seconds
-            - pre_sequence_overhead.to(u.s)
-            - post_sequence_overhead.to(u.s)
-        )
-        # Guard: if overhead exceeds duration, no integrations are possible
-        SC_Integrations = 0
-        if (effective_duration_s.value > 0) and (
-            first_integration_time.to(u.s) <= effective_duration_s.to(u.s)
-        ):
-            # There is enough time to perform the initial integration
-            effective_duration_s -= first_integration_time.to(u.s)
-            SC_Integrations += 1
-
-            # ... and potentially additional integrations.
-            if effective_duration_s > other_integration_time.to(u.s):
-                SC_Integrations += int(
-                    np.floor(
-                        effective_duration_s / other_integration_time.to(u.s)
-                    )
+        # Write any overridden parameters back onto the observation, logging
+        # each forced change.
+        for tag, text in info.items():
+            old = sequence.get_payload_parameter("AcquireInfCamImages", tag)
+            sequence.set_payload_parameter("AcquireInfCamImages", tag, text)
+            # Only report when the value actually changed.
+            if (old if old is None else str(old)) != text:
+                self._print(
+                    f"{prefix} | NIRDA OVERRIDE: {tag} '{old}' -> '{text}'"
                 )
 
-        success = sequence.set_payload_parameter(
-            "AcquireInfCamImages", "SC_Integrations", str(SC_Integrations)
+        # Optionally adjust reset_frames_1 to cover the VITL settling time
+        # before computing integrations, and persist the new SC_Resets1.
+        # This affects number of integrations so needs to be set before
+        # those are calculated.
+        if getattr(self, "update_nirda_reset1_for_vitl", False):
+            vitl_settling_time = getattr(
+                self, "vitl_settling_time", 60.0 * u.s
+            )
+            old_resets1 = sequence.get_payload_parameter(
+                "AcquireInfCamImages", "SC_Resets1"
+            )
+            nirda.update_for_vitl(vitl_settling_time)
+            new_resets1 = str(int(nirda.reset_frames_1))
+            sequence.set_payload_parameter(
+                "AcquireInfCamImages", "SC_Resets1", new_resets1
+            )
+            if str(old_resets1) != new_resets1:
+                self._print(
+                    f"{prefix} | VITL: SC_Resets1 '{old_resets1}' -> "
+                    f"'{new_resets1}' to cover "
+                    f"{vitl_settling_time.to(u.s).value:.1f} s settling"
+                )
+
+        old_integrations = sequence.get_payload_parameter(
+            "AcquireInfCamImages", "SC_Integrations"
         )
-        if not success:
-            print(
-                f"Warning: Failed to update SC_Integrations for sequence {sequence.id} {sequence.start_time}"
+        integrations, data, data_compressed = nirda.solve_integrations(
+            duration.to(u.s), overhead
+        )
+        self._warn_if_data_exceeds_limits(
+            sequence, "NIRDA", data, data_compressed, visit_id=visit_id
+        )
+
+        success = sequence.set_payload_parameter(
+            "AcquireInfCamImages", "SC_Integrations", str(int(integrations))
+        )
+        if success:
+            self._print(
+                f"{prefix} | NIRDA SC_Integrations "
+                f"'{old_integrations}' -> '{int(integrations)}'"
+            )
+        else:
+            self._print(
+                f"Warning: {prefix} | Failed to update SC_Integrations"
             )
 
         return sequence
@@ -2074,6 +3001,10 @@ class ScheduleProcessor:
         """
         issues = []
 
+        vis_bar = self._progress_bar(
+            sum(len(v.sequences) for v in calendar.visits),
+            desc="Validating visibility",
+        )
         for visit in calendar.visits:
             visit_rolls = self._computed_target_rolls.get(visit.id, {})
             for seq in visit.sequences:
@@ -2332,9 +3263,372 @@ class ScheduleProcessor:
                     issues.append(issue)
 
                     if report_issues:
-                        print(message)
+                        self._print(message)
+
+                vis_bar.update(1)
+        vis_bar.close()
 
         return issues
+
+    # ------------------------------------------------------------------
+    # Per-day diagnostics (.diag)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _diag_choose_day(start_dt: datetime, stop_dt: datetime) -> str:
+        """Assign an observation to the UTC day with the largest overlap."""
+        if stop_dt <= start_dt:
+            return start_dt.date().isoformat()
+        day_seconds: Dict[str, float] = defaultdict(float)
+        cursor = start_dt
+        while cursor < stop_dt:
+            next_midnight = datetime(
+                cursor.year, cursor.month, cursor.day
+            ) + timedelta(days=1)
+            chunk_end = min(next_midnight, stop_dt)
+            day_seconds[cursor.date().isoformat()] += (
+                chunk_end - cursor
+            ).total_seconds()
+            cursor = chunk_end
+        return max(day_seconds.items(), key=lambda kv: kv[1])[0]
+
+    @staticmethod
+    def _fits_files_for_sequence(
+        seq: ObservationSequence,
+        overhead: OverheadTiming,
+        nirda: Optional[NirdaData],
+        sc_integrations: int,
+        visda: Optional[VisdaData],
+        num_total_frames: int,
+    ) -> List[str]:
+        """Return the FITS product filenames packaged in a sequence's ``.bin``.
+
+        Names follow the Pandora flight-software conventions (InfImg from
+        ``MACIEMain.cpp``, VisSci from ``PCOCameraMain.cpp``) built from the
+        observation's payload parameters. The per-detector capture-start
+        timestamps are the sequence start plus the detector pre-overhead.
+        """
+        files: List[str] = []
+        target = seq.target
+
+        # NIRDA: InfImg cube (only if integrations were scheduled).
+        if nirda is not None and sc_integrations > 0:
+            nir_start = (
+                seq.start_time + overhead.nirda_pre_overhead_time.to(u.s)
+            ).datetime
+            nir_date = nir_start.strftime("%Y-%m-%d__%H-%M-%S")
+            cube_depth = sc_integrations * nirda.groups
+            files.append(
+                f"{nir_date}_InfImg_{target}_"
+                f"d{nirda.roi_x_size:04d}x{nirda.roi_y_size:04d}"
+                f"x{cube_depth:04d}_b1_e01"
+                f"_i{sc_integrations:02d}_g{nirda.groups:02d}"
+                f"_d{nirda.drop_frames_2:02d}_r{nirda.read_frames:02d}.fits"
+            )
+
+        # VISDA: VisSci cube (only if frames were requested).
+        if visda is not None and num_total_frames > 0:
+            vis_start = (
+                seq.start_time + overhead.visda_pre_overhead_time.to(u.s)
+            ).datetime
+            vis_date = vis_start.strftime("%Y-%m-%d__%H-%M-%S")
+            exp_us = int(visda.exposure_time_s.to(u.us).value)
+            files.append(
+                f"{vis_date}_VisSci_{target}_"
+                f"d{visda.roi_dimension:03d}_n{visda.num_rois:03d}"
+                f"_f{num_total_frames:05d}_e{exp_us:09d}us.fits"
+            )
+
+        # Engineering housekeeping file (timestamp only; downlink time is not
+        # known here, so the sequence start is used as a best-effort stamp).
+        eng_date = seq.start_time.datetime.strftime("%Y_%m_%dT%H_%M_%S")
+        files.append(f"{eng_date}_engineering.fits")
+
+        return files
+
+    def generate_diagnostics(
+        self,
+        calendar: ScienceCalendar,
+        output_path: Optional[Any] = None,
+        pass_data_volume_mb: Optional[float] = None,
+    ) -> str:
+        """Build a per-day ``.diag`` report and (optionally) write it.
+
+        Mirrors the legacy CalendarCleaner diagnostic: a week summary
+        followed by a per-day breakdown of observation counts (by priority),
+        unique targets, NIR/VIS frame and data totals (compressed and
+        uncompressed), observing/gap minutes (with percentages), and a
+        per-day file manifest. Data volumes are computed from the
+        ``NirdaData``/``VisdaData`` models built from each observation's
+        payload, so they stay consistent with the scheduler.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar to summarize (typically the processed calendar).
+        output_path : str or pathlib.Path, optional
+            Where to write the ``.diag`` file (its suffix is forced to
+            ``.diag``). If omitted, the calendar's ``source_path`` metadata
+            is used; if that is also missing, nothing is written and only
+            the text is returned.
+        pass_data_volume_mb : float, optional
+            Downlink volume of a single pass (MB). When given, "Required
+            Passes" is reported; otherwise it shows "N/A".
+
+        Returns
+        -------
+        str
+            The full diagnostic text.
+        """
+        mib = 1024.0 * 1024.0
+
+        def fmt(value: float) -> str:
+            value = float(value)
+            if value.is_integer():
+                return str(int(value))
+            return f"{value:.3f}".rstrip("0").rstrip(".")
+
+        def data_str(data_bytes: float) -> str:
+            data_mb = data_bytes / mib
+            if pass_data_volume_mb and pass_data_volume_mb > 0:
+                passes = data_mb / pass_data_volume_mb
+                return f"{fmt(data_mb)} MB (Required Passes: {fmt(passes)})"
+            return f"{fmt(data_mb)} MB (Required Passes: N/A)"
+
+        def to_int(value: Any) -> int:
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return 0
+
+        def new_bucket() -> Dict[str, Any]:
+            return {
+                "count": 0,
+                "priority_counts": {0: 0, 1: 0, 2: 0},
+                "targets": set(),
+                "nir_frames": 0,
+                "vis_frames": 0,
+                "nir_data": 0.0,
+                "vis_data": 0.0,
+                "nir_data_unc": 0.0,
+                "vis_data_unc": 0.0,
+                "timelines": [],
+                "manifest": [],
+            }
+
+        daily: Dict[str, Dict[str, Any]] = {}
+
+        # Per-detector capture-start offsets for FITS filenames.
+        overhead = getattr(self, "overhead", None) or OverheadTiming()
+
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                start_dt = seq.start_time.datetime
+                stop_dt = seq.stop_time.datetime
+                day = self._diag_choose_day(start_dt, stop_dt)
+                bucket = daily.setdefault(day, new_bucket())
+
+                bucket["count"] += 1
+                if seq.priority in bucket["priority_counts"]:
+                    bucket["priority_counts"][seq.priority] += 1
+                bucket["targets"].add(seq.target)
+                bucket["timelines"].append((start_dt, stop_dt))
+
+                # NIRDA frames + data from the NirdaData model.
+                nirda, _ = self._build_payload_data(seq, (), NirdaData)
+                sc_integrations = to_int(
+                    seq.get_payload_parameter(
+                        "AcquireInfCamImages", "SC_Integrations"
+                    )
+                )
+                if nirda is not None and sc_integrations > 0:
+                    nir_frames = (
+                        sc_integrations
+                        * nirda.other_integration_saved_frames
+                    )
+                    nir_unc = (
+                        sc_integrations * nirda.integration_data
+                    ).to(u.byte).value
+                    bucket["nir_frames"] += int(nir_frames)
+                    bucket["nir_data_unc"] += nir_unc
+                    bucket["nir_data"] += nir_unc * nirda.compression_ratio
+
+                # VISDA frames (coadds) + data from the VisdaData model.
+                visda, _ = self._build_payload_data(
+                    seq,
+                    (),
+                    VisdaData,
+                    extra_kwargs={"read_time_per_frame_s": 0 * u.s},
+                )
+                num_total_frames = to_int(
+                    seq.get_payload_parameter(
+                        "AcquireVisCamScienceData", "NumTotalFramesRequested"
+                    )
+                )
+                if visda is not None and num_total_frames > 0:
+                    coadds = (
+                        num_total_frames // visda.frames_per_coadd
+                        if visda.frames_per_coadd > 0
+                        else num_total_frames
+                    )
+                    vis_unc = (coadds * visda.frame_bytes).to(u.byte).value
+                    bucket["vis_frames"] += int(coadds)
+                    bucket["vis_data_unc"] += vis_unc
+                    bucket["vis_data"] += vis_unc * visda.compression_ratio
+
+                # Manifest: the downlinked .bin plus the individual FITS
+                # products it contains (named from payload parameters).
+                stamp = start_dt.strftime("%Y%m%dT%H%M%S")
+                bin_path = f"/mnt/data/sci/{stamp}_{seq.target}.bin"
+                fits_files = self._fits_files_for_sequence(
+                    seq,
+                    overhead,
+                    nirda,
+                    sc_integrations,
+                    visda,
+                    num_total_frames,
+                )
+                bucket["manifest"].append((bin_path, fits_files))
+
+        text = self._render_diagnostics(daily, fmt, data_str)
+
+        # Resolve where to write the .diag file.
+        base = output_path
+        if base is None:
+            base = (calendar.metadata or {}).get("source_path")
+        if base is not None:
+            diag_path = Path(base).with_suffix(".diag")
+            diag_path.write_text(text, encoding="utf-8")
+            self._print(f"Wrote diagnostics to {diag_path}")
+
+        return text
+
+    @staticmethod
+    def _diag_observing_and_gaps(timelines: List[Tuple]) -> Tuple[float, float]:
+        """Return (observing_minutes, gap_minutes) for a day's timelines."""
+        observing = 0.0
+        gaps = 0.0
+        previous_stop = None
+        for start_dt, stop_dt in sorted(timelines, key=lambda t: (t[0], t[1])):
+            observing += max(0.0, (stop_dt - start_dt).total_seconds() / 60.0)
+            if previous_stop is not None and start_dt > previous_stop:
+                gaps += (start_dt - previous_stop).total_seconds() / 60.0
+            previous_stop = (
+                stop_dt
+                if previous_stop is None
+                else max(previous_stop, stop_dt)
+            )
+        return observing, gaps
+
+    def _render_diagnostics(self, daily, fmt, data_str) -> str:
+        """Render the diagnostic text from the per-day buckets."""
+        sorted_days = sorted(daily.keys())
+        if not sorted_days:
+            return "No observations were available for diagnostic generation.\n"
+
+        def pct(part: float, whole: float) -> str:
+            return f"{(100.0 * part / whole):.1f}" if whole > 0 else "0.0"
+
+        # Finalize per-day observing/gap minutes and accumulate week totals.
+        summary = {
+            "count": 0,
+            "priority_counts": {0: 0, 1: 0, 2: 0},
+            "nir_data": 0.0,
+            "vis_data": 0.0,
+            "nir_data_unc": 0.0,
+            "vis_data_unc": 0.0,
+            "observing": 0.0,
+            "gaps": 0.0,
+        }
+        for day in sorted_days:
+            item = daily[day]
+            observing, gaps = self._diag_observing_and_gaps(item["timelines"])
+            item["observing"] = observing
+            item["gaps"] = gaps
+            summary["count"] += item["count"]
+            for p in (0, 1, 2):
+                summary["priority_counts"][p] += item["priority_counts"][p]
+            summary["nir_data"] += item["nir_data"]
+            summary["vis_data"] += item["vis_data"]
+            summary["nir_data_unc"] += item["nir_data_unc"]
+            summary["vis_data_unc"] += item["vis_data_unc"]
+            summary["observing"] += observing
+            summary["gaps"] += gaps
+
+        lines: List[str] = []
+
+        # ── Week summary ───────────────────────────────────────────
+        sum_total = summary["nir_data"] + summary["vis_data"]
+        sum_total_unc = summary["nir_data_unc"] + summary["vis_data_unc"]
+        sum_span = summary["observing"] + summary["gaps"]
+        lines.append(
+            f"Calendar Summary {sorted_days[0]} : {sorted_days[-1]}"
+        )
+        lines.append(f"Total Observations: {summary['count']}")
+        lines.append(f"  - Priority 0 = {summary['priority_counts'][0]}")
+        lines.append(f"  - Priority 1 = {summary['priority_counts'][1]}")
+        lines.append(f"  - Priority 2 = {summary['priority_counts'][2]}")
+        lines.append(
+            f"Total Gaps: {fmt(summary['gaps'])} Mins "
+            f"({pct(summary['gaps'], sum_span)}%)"
+        )
+        lines.append(
+            f"Total Observing: {fmt(summary['observing'])} Mins "
+            f"({pct(summary['observing'], sum_span)}%)"
+        )
+        lines.append("Total NIR Data = " + data_str(summary["nir_data"]))
+        lines.append("Total Vis Data = " + data_str(summary["vis_data"]))
+        lines.append("Total Data = " + data_str(sum_total))
+        lines.append("Uncompressed Data")
+        lines.append("Total NIR Data = " + data_str(summary["nir_data_unc"]))
+        lines.append("Total Vis Data = " + data_str(summary["vis_data_unc"]))
+        lines.append("Total Data = " + data_str(sum_total_unc))
+        lines.append("")
+
+        # ── Per-day breakdown ──────────────────────────────────────
+        for day in sorted_days:
+            item = daily[day]
+            day_total = item["nir_data"] + item["vis_data"]
+            day_total_unc = item["nir_data_unc"] + item["vis_data_unc"]
+            span = item["observing"] + item["gaps"]
+
+            lines.append(day)
+            lines.append(f"Number of Observations: {item['count']}")
+            lines.append(f"  - Priority 0 = {item['priority_counts'][0]}")
+            lines.append(f"  - Priority 1 = {item['priority_counts'][1]}")
+            lines.append(f"  - Priority 2 = {item['priority_counts'][2]}")
+            lines.append("List of Unique Targets:")
+            for target in sorted(item["targets"]):
+                lines.append(f"  - {target}")
+            lines.append(f"Total NIR Frames = {fmt(item['nir_frames'])}")
+            lines.append(f"Total Vis Frames = {fmt(item['vis_frames'])}")
+            lines.append(
+                f"Total Gaps: {fmt(item['gaps'])} Mins "
+                f"({pct(item['gaps'], span)}%)"
+            )
+            lines.append(
+                f"Total Observing: {fmt(item['observing'])} Mins "
+                f"({pct(item['observing'], span)}%)"
+            )
+            lines.append("Total NIR Data = " + data_str(item["nir_data"]))
+            lines.append("Total Vis Data = " + data_str(item["vis_data"]))
+            lines.append("Total Data = " + data_str(day_total))
+            lines.append("Uncompressed Data")
+            lines.append("Total NIR Data = " + data_str(item["nir_data_unc"]))
+            lines.append("Total Vis Data = " + data_str(item["vis_data_unc"]))
+            lines.append("Total Data = " + data_str(day_total_unc))
+            lines.append("")
+            lines.append("Manifest of Files for the Day:")
+            for bin_path, fits_files in sorted(
+                item["manifest"], key=lambda entry: entry[0]
+            ):
+                lines.append(f"- {bin_path}")
+                for fits_name in fits_files:
+                    lines.append(f"\t- {fits_name}")
+            lines.append("")
+            lines.append("----")
+            lines.append("")
+
+        return "\n".join(lines).rstrip() + "\n"
 
     def validate_target_names(
         self, calendar: ScienceCalendar, report_issues: bool = True
@@ -2369,11 +3663,172 @@ class ScheduleProcessor:
                     issues.append(issue)
 
                     if report_issues:
-                        print(
+                        self._print(
                             f"Target name issue: '{seq.target}' contains spaces (sequence {seq.id}, visit {visit.id})"
                         )
 
         return issues
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+    def _print(self, *args, **kwargs) -> None:
+        """Route a ``print``-style call through the run logger.
+
+        Joins *args* like ``print`` and logs the result. Messages whose
+        (stripped) text begins with "warning" or "error" are logged at
+        WARNING/ERROR level so they reach the console and the
+        ``.errors.log`` file; everything else is logged at INFO and only
+        reaches the console when ``verbose`` was set. If no run logger has
+        been configured (e.g. a bare processor in a unit test), falls back
+        to the builtin ``print``.
+        """
+        sep = kwargs.get("sep", " ")
+        message = sep.join(str(a) for a in args)
+
+        logger = getattr(self, "logger", None)
+        if logger is None:
+            print(message)
+            return
+
+        head = message.lstrip().lower()
+        if head.startswith("error"):
+            logger.error(message)
+        elif head.startswith("warning"):
+            logger.warning(message)
+        else:
+            logger.info(message)
+
+    def _setup_run_logging(
+        self,
+        calendar: ScienceCalendar,
+        verbose: bool,
+        log_path: Optional[Any] = None,
+    ) -> None:
+        """Configure ``self.logger`` for a processing run.
+
+        Two log files are written alongside (and named after) the input
+        calendar: ``<stem>.log`` captures everything, and
+        ``<stem>.errors.log`` captures only warnings/errors and is created
+        lazily (so it never appears when the run is clean).
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Used to discover the source calendar path via
+            ``metadata['source_path']`` when *log_path* is not given.
+        verbose : bool
+            When True the console receives INFO and above; otherwise the
+            console receives only WARNING and above. The ``.log`` file
+            always receives INFO and above.
+        log_path : str or pathlib.Path, optional
+            Explicit base path for the log file. Its suffix is replaced with
+            ``.log``. If omitted, the calendar's ``source_path`` is used.
+            If neither is available, only console logging is configured.
+        """
+        logger = logging.getLogger(f"shortschedule.run.{id(self)}")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        # Drop any handlers from a previous run on this processor.
+        for handler in list(logger.handlers):
+            logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+
+        # No per-entry timestamps; the run start time is recorded once in the
+        # log file header instead (see below).
+        fmt = logging.Formatter("%(message)s")
+
+        # Console handler: gated by verbose for INFO, always shows warnings.
+        console = logging.StreamHandler()
+        console.setLevel(logging.INFO if verbose else logging.WARNING)
+        console.setFormatter(fmt)
+        logger.addHandler(console)
+
+        # Resolve the log file base path.
+        base = log_path
+        if base is None:
+            source = (calendar.metadata or {}).get("source_path")
+            base = source
+        if base is not None:
+            base = Path(base)
+            log_file = base.with_suffix(".log")
+            errors_file = base.with_suffix(".errors.log")
+
+            # Write a header recording the run start time in UTC and US
+            # Eastern, so individual entries need not carry timestamps. The
+            # FileHandler below then appends to this file.
+            now_utc = datetime.now(timezone.utc)
+            utc_str = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
+            if ZoneInfo is not None:
+                eastern = now_utc.astimezone(ZoneInfo("America/New_York"))
+                eastern_str = eastern.strftime("%Y-%m-%d %H:%M:%S %Z")
+            else:  # pragma: no cover - zoneinfo missing
+                eastern_str = "unavailable (zoneinfo not installed)"
+            with open(log_file, "w", encoding="utf-8") as handle:
+                handle.write("=" * 70 + "\n")
+                handle.write("Short-term scheduler run log\n")
+                handle.write(f"Run start (UTC):     {utc_str}\n")
+                handle.write(f"Run start (Eastern): {eastern_str}\n")
+                handle.write("=" * 70 + "\n\n")
+
+            file_handler = logging.FileHandler(
+                log_file, mode="a", encoding="utf-8"
+            )
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+
+            # delay=True means the file is only created on first emit, so a
+            # clean run leaves no (empty) errors log behind.
+            errors_handler = logging.FileHandler(
+                errors_file, mode="w", encoding="utf-8", delay=True
+            )
+            errors_handler.setLevel(logging.WARNING)
+            errors_handler.setFormatter(fmt)
+            logger.addHandler(errors_handler)
+
+            self.logger = logger
+            self.logger.info(f"Logging to {log_file}")
+        else:
+            self.logger = logger
+
+    @staticmethod
+    def _seq_prefix(visit_id: Any, seq: ObservationSequence) -> str:
+        """Return the standard log prefix for an observation.
+
+        Format: ``<start datetime>-<target id>-<visit id>-<observation id>``.
+        """
+        try:
+            start = seq.start_time.isot
+        except Exception:
+            start = str(getattr(seq, "start_time", "?"))
+        return f"{start}-{seq.target}-{visit_id}-{seq.id}"
+
+    def _progress(self, iterable, desc: str, total: Optional[int] = None):
+        """Wraps iterables in a tqdm progress bar when available.
+
+        Falls back to the plain iterable if ``tqdm`` is not installed. The
+        bar auto-disables on non-interactive streams (``disable=None``), so
+        it shows during real runs but stays silent under pytest/CI.
+        """
+        if tqdm is None:
+            return iterable
+        return tqdm(
+            iterable, desc=desc, total=total, disable=None, leave=False
+        )
+
+    def _progress_bar(self, total: int, desc: str):
+        """Return a manually-updated progress bar (or a no-op fallback).
+
+        Use when a single bar must span a nested loop: call ``.update()``
+        per item and ``.close()`` when done.
+        """
+        if tqdm is None:
+            return _NullProgress()
+        return tqdm(total=total, desc=desc, disable=None, leave=False)
 
     def _initialize_gap_report(self) -> None:
         """Initialize/reset the gap report structure."""
@@ -2454,10 +3909,10 @@ class ScheduleProcessor:
                 original_gaps.append(gap_info)
                 total_gap_time += gap_duration
 
-                if verbose:
-                    print(
-                        f"Original gap: {gap_duration:.1f} min between {current_seq.id} and {next_seq.id}"
-                    )
+                self._print(
+                    f"Original gap: {gap_duration:.1f} min between "
+                    f"{current_seq.id} and {next_seq.id}"
+                )
 
         self.gap_report["visibility_analysis"]["original_gaps"] = original_gaps
         self.gap_report["processing_summary"][
@@ -2511,43 +3966,43 @@ class ScheduleProcessor:
         report = self.gap_report
         summary = report["processing_summary"]
 
-        print("\n" + "=" * 60)
-        print("VISIBILITY GAP ANALYSIS SUMMARY")
-        print("=" * 60)
+        self._print("\n" + "=" * 60)
+        self._print("VISIBILITY GAP ANALYSIS SUMMARY")
+        self._print("=" * 60)
 
-        print("\nORIGINAL CALENDAR:")
-        print(
+        self._print("\nORIGINAL CALENDAR:")
+        self._print(
             f"  Total Sequences: {report['original_calendar_stats']['total_sequences']}"
         )
-        print(
+        self._print(
             f"  Total Duration: {report['original_calendar_stats']['total_duration_hours']:.1f} hours"
         )
-        print(
+        self._print(
             f"  Duty Cycle: {report['original_calendar_stats']['duty_cycle_percent']:.1f}%"
         )
 
-        print("\nPROCESSED CALENDAR:")
-        print(
+        self._print("\nPROCESSED CALENDAR:")
+        self._print(
             f"  Total Sequences: {report['processed_calendar_stats']['total_sequences']}"
         )
-        print(
+        self._print(
             f"  Total Duration: {report['processed_calendar_stats']['total_duration_hours']:.1f} hours"
         )
-        print(
+        self._print(
             f"  Duty Cycle: {report['processed_calendar_stats']['duty_cycle_percent']:.1f}%"
         )
 
-        print("\nIMPROVEMENTS:")
-        print(
+        self._print("\nIMPROVEMENTS:")
+        self._print(
             f"  Duration Gained: {summary.get('duration_improvement_hours', 0):.1f} hours"
         )
-        print(
+        self._print(
             f"  Duty Cycle Improved: {summary.get('duty_cycle_improvement_percent', 0):.1f}%"
         )
-        print(f"  Sequences Modified: {summary.get('sequences_modified', 0)}")
+        self._print(f"  Sequences Modified: {summary.get('sequences_modified', 0)}")
 
         if "gaps_filled" in summary:
-            print(
+            self._print(
                 f"  Gaps Filled: {summary['gaps_filled']}/{summary['gaps_filled'] + summary['gaps_remaining']}"
             )
 
@@ -2574,18 +4029,18 @@ class ScheduleProcessor:
                 break
 
         if not target_seq:
-            print(f"Sequence {sequence_id} not found")
+            self._print(f"Sequence {sequence_id} not found")
             return
 
-        print(f"\n{'='*60}")
-        print(f"DEBUGGING SEQUENCE {sequence_id}: {target_seq.target}")
-        print(f"{'='*60}")
-        print(f"Visit ID: {target_visit_id}")
-        print(f"Start Time: {target_seq.start_time}")
-        print(f"Stop Time: {target_seq.stop_time}")
-        print(f"Duration: {target_seq.duration.sec/60:.1f} minutes")
-        print(f"Target: {target_seq.target}")
-        print(f"RA/Dec: {target_seq.ra:.3f}, {target_seq.dec:.3f}")
+        self._print(f"\n{'='*60}")
+        self._print(f"DEBUGGING SEQUENCE {sequence_id}: {target_seq.target}")
+        self._print(f"{'='*60}")
+        self._print(f"Visit ID: {target_visit_id}")
+        self._print(f"Start Time: {target_seq.start_time}")
+        self._print(f"Stop Time: {target_seq.stop_time}")
+        self._print(f"Duration: {target_seq.duration.sec/60:.1f} minutes")
+        self._print(f"Target: {target_seq.target}")
+        self._print(f"RA/Dec: {target_seq.ra:.3f}, {target_seq.dec:.3f}")
 
         # Check visibility minute by minute
         n_mins = int(np.rint(target_seq.duration.sec / 60.0))
@@ -2597,15 +4052,15 @@ class ScheduleProcessor:
 
         vis = self.visibility.get_visibility(target_coord, times)
 
-        print("\nMinute-by-minute visibility:")
+        self._print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):
             status = "✓ VISIBLE" if visible else "✗ NOT VISIBLE"
-            print(f"  Minute {i+1}: {time.isot} - {status}")
+            self._print(f"  Minute {i+1}: {time.isot} - {status}")
 
-        print("\nVisibility Summary:")
-        print(f"  Total minutes: {len(vis)}")
-        print(f"  Visible minutes: {np.sum(vis)}")
-        print(f"  Visibility fraction: {np.sum(vis)/len(vis):.3f}")
+        self._print("\nVisibility Summary:")
+        self._print(f"  Total minutes: {len(vis)}")
+        self._print(f"  Visible minutes: {np.sum(vis)}")
+        self._print(f"  Visibility fraction: {np.sum(vis)/len(vis):.3f}")
 
         return {
             "sequence": target_seq,
@@ -2688,7 +4143,7 @@ class ScheduleProcessor:
                 overlaps.append(overlap_issue)
 
                 if report_issues:
-                    print(message)
+                    self._print(message)
 
         return overlaps
 
@@ -2813,53 +4268,53 @@ class ScheduleProcessor:
 
         # Report issues if requested
         if report_issues:
-            print("\n" + "=" * 60)
-            print("SEQUENCE TIMING VALIDATION REPORT")
-            print("=" * 60)
+            self._print("\n" + "=" * 60)
+            self._print("SEQUENCE TIMING VALIDATION REPORT")
+            self._print("=" * 60)
 
             summary = issues["timing_summary"]
-            print(
+            self._print(
                 f"Total sequences analyzed: " f"{summary['total_sequences']}"
             )
-            print(f"Total timing issues found: " f"{summary['total_issues']}")
-            print()
+            self._print(f"Total timing issues found: " f"{summary['total_issues']}")
+            self._print()
 
             if issues["overlaps"]:
-                print(f"OVERLAPS ({len(issues['overlaps'])} found):")
+                self._print(f"OVERLAPS ({len(issues['overlaps'])} found):")
                 for i, ov in enumerate(issues["overlaps"]):
-                    print(f"  {i+1}. {ov['message']}")
+                    self._print(f"  {i+1}. {ov['message']}")
             else:
-                print("\u2713 OVERLAPS: None found")
+                self._print("\u2713 OVERLAPS: None found")
 
-            print()
+            self._print()
 
             if issues["short_sequences"]:
-                print(
+                self._print(
                     f"SHORT SEQUENCES "
                     f"({len(issues['short_sequences'])} found, "
                     f"< {min_dur_min:.0f} min):"
                 )
                 for i, sh in enumerate(issues["short_sequences"]):
-                    print(f"  {i+1}. {sh['message']}")
+                    self._print(f"  {i+1}. {sh['message']}")
             else:
-                print("\u2713 SHORT SEQUENCES: None found")
+                self._print("\u2713 SHORT SEQUENCES: None found")
 
-            print()
+            self._print()
 
             if issues["large_gaps"]:
-                print(
+                self._print(
                     f"LARGE GAPS ({len(issues['large_gaps'])} "
                     f"found, > 2 min):"
                 )
                 for i, gap in enumerate(issues["large_gaps"][:5]):
-                    print(f"  {i+1}. {gap['message']}")
+                    self._print(f"  {i+1}. {gap['message']}")
                 if len(issues["large_gaps"]) > 5:
-                    print(
+                    self._print(
                         f"     ... and "
                         f"{len(issues['large_gaps']) - 5} more"
                     )
             else:
-                print("\u2713 LARGE GAPS: None found")
+                self._print("\u2713 LARGE GAPS: None found")
 
         return issues
 
@@ -2880,19 +4335,21 @@ class ScheduleProcessor:
         """
         issues = []
 
-        # Compute effective overhead budget (max of VDA/NIRDA)
-        pre_oh_sec = max(
-            getattr(self, "vda_pre_sequence_overhead", 0 * u.s).to(u.s).value,
-            getattr(self, "nirda_pre_sequence_overhead", 0 * u.s)
-            .to(u.s)
-            .value,
-        )
-        post_oh_sec = max(
-            getattr(self, "vda_post_sequence_overhead", 0 * u.s).to(u.s).value,
-            getattr(self, "nirda_post_sequence_overhead", 0 * u.s)
-            .to(u.s)
-            .value,
-        )
+        # Compute effective overhead budget (max of VDA/NIRDA). A bare
+        # processor without an OverheadTiming falls back to zero overhead.
+        overhead = getattr(self, "overhead", None)
+        if overhead is None:
+            pre_oh_sec = 0.0
+            post_oh_sec = 0.0
+        else:
+            pre_oh_sec = max(
+                overhead.visda_pre_overhead_time.to(u.s).value,
+                overhead.nirda_pre_overhead_time.to(u.s).value,
+            )
+            post_oh_sec = max(
+                overhead.visda_post_overhead_time.to(u.s).value,
+                overhead.nirda_post_overhead_time.to(u.s).value,
+            )
         total_oh_sec = pre_oh_sec + post_oh_sec
 
         for visit in calendar.visits:
@@ -2955,7 +4412,7 @@ class ScheduleProcessor:
                                 }
                             )
                             if report_issues:
-                                print(msg)
+                                self._print(msg)
 
                         if num_frames is not None:
                             try:
@@ -3007,7 +4464,7 @@ class ScheduleProcessor:
                                         }
                                     )
                                     if report_issues:
-                                        print(msg)
+                                        self._print(msg)
                             except (ValueError, TypeError):
                                 pass
 
@@ -3053,7 +4510,7 @@ class ScheduleProcessor:
                                         }
                                     )
                                     if report_issues:
-                                        print(msg)
+                                        self._print(msg)
                             except (ValueError, TypeError):
                                 pass
 
@@ -3103,7 +4560,7 @@ class ScheduleProcessor:
                                 }
                             )
                             if report_issues:
-                                print(msg)
+                                self._print(msg)
 
         return issues
 
@@ -3198,7 +4655,7 @@ class ScheduleProcessor:
                                 }
                                 issues.append(issue)
                                 if report_issues:
-                                    print(
+                                    self._print(
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod=2 but "
                                         f"numPredefinedStarRois={num_predefined_val} (should be 0)"
@@ -3214,7 +4671,7 @@ class ScheduleProcessor:
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(
+                                self._print(
                                     f"STAR ROI ISSUE: sequence {seq.id} "
                                     f"numPredefinedStarRois='{num_predefined}' cannot be parsed as integer"
                                 )
@@ -3233,7 +4690,7 @@ class ScheduleProcessor:
                                 }
                                 issues.append(issue)
                                 if report_issues:
-                                    print(
+                                    self._print(
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod=2 but "
                                         f"MaxNumStarRois={max_num_val} (should be > 0)"
@@ -3249,7 +4706,7 @@ class ScheduleProcessor:
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(
+                                self._print(
                                     f"STAR ROI ISSUE: sequence {seq.id} "
                                     f"MaxNumStarRois='{max_num}' cannot be parsed as integer"
                                 )
@@ -3272,7 +4729,7 @@ class ScheduleProcessor:
                                 }
                                 issues.append(issue)
                                 if report_issues:
-                                    print(
+                                    self._print(
                                         f"STAR ROI ISSUE: sequence {seq.id} "
                                         f"StarRoiDetMethod={method}, "
                                         f"MaxNumStarRois ({max_num_val}) != "
@@ -3291,7 +4748,7 @@ class ScheduleProcessor:
                             }
                             issues.append(issue)
                             if report_issues:
-                                print(
+                                self._print(
                                     f"STAR ROI ISSUE: sequence {seq.id} "
                                     f"numPredefinedStarRois='{num_predefined}' or "
                                     f"MaxNumStarRois='{max_num}' cannot be parsed as integers"
@@ -3375,7 +4832,7 @@ class ScheduleProcessor:
                         }
                     )
                     if report_issues:
-                        print(msg)
+                        self._print(msg)
 
         return issues
 
@@ -3392,7 +4849,7 @@ class ScheduleProcessor:
                     status = "PASS" if info["passes"] else "FAIL"
                     side = info.get("side", "")
                     side_label = f" [{side}]" if side else ""
-                    print(
+                    self._print(
                         f"{indent}{body:<12} {status}  "
                         f"required: >= {info['required_deg']:.1f}°"
                         f"{side_label}  "
@@ -3402,7 +4859,7 @@ class ScheduleProcessor:
             nv = item.get("non_visible_minutes")
             tot = item.get("total_minutes")
             if frac is not None:
-                print(
+                self._print(
                     f"{indent}{'visibility':<12}       "
                     f"required: 100%  "
                     f"actual: {frac:.1%}  "
@@ -3413,7 +4870,7 @@ class ScheduleProcessor:
             dur = item.get("duration_minutes")
             req = item.get("minimum_required_minutes")
             if dur is not None and req is not None:
-                print(
+                self._print(
                     f"{indent}duration     "
                     f"required: >= {req:.0f} min  "
                     f"actual: {dur:.1f} min  "
@@ -3423,7 +4880,7 @@ class ScheduleProcessor:
         elif category == "large_gaps":
             gap = item.get("gap_duration_minutes")
             if gap is not None:
-                print(
+                self._print(
                     f"{indent}gap          "
                     f"required: <= 2.0 min  "
                     f"actual: {gap:.1f} min  "
@@ -3433,7 +4890,7 @@ class ScheduleProcessor:
         elif category == "overlaps":
             ov = item.get("overlap_duration_minutes")
             if ov is not None:
-                print(
+                self._print(
                     f"{indent}overlap      "
                     f"required: 0.0 min  "
                     f"actual: {ov:.1f} min"
@@ -3444,7 +4901,7 @@ class ScheduleProcessor:
             eff_dur = item.get("effective_duration_seconds")
             oh = item.get("overhead_seconds")
             if seq_dur is not None:
-                print(
+                self._print(
                     f"{indent}sequence     "
                     f"{seq_dur:.0f}s total  "
                     f"- {oh:.0f}s overhead  "
@@ -3452,7 +4909,7 @@ class ScheduleProcessor:
                 )
             if "exposure_seconds" in item:
                 exp = item["exposure_seconds"]
-                print(
+                self._print(
                     f"{indent}single exp   "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {exp:.3f}s"
@@ -3460,7 +4917,7 @@ class ScheduleProcessor:
             if "total_exposure_seconds" in item:
                 tot = item["total_exposure_seconds"]
                 max_f = item.get("suggested_max_frames", "?")
-                print(
+                self._print(
                     f"{indent}total exp    "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {tot:.1f}s  "
@@ -3468,7 +4925,7 @@ class ScheduleProcessor:
                 )
             if "coadd_exposure_seconds" in item:
                 coadd = item["coadd_exposure_seconds"]
-                print(
+                self._print(
                     f"{indent}coadd exp    "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {coadd:.1f}s"
@@ -3476,7 +4933,7 @@ class ScheduleProcessor:
             if "value_seconds" in item:
                 val = item["value_seconds"]
                 field = item.get("field", "?")
-                print(
+                self._print(
                     f"{indent}{field}  "
                     f"required: <= {eff_dur:.0f}s  "
                     f"actual: {val:.3f}s"
@@ -3486,7 +4943,7 @@ class ScheduleProcessor:
             spread = item.get("max_difference_deg")
             suggested = item.get("suggested_roll")
             if spread is not None:
-                print(
+                self._print(
                     f"{indent}roll spread  "
                     f"required: <= 0.001°  "
                     f"actual: {spread:.3f}°  "
@@ -3496,7 +4953,7 @@ class ScheduleProcessor:
         elif category == "target_name":
             tgt = item.get("target", "")
             if tgt:
-                print(
+                self._print(
                     f"{indent}target name  "
                     f"required: no spaces  "
                     f"actual: '{tgt}'"
@@ -3568,7 +5025,7 @@ class ScheduleProcessor:
         status = "VALID" if total == 0 else "INVALID"
 
         # ── Print ──
-        print(
+        self._print(
             f"\n{'=' * 60}\n"
             f"  VALIDATION SUMMARY: {status} "
             f"({total} issues)\n"
@@ -3576,7 +5033,7 @@ class ScheduleProcessor:
         )
 
         if total == 0:
-            print("  All checks passed.\n")
+            self._print("  All checks passed.\n")
             return {
                 "status": status,
                 "counts": counts,
@@ -3584,7 +5041,7 @@ class ScheduleProcessor:
             }
 
         for cat, cnt in counts.items():
-            print(f"\n  [{cat.upper()}] — {cnt} issue(s)")
+            self._print(f"\n  [{cat.upper()}] — {cnt} issue(s)")
             items = results[cat]
 
             # Sequence timing has a nested structure
@@ -3597,7 +5054,7 @@ class ScheduleProcessor:
                     for item in items.get(sub_key, []):
                         msg = item.get("message", "")
                         if msg:
-                            print(f"    • {msg}")
+                            self._print(f"    • {msg}")
                         self._print_issue_details(sub_key, item)
                 continue
 
@@ -3606,10 +5063,10 @@ class ScheduleProcessor:
                 for item in items:
                     msg = item.get("message", "")
                     if msg:
-                        print(f"    • {msg}")
+                        self._print(f"    • {msg}")
                     self._print_issue_details(cat, item)
 
-        print(f"\n{'=' * 60}\n")
+        self._print(f"\n{'=' * 60}\n")
         return {
             "status": status,
             "counts": counts,
@@ -3622,17 +5079,17 @@ class ScheduleProcessor:
         summary = issues["timing_summary"]
 
         if summary["total_issues"] == 0:
-            print("✓ All sequence timing validation checks passed")
+            self._print("✓ All sequence timing validation checks passed")
         else:
-            print(f"✗ Found {summary['total_issues']} timing issues:")
+            self._print(f"✗ Found {summary['total_issues']} timing issues:")
             if summary["overlaps_found"]:
-                print(f"  - {summary['overlaps_found']} overlaps")
+                self._print(f"  - {summary['overlaps_found']} overlaps")
             if summary["short_sequences_found"]:
-                print(
+                self._print(
                     f"  - {summary['short_sequences_found']} sequences too short"
                 )
             if summary["large_gaps_found"]:
-                print(f"  - {summary['large_gaps_found']} large gaps")
+                self._print(f"  - {summary['large_gaps_found']} large gaps")
 
 
 def _find_false_blocks(vis_bool, time_grid, return_index=False):
