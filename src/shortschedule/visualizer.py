@@ -1691,9 +1691,15 @@ class ScheduleVisualizer:
         show_sequence_labels=False,
         title="Schedule by Priority",
     ):
-        """Create a Gantt chart with proper size limits to prevent oversized images."""
+        """Create a Gantt chart of the calendar coloured by priority.
 
-        # Check time span and warn if too large
+        Always returns a single ``Figure``, whatever the calendar spans, so
+        callers can rely on ``fig.savefig(...)``. Splitting a long calendar
+        across several figures is the job of
+        :meth:`plot_gantt_timeline_by_priority_windowed`, which is explicit
+        about returning a list.
+        """
+
         all_times = []
         for visit in calendar.visits:
             for seq in visit.sequences:
@@ -1707,15 +1713,6 @@ class ScheduleVisualizer:
 
         time_span = max(all_times) - min(all_times)
         time_span_hours = time_span.total_seconds() / 3600
-
-        # If time span is too large, automatically window it
-        if time_span_hours > 168:  # More than 1 week
-            print(
-                f"Time span too large ({time_span_hours/24:.1f} days). Creating windowed plots..."
-            )
-            return self._create_windowed_priority_plots(
-                calendar, figsize, show_sequence_labels, title
-            )
 
         # Create figure with controlled size
         fig, ax = plt.subplots(1, 1, figsize=figsize)
@@ -1789,91 +1786,6 @@ class ScheduleVisualizer:
         # Limit number of ticks to prevent overcrowding
         # ax.locator_params(axis="x", nbins=10)  # Removed: not supported for date locators
         plt.xticks(rotation=45)
-
-    def _create_windowed_priority_plots(
-        self, calendar, figsize, show_sequence_labels, title
-    ):
-        """Create multiple smaller plots for large time spans."""
-        # Standard library
-
-        all_times = []
-        for visit in calendar.visits:
-            for seq in visit.sequences:
-                all_times.extend(
-                    [seq.start_time.datetime, seq.stop_time.datetime]
-                )
-
-        start_date = min(all_times)
-        end_date = max(all_times)
-        total_days = (end_date - start_date).total_seconds() / 86400
-
-        # Create 3-day windows
-        window_days = 3
-        figures = []
-        current_date = start_date
-        window_num = 1
-
-        print(
-            f"Creating {int(np.ceil(total_days/window_days))} plots for {total_days:.1f} day span..."
-        )
-
-        while current_date < end_date:
-            window_end = min(
-                current_date + timedelta(days=window_days), end_date
-            )
-
-            # Filter calendar for this window
-            windowed_sequences = []
-            for visit in calendar.visits:
-                windowed_visit_sequences = []
-                for seq in visit.sequences:
-                    if (
-                        seq.start_time.datetime < window_end
-                        and seq.stop_time.datetime > current_date
-                    ):
-                        windowed_visit_sequences.append(seq)
-
-                if windowed_visit_sequences:
-                    windowed_visit = Visit(
-                        id=visit.id, sequences=windowed_visit_sequences
-                    )
-                    windowed_sequences.append(windowed_visit)
-
-            if windowed_sequences:
-                # Create windowed calendar
-                windowed_calendar = ScienceCalendar(
-                    metadata=calendar.metadata, visits=windowed_sequences
-                )
-
-                window_title = f"{title} - Days {window_num}-{window_num+2}"
-
-                # Create smaller figure for window
-                fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-                fig.set_dpi(100)
-
-                try:
-                    self._plot_gantt_by_priority(
-                        windowed_calendar,
-                        ax,
-                        window_title,
-                        show_sequence_labels=show_sequence_labels,
-                    )
-                    self._format_time_axis_safe(ax, windowed_calendar)
-                    self._add_priority_legend(fig, windowed_calendar)
-
-                    # fig.suptitle(window_title, fontsize=12, y=0.95)
-                    fig.set_constrained_layout(True)
-
-                    figures.append(fig)
-
-                except Exception as e:
-                    print(f"Error creating window {window_num}: {e}")
-                    plt.close(fig)
-
-            current_date = window_end
-            window_num += 3
-
-        return figures
 
     # Alternative: Create a summary plot instead of detailed timeline
     def plot_priority_summary_only(self, calendar, figsize=(12, 8)):

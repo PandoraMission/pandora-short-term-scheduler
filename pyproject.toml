@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shortschedule"
-version = "1.2.1"
+version = "1.2.2"
 description = ""
 authors = ["Tom Barclay <barclay.astro@gmail.com>"]
 readme = "README.md"
@@ -14,7 +14,7 @@ numpy = "^2.1.0"
 pandas = "^2.2.3"
 appdirs = "^1.4.4"
 astropy = "^7.1.1"
-pandoravisibility = {git = "https://github.com/jrenaud90/pandora-visibility.git", branch = "dynamic-earth-limb"}
+pandoravisibility = {git = "https://github.com/PandoraMission/pandora-visibility.git", branch = "main"}
 requests = "^2.32.5"
 tqdm = "^4.66.0"
 
