@@ -400,3 +400,25 @@ class TestPointingPlots:
         second = visualizer._get_pointing_colors(["A", "B"])
 
         assert first == second
+
+    def test_a_line_only_ever_draws_its_own_steps(self, visualizer):
+        """No line may include a step belonging to another label.
+
+        """
+        import matplotlib.pyplot as plt
+
+        from shortschedule.pointing import BODIES
+
+        calendar = _make_calendar()
+        timeline = visualizer.get_pointing_timeline(calendar)
+        colors = visualizer._get_pointing_colors(timeline.targets)
+        figure, ax = plt.subplots()
+        visualizer._draw_pointing_series(
+            ax, timeline, timeline.angles[("Boresight", BODIES[0])], colors, 1.0
+        )
+
+        drawn = sorted(len(line.get_xdata()) for line in ax.lines)
+        expected = sorted(stop - start for start, stop, _ in timeline.segments)
+
+        assert drawn == expected
+        assert sum(drawn) == len(timeline.times)

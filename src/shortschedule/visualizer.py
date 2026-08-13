@@ -2753,9 +2753,6 @@ class ScheduleVisualizer:
     def _draw_pointing_series(self, ax, timeline, values, colors, linewidth):
         """Draw one series, one line per observation or idle stretch.
 
-        Segments are extended by a step so consecutive stretches join up
-        rather than showing a one-step hole at every boundary.
-
         Parameters
         ----------
         ax : matplotlib.axes.Axes
@@ -2769,20 +2766,23 @@ class ScheduleVisualizer:
         from .pointing import IDLE_LABEL
 
         times = mdates.date2num(timeline.times.datetime)
-        n_steps = len(times)
         for start, stop, label in timeline.segments:
-            end = min(stop + 1, n_steps)
             idle = label == IDLE_LABEL
             # Idle is roughly half the week and swings a full orbit's
             # worth every 97 min, so it is drawn thin, faint and
             # underneath, or it hides the observations entirely.
             ax.plot(
-                times[start:end],
-                values[start:end],
+                times[start:stop],
+                values[start:stop],
                 color="black" if idle else colors.get(label, "gray"),
                 linewidth=linewidth * (0.45 if idle else 1.0),
                 alpha=0.3 if idle else 0.95,
                 zorder=1 if idle else 3,
+                # A single-step stretch has no line to draw and would
+                # vanish; the short idle gaps between observations that
+                # merging did not absorb are exactly that.
+                marker="." if stop - start == 1 else None,
+                markersize=1.5,
                 solid_capstyle="butt",
             )
 
