@@ -703,6 +703,7 @@ class ScheduleProcessor:
     # Tolerances used when deciding whether two sequences can be merged.
     _MERGE_ADJACENCY_TOL_SEC = 1.0  # max stop-to-start gap (seconds)
     _MERGE_POINTING_TOL_DEG = 1e-6  # max RA/Dec difference (degrees)
+    _MERGE_ROLL_TOL_DEG = 1e-6  # max roll difference (degrees)
 
     def _renumber_ids(
         self, calendar: ScienceCalendar, verbose: bool = False
@@ -769,21 +770,31 @@ class ScheduleProcessor:
     def _merge_similar_observations(
         self, calendar: ScienceCalendar, verbose: bool = False
     ) -> ScienceCalendar:
-        """Merge back-to-back same-target sequences within each visit.
+        """Merge same-target sequences within each visit.
 
-        Two consecutive sequences (in start-time order) inside the same
-        visit are merged when they:
+        Two consecutive sequences (in start-time order) are merged when
+        all of the following hold:
 
-        1. belong to the same visit (sequences are grouped per visit),
-        2. observe the same target with the same pointing (RA/Dec), and
-        3. are contiguous in time, the second sequence starts at (within
-           a tolerance of) the first sequence's stop time.
+        1. they belong to the same visit,
+        2. they observe the same target at the same pointing (RA/Dec),
+        3. they fly the same roll, since one observation has one attitude,
+        4. nothing else is scheduled between them, checked across the whole
+           calendar because visits can interleave in time, and
+        5. they are contiguous, *or* the gap between them is a keepout
+           violation short enough to ride out under the configured gap
+           tolerance.
+
+        Point 5 is what stops a brief star-tracker dropout splitting a
+        target in two: the same dropout occurring a minute later, inside an
+        observation, is simply tolerated, so an observation boundary
+        happening to land on it should not change the outcome. A merged
+        observation therefore can contain minutes that fail a keepout, and
+        ``validate_visibility`` will report them.
 
         The merged sequence keeps the first sequence's identity, priority,
         and payload parameters, and extends its ``stop_time`` to the second
         sequence's ``stop_time``. Merging is applied transitively, so a run
-        of three or more contiguous same-target sequences collapses into a
-        single sequence.
+        of three or more eligible sequences collapses into one.
 
         Parameters
         ----------
@@ -801,6 +812,15 @@ class ScheduleProcessor:
         merged_count = 0
         new_visits: List[Visit] = []
 
+        # Every observation's span, so a pair separated by a gap is only
+        # joined when nothing else is scheduled inside that gap. Taken
+        # across the whole calendar, not just the visit, because visits can
+        # interleave in time.
+        occupied = [
+            (seq.start_time, seq.stop_time)
+            for _, seq in self._ordered_sequences(calendar)
+        ]
+
         for visit in calendar.visits:
             # Process sequences in chronological order so "right after each
             # other" is well defined regardless of input ordering.
@@ -808,7 +828,9 @@ class ScheduleProcessor:
 
             merged_sequences: List[ObservationSequence] = []
             for seq in ordered:
-                if merged_sequences and self._can_merge(merged_sequences[-1], seq):
+                if merged_sequences and self._can_merge(
+                    merged_sequences[-1], seq, visit.id, occupied
+                ):
                     # Extend the previous (kept) sequence over this one.
                     previous = merged_sequences[-1]
                     self._print(
@@ -837,7 +859,11 @@ class ScheduleProcessor:
         )
 
     def _can_merge(
-        self, first: ObservationSequence, second: ObservationSequence
+        self,
+        first: ObservationSequence,
+        second: ObservationSequence,
+        visit_id: Any = None,
+        occupied: Optional[List[Tuple[Time, Time]]] = None,
     ) -> bool:
         """Return True if ``second`` can be merged into ``first``.
 
@@ -854,9 +880,82 @@ class ScheduleProcessor:
         ):
             return False
 
-        # Contiguous in time: second starts when first stops.
+        # Same roll: one observation flies one attitude, so two different
+        # rolls cannot become one observation. Compared as an angle, since
+        # -180 and +180 are the same attitude.
+        if (first.roll is None) != (second.roll is None):
+            return False
+        if first.roll is not None:
+            separation = abs(
+                ((first.roll - second.roll + 180.0) % 360.0) - 180.0
+            )
+            if separation > self._MERGE_ROLL_TOL_DEG:
+                return False
+
         gap_sec = (second.start_time - first.stop_time).sec
-        return abs(gap_sec) <= self._MERGE_ADJACENCY_TOL_SEC
+        if gap_sec < -self._MERGE_ADJACENCY_TOL_SEC:
+            return False  # overlapping rather than adjacent
+        if gap_sec <= self._MERGE_ADJACENCY_TOL_SEC:
+            return True
+
+        # A real gap between them. It can still be absorbed when nothing
+        # else is scheduled inside it and the keepout violation that opened
+        # it is short enough to ride out mid-observation anyway
+        if occupied is not None and any(
+            start < second.start_time - self._MERGE_ADJACENCY_TOL_SEC * u.s
+            and stop > first.stop_time + self._MERGE_ADJACENCY_TOL_SEC * u.s
+            for start, stop in occupied
+        ):
+            return False
+
+        return self._gap_is_bridgeable(first, second, visit_id)
+
+    def _gap_is_bridgeable(
+        self,
+        first: ObservationSequence,
+        second: ObservationSequence,
+        visit_id: Any = None,
+    ) -> bool:
+        """Whether the gap between two observations is short enough to absorb.
+
+        The gap is not necessarily dark throughout: growth stops at the
+        first minute it cannot use, so a visible minute can be left stranded
+        against the neighbour. The tolerance is therefore judged on the dark
+        minutes the merge would actually swallow, classified at the first of
+        them, rather than on the whole gap measured from its first minute.
+        """
+        minutes = int(np.rint((second.start_time - first.stop_time).sec / 60.0))
+        if minutes <= 0:
+            return True
+        if self.earthlimb_gap_tolerance == 0 and self.st_gap_tolerance == 0:
+            # No violation is tolerable, so no gap can be bridged and there
+            # is no point asking the visibility model about it.
+            return False
+
+        target_coord = SkyCoord(first.ra, first.dec, frame="icrs", unit="deg")
+        times = first.stop_time + np.arange(minutes) * u.min
+        roll = first.roll
+        if roll is None:
+            roll = self._computed_target_rolls.get(visit_id, {}).get(
+                first.target
+            )
+
+        visible = np.atleast_1d(
+            np.asarray(
+                self.visibility.get_visibility(
+                    target_coord,
+                    times,
+                    **({} if roll is None else {"roll": roll * u.deg}),
+                )
+            )
+        )
+        dark = np.flatnonzero(~visible)
+        if dark.size == 0:
+            return True  # nothing to ride out
+
+        return self._is_gap_tolerable(
+            target_coord, times, int(dark[0]), int(dark.size), roll=roll
+        )
 
     def _process_all_sequences(
         self, calendar: ScienceCalendar, verbose: bool = False

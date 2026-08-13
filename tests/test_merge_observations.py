@@ -55,9 +55,18 @@ def _make_calendar(sequences, visit_id="v1"):
     return ScienceCalendar(metadata={}, visits=[visit])
 
 
-def _bare_processor():
-    """A ScheduleProcessor with no Visibility; merge needs no other state."""
-    return ScheduleProcessor.__new__(ScheduleProcessor)
+def _bare_processor(earthlimb_gap_tolerance=0, st_gap_tolerance=0):
+    """A ScheduleProcessor carrying only what merging looks at.
+
+    The tolerances default to zero, so a gap between two observations
+    prevents merging unless a test opts into bridging one.
+    """
+    proc = ScheduleProcessor.__new__(ScheduleProcessor)
+    proc.visibility = None
+    proc._computed_target_rolls = {}
+    proc.earthlimb_gap_tolerance = earthlimb_gap_tolerance
+    proc.st_gap_tolerance = st_gap_tolerance
+    return proc
 
 
 def _seq_by_id(visit, sid):
@@ -299,3 +308,136 @@ class TestProcessCalendarMergeKwarg:
             log_path=tmp_path / "run",
         )
         assert processed is not None
+
+
+# ================================================================
+# Tests: bridging a tolerable keepout gap between two observations
+# ================================================================
+
+
+class _DarkGapVis:
+    """Visibility where a named span is dark for a star-tracker reason.
+
+    A brief tracker dropout between two observations of one target is the
+    case this exists for: the same dropout inside an observation would be
+    ridden out under ``st_gap_tolerance``, so an observation boundary
+    landing on it should not change the outcome.
+    """
+
+    _st_constraint_active = True
+
+    def __init__(self, dark_from_min, dark_to_min):
+        self.dark = range(dark_from_min, dark_to_min)
+
+    def _minutes(self, times):
+        return np.rint((times - T0).sec / 60.0).astype(int)
+
+    def get_visibility(self, coord, times, roll=None):
+        return np.array(
+            [i not in self.dark for i in np.atleast_1d(self._minutes(times))],
+            dtype=bool,
+        )
+
+    def get_all_constraints(self, coord, time):
+        # Boresight is clear; the trackers are what drop out.
+        return {"moon": True, "sun": True, "earthlimb": True}
+
+    def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):
+        minutes = np.atleast_1d(self._minutes(time))
+        combined = np.array([i not in self.dark for i in minutes], dtype=bool)
+        return {
+            "passed": {
+                "combined": combined[0] if time.isscalar else combined
+            }
+        }
+
+
+def _pair_across_gap(gap_minutes=2, roll_a=30.0, roll_b=30.0):
+    """Two observations of one target separated by *gap_minutes*."""
+    first = _make_seq("s1", "TargetA", start_min=0, duration_min=20)
+    second = _make_seq(
+        "s2", "TargetA", start_min=20 + gap_minutes, duration_min=20
+    )
+    first.roll = roll_a
+    second.roll = roll_b
+    return first, second
+
+
+class TestBridgingATolerableGap:
+    def test_tolerable_tracker_dropout_is_absorbed(self):
+        """A dropout short enough to ride out joins the two observations."""
+        first, second = _pair_across_gap(gap_minutes=2)
+        proc = _bare_processor(st_gap_tolerance=12)
+        proc.visibility = _DarkGapVis(20, 22)
+        cal = _make_calendar([first, second])
+
+        result = proc._merge_similar_observations(cal)
+
+        merged = result.visits[0].sequences
+        assert len(merged) == 1
+        assert abs((merged[0].stop_time - second.stop_time).sec) < 1
+
+    def test_gap_longer_than_the_tolerance_is_not_absorbed(self):
+        first, second = _pair_across_gap(gap_minutes=20)
+        proc = _bare_processor(st_gap_tolerance=12)
+        proc.visibility = _DarkGapVis(20, 40)
+        cal = _make_calendar([first, second])
+
+        result = proc._merge_similar_observations(cal)
+
+        assert len(result.visits[0].sequences) == 2
+
+    def test_different_rolls_are_never_joined(self):
+        """One observation flies one attitude."""
+        first, second = _pair_across_gap(
+            gap_minutes=2, roll_a=30.0, roll_b=95.0
+        )
+        proc = _bare_processor(st_gap_tolerance=12)
+        proc.visibility = _DarkGapVis(20, 22)
+        cal = _make_calendar([first, second])
+
+        result = proc._merge_similar_observations(cal)
+
+        assert len(result.visits[0].sequences) == 2
+
+    def test_equivalent_rolls_across_the_wrap_are_joined(self):
+        """-180 and +180 are the same attitude."""
+        first, second = _pair_across_gap(
+            gap_minutes=2, roll_a=180.0, roll_b=-180.0
+        )
+        proc = _bare_processor(st_gap_tolerance=12)
+        proc.visibility = _DarkGapVis(20, 22)
+        cal = _make_calendar([first, second])
+
+        result = proc._merge_similar_observations(cal)
+
+        assert len(result.visits[0].sequences) == 1
+
+    def test_an_observation_inside_the_gap_blocks_the_merge(self):
+        """Even one in another visit, since visits interleave in time."""
+        first, second = _pair_across_gap(gap_minutes=4)
+        intruder = _make_seq("x1", "Other", start_min=21, duration_min=2)
+        intruder.roll = 30.0
+        proc = _bare_processor(st_gap_tolerance=12)
+        proc.visibility = _DarkGapVis(20, 24)
+        cal = ScienceCalendar(
+            metadata={},
+            visits=[
+                Visit(id="v1", sequences=[first, second]),
+                Visit(id="v2", sequences=[intruder]),
+            ],
+        )
+
+        result = proc._merge_similar_observations(cal)
+
+        assert len(result.visits[0].sequences) == 2
+
+    def test_gap_with_no_tolerance_configured_is_not_absorbed(self):
+        first, second = _pair_across_gap(gap_minutes=2)
+        proc = _bare_processor()  # both tolerances zero
+        proc.visibility = _DarkGapVis(20, 22)
+        cal = _make_calendar([first, second])
+
+        result = proc._merge_similar_observations(cal)
+
+        assert len(result.visits[0].sequences) == 2
