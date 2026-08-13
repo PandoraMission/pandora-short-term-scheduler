@@ -175,12 +175,11 @@ processed_calendar.get_summary_stats()
 
 # Per-day ".diag" report (week summary + per-day data volumes, priority
 # counts, unique targets, observing/gap minutes and percentages, and a file
-# manifest). Written next to the input calendar as "<calendar>.diag" when
-# output_path is omitted; pass pass_data_volume_mb to report required passes.
+# manifest). Written next to the input calendar as "<calendar>.diag";
+# pass pass_data_volume_mb to report required passes.
 print("\n\nGenerating .diag report...")
 scheduler.generate_diagnostics(
     processed_calendar,
-    output_path=xml_file_path,
     pass_data_volume_mb=281.3,
 )
 
@@ -195,8 +194,11 @@ XMLWriter().write_calendar(processed_calendar, mission_phase="COM")
 # ---------------------------------------------------------------------------
 # Diagnostic plots
 # ---------------------------------------------------------------------------
+# Saved beside the long-term calendar, alongside the delivered XML, the run
+# logs and the .diag report, so a run leaves everything in one directory.
 print("\n\nCreating visualizations...")
 visualizer = ScheduleVisualizer(scheduler)
+output_dir = xml_file_path.parent
 
 # Gantt timeline coloured by observation priority; saved using the calendar name.
 priority_fig = visualizer.plot_gantt_timeline_by_priority(
@@ -205,7 +207,7 @@ priority_fig = visualizer.plot_gantt_timeline_by_priority(
     show_sequence_labels=False,
     title="Schedule by Priority",
 )
-priority_fig.savefig(f"{calendar_name}_priority.png", dpi=300)
+priority_fig.savefig(output_dir / f"{calendar_name}_priority.png", dpi=300)
 
 # Gantt timeline overlaid with visibility windows; saved using the calendar name.
 vis_fig = visualizer.plot_gantt_with_visibility(
@@ -214,10 +216,42 @@ vis_fig = visualizer.plot_gantt_with_visibility(
     show_sequence_labels=False,
     title="Schedule — Visibility Check",
 )
-vis_fig.savefig(f"{calendar_name}_visibility.png", dpi=300)
+vis_fig.savefig(output_dir / f"{calendar_name}_visibility.png", dpi=300)
 
 # Simple timeline view including visit boundaries.
 fig, ax = visualizer.plot_timeline(processed_calendar, show_visits=True)
+
+# ---------------------------------------------------------------------------
+# Pointing plots
+# ---------------------------------------------------------------------------
+# These three reconstruct where the spacecraft points for every minute of the
+# week, using the dark-idle attitude between observations, and share one
+# timeline: the first call pays for it (~10 s on a week) and the rest are free.
+# Colours are per target throughout, with black reserved for idle.
+print("\n\nCreating pointing plots...")
+
+# Boresight right ascension and declination across the week.
+pointing_fig = visualizer.plot_pointing_timeline(
+    processed_calendar,
+    title="Spacecraft Pointing",
+)
+pointing_fig.savefig(output_dir / f"{calendar_name}_pointing.png", dpi=300)
+
+# 3x3 grid: Sun/Earth/Moon angle for the boresight and each star tracker.
+keepout_fig = visualizer.plot_keepout_angles(
+    processed_calendar,
+    title="Keep-out Angles",
+)
+keepout_fig.savefig(output_dir / f"{calendar_name}_keepout_angles.png", dpi=300)
+
+# Where each axis sits in Earth-angle vs limb-illumination phase space.
+illumination_fig = visualizer.plot_earth_illumination(
+    processed_calendar,
+    title="Earth Angle vs Limb Illumination",
+)
+illumination_fig.savefig(
+    output_dir / f"{calendar_name}_earth_illumination.png", dpi=300
+)
 
 # Display all open figures.
 plt.show()

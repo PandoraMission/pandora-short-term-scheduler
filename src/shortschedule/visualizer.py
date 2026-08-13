@@ -2660,3 +2660,437 @@ class ScheduleVisualizer:
                     target_times.get(seq.target, 0) + duration_hours
                 )
         return target_times
+
+    # ------------------------------------------------------------------
+    # Pointing plots
+    #
+    # These three share one PointingTimeline, which is the expensive part
+    # (one orbit propagation and one star tracker call per pointing
+    # group).  Building it once per calendar and reusing it keeps a full
+    # set of pointing plots to roughly the cost of a single one.
+    # ------------------------------------------------------------------
+
+    def get_pointing_timeline(
+        self, calendar, step_minutes=1, idle_euler_deg=None, verbose=False
+    ):
+        """Build (or reuse) the per-minute pointing timeline for a calendar.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar to reconstruct pointing for.
+        step_minutes : int, optional
+            Grid spacing in minutes.  Coarser is much faster on long
+            spans; 1 matches the scheduler's own granularity.
+        idle_euler_deg : sequence of float, optional
+            ``(roll, pitch, yaw)`` of the dark-idle command in degrees.
+            Defaults to ``pointing.DARK_IDLE_EULER_DEG``.
+        verbose : bool, optional
+            Print how the timeline was built.
+
+        Returns
+        -------
+        shortschedule.pointing.PointingTimeline
+        """
+        from .pointing import DARK_IDLE_EULER_DEG, build_pointing_timeline
+
+        if idle_euler_deg is None:
+            idle_euler_deg = DARK_IDLE_EULER_DEG
+        key = (id(calendar), step_minutes, tuple(idle_euler_deg))
+        cached = getattr(self, "_pointing_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+
+        timeline = build_pointing_timeline(
+            calendar,
+            self.scheduler.visibility,
+            step_minutes=step_minutes,
+            idle_euler_deg=idle_euler_deg,
+            computed_rolls=getattr(
+                self.scheduler, "_computed_target_rolls", None
+            ),
+            verbose=verbose,
+        )
+        self._pointing_cache = (key, timeline)
+        return timeline
+
+    def _get_pointing_colors(self, targets):
+        """Stable per-target colors, with black reserved for idle.
+
+        Up to 25 targets can appear in a week, so the 12-color palettes
+        are not enough. This walks tab20/tab20b/tab20c taking every
+        other entry first, which keeps neighbouring targets far apart in
+        hue rather than landing on the light/dark pairs those maps are
+        built from.  Colors key off the sorted target name so a target
+        keeps its color when the calendar is reprocessed.
+
+        Parameters
+        ----------
+        targets : iterable of str
+            Target names appearing in the calendar.
+
+        Returns
+        -------
+        dict
+            Target name to RGBA color.
+        """
+        palette = []
+        for name in ("tab20", "tab20b", "tab20c"):
+            colors = list(plt.get_cmap(name).colors)
+            palette.extend(colors[0::2] + colors[1::2])
+        # Drop the greys: black means idle, and a grey target next to it
+        # in the legend is indistinguishable.
+        palette = [
+            color
+            for color in palette
+            if max(color[:3]) - min(color[:3]) > 0.08
+        ]
+        return {
+            target: palette[index % len(palette)]
+            for index, target in enumerate(sorted(set(targets)))
+        }
+
+    def _draw_pointing_series(self, ax, timeline, values, colors, linewidth):
+        """Draw one series, one line per observation or idle stretch.
+
+        Segments are extended by a step so consecutive stretches join up
+        rather than showing a one-step hole at every boundary.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+        timeline : shortschedule.pointing.PointingTimeline
+        values : numpy.ndarray
+            Series to draw, one entry per timeline step.
+        colors : dict
+            Target name to color; idle is drawn black.
+        linewidth : float
+        """
+        from .pointing import IDLE_LABEL
+
+        times = mdates.date2num(timeline.times.datetime)
+        n_steps = len(times)
+        for start, stop, label in timeline.segments:
+            end = min(stop + 1, n_steps)
+            idle = label == IDLE_LABEL
+            # Idle is roughly half the week and swings a full orbit's
+            # worth every 97 min, so it is drawn thin, faint and
+            # underneath, or it hides the observations entirely.
+            ax.plot(
+                times[start:end],
+                values[start:end],
+                color="black" if idle else colors.get(label, "gray"),
+                linewidth=linewidth * (0.45 if idle else 1.0),
+                alpha=0.3 if idle else 0.95,
+                zorder=1 if idle else 3,
+                solid_capstyle="butt",
+            )
+
+    def _add_pointing_legend(self, fig, timeline, colors):
+        """Shared target legend for the pointing figures."""
+        from matplotlib.lines import Line2D
+
+        handles = [
+            Line2D([0], [0], color=colors[target], linewidth=2.5, label=target)
+            for target in sorted(timeline.targets)
+        ]
+        # Solid in the legend even though it is drawn faint, so the
+        # swatch cannot be mistaken for a grey target.
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color="black",
+                linewidth=2.5,
+                label="Idle (dark-idle attitude)",
+            )
+        )
+        fig.legend(
+            handles=handles,
+            loc="lower center",
+            ncol=min(6, len(handles)),
+            frameon=False,
+            fontsize=8,
+            bbox_to_anchor=(0.5, 0.0),
+        )
+
+    def plot_pointing_timeline(
+        self,
+        calendar,
+        figsize=(16, 7),
+        step_minutes=1,
+        title="Spacecraft Pointing",
+    ):
+        """Where the boresight points across the week, target by target.
+
+        Idle stretches use the dark-idle attitude, so the trace is
+        continuous across the whole span rather than only covering the
+        observed minutes.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Processed calendar to plot.
+        figsize : tuple
+            Figure size (width, height) in inches.
+        step_minutes : int, optional
+            Grid spacing in minutes.
+        title : str
+            Plot title.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        timeline = self.get_pointing_timeline(
+            calendar, step_minutes=step_minutes
+        )
+        colors = self._get_pointing_colors(timeline.targets)
+
+        # Right ascension wraps at 360, which would otherwise draw a
+        # vertical line straight down the plot every time the idle
+        # attitude sweeps past it.
+        right_ascension = np.array(timeline.ra["Boresight"], dtype=float)
+        wraps = np.flatnonzero(np.abs(np.diff(right_ascension)) > 180.0)
+        right_ascension[wraps] = np.nan
+
+        fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
+        for ax, values, label in (
+            (axes[0], right_ascension, "Right ascension (deg)"),
+            (axes[1], timeline.dec["Boresight"], "Declination (deg)"),
+        ):
+            self._draw_pointing_series(ax, timeline, values, colors, 1.6)
+            ax.set_ylabel(label)
+            ax.grid(True, alpha=0.3)
+
+        axes[0].set_ylim(0, 360)
+        axes[0].set_yticks(np.arange(0, 361, 60))
+        axes[1].set_ylim(-90, 90)
+        axes[1].set_yticks(np.arange(-90, 91, 30))
+        axes[1].xaxis.set_major_formatter(
+            mdates.DateFormatter("%m-%d %H:%M")
+        )
+        for tick in axes[1].get_xticklabels():
+            tick.set_rotation(30)
+            tick.set_ha("right")
+
+        observed = timeline.observed_fraction
+        axes[0].set_title(
+            f"{title}\n{len(timeline.targets)} targets, "
+            f"{observed:.0%} of the span observing, "
+            f"{1 - observed:.0%} idle"
+        )
+        self._add_pointing_legend(fig, timeline, colors)
+        fig.tight_layout(rect=(0.0, 0.08, 1.0, 1.0))
+        return fig
+
+    def plot_keepout_angles(
+        self,
+        calendar,
+        figsize=(17, 11),
+        step_minutes=1,
+        title="Keep-out Angles",
+    ):
+        """Sun, Earth and Moon angles for the boresight and both trackers.
+
+        A 3x3 grid: one row per body, one column per pointing direction.
+        The Sun and Moon rows carry the keep-out actually configured on
+        the ``Visibility`` instance as a dashed line.  The Earth row is
+        the angle to the Earth *centre*, so no line is drawn there --
+        the Earth keep-outs are measured from the limb, whose half-angle
+        moves with altitude.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Processed calendar to plot.
+        figsize : tuple
+            Figure size (width, height) in inches.
+        step_minutes : int, optional
+            Grid spacing in minutes.
+        title : str
+            Plot title.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from .pointing import AXES, BODIES
+
+        timeline = self.get_pointing_timeline(
+            calendar, step_minutes=step_minutes
+        )
+        colors = self._get_pointing_colors(timeline.targets)
+        visibility = self.scheduler.visibility
+
+        # The keep-out each panel should be read against.  Only the
+        # body-centre limits belong here; the Earth limits are limb
+        # relative and cannot be drawn on an Earth-centre axis.
+        limits = {
+            ("Boresight", "sun"): getattr(visibility, "sun_min", None),
+            ("Boresight", "moon"): getattr(visibility, "moon_min", None),
+            ("ST1", "sun"): getattr(visibility, "st_sun_min", None),
+            ("ST2", "sun"): getattr(visibility, "st_sun_min", None),
+            ("ST1", "moon"): getattr(visibility, "st_moon_min", None),
+            ("ST2", "moon"): getattr(visibility, "st_moon_min", None),
+        }
+
+        fig, axes = plt.subplots(
+            len(BODIES),
+            len(AXES),
+            figsize=figsize,
+            sharex=True,
+            sharey="row",
+        )
+        for row, body in enumerate(BODIES):
+            for col, axis in enumerate(AXES):
+                ax = axes[row, col]
+                self._draw_pointing_series(
+                    ax, timeline, timeline.angles[(axis, body)], colors, 1.1
+                )
+
+                limit = limits.get((axis, body))
+                limit_deg = None
+                if limit is not None:
+                    limit_deg = float(getattr(limit, "value", limit))
+                if limit_deg:
+                    ax.axhline(
+                        limit_deg,
+                        color="crimson",
+                        linestyle="--",
+                        linewidth=1.2,
+                        zorder=5,
+                    )
+                    ax.text(
+                        0.01,
+                        limit_deg + 3.0,
+                        f"{limit_deg:.0f} deg keep-out",
+                        transform=ax.get_yaxis_transform(),
+                        ha="left",
+                        va="bottom",
+                        fontsize=7,
+                        color="crimson",
+                        zorder=6,
+                        bbox=dict(
+                            facecolor="white",
+                            edgecolor="none",
+                            alpha=0.75,
+                            pad=1.0,
+                        ),
+                    )
+
+                ax.grid(True, alpha=0.3)
+                ax.set_ylim(0, 180)
+                ax.set_yticks(np.arange(0, 181, 30))
+                if row == 0:
+                    ax.set_title(axis, fontsize=11, fontweight="bold")
+                if col == 0:
+                    ax.set_ylabel(
+                        f"{'Earth centre' if body == 'earth' else body.title()}"
+                        " angle (deg)"
+                    )
+
+        for ax in axes[-1, :]:
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+            for tick in ax.get_xticklabels():
+                tick.set_rotation(30)
+                tick.set_ha("right")
+
+        fig.suptitle(
+            f"{title}\nRows: angle to each body. Columns: boresight and "
+            "each star tracker. Black is the idle attitude.",
+            fontsize=13,
+        )
+        self._add_pointing_legend(fig, timeline, colors)
+        fig.tight_layout(rect=(0.0, 0.07, 1.0, 0.95))
+        return fig
+
+    def plot_earth_illumination(
+        self,
+        calendar,
+        figsize=(16, 6),
+        step_minutes=1,
+        title="Earth Angle vs Limb Illumination",
+    ):
+        """Earth-centre angle against how lit the grazed limb point is.
+
+        The illumination angle is the solar zenith angle where the
+        pointing direction meets the Earth: 0 deg is the sub-solar point
+        (brightest possible limb), 90 deg the terminator, 180 deg a
+        fully dark limb.  It is the same quantity that drives the
+        dynamic DPC keep-out wedge, so the left of each panel is where
+        the Earth keep-out is at its most restrictive.
+
+        Dots are transparent so repeated visits to the same phase space
+        stack up visibly.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Processed calendar to plot.
+        figsize : tuple
+            Figure size (width, height) in inches.
+        step_minutes : int, optional
+            Grid spacing in minutes.
+        title : str
+            Plot title.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from .pointing import AXES, IDLE_LABEL
+
+        timeline = self.get_pointing_timeline(
+            calendar, step_minutes=step_minutes
+        )
+        colors = self._get_pointing_colors(timeline.targets)
+
+        fig, axes = plt.subplots(
+            1, len(AXES), figsize=figsize, sharex=True, sharey=True
+        )
+        for ax, axis in zip(np.atleast_1d(axes), AXES):
+            idle = timeline.labels == IDLE_LABEL
+            ax.scatter(
+                timeline.illumination[axis][idle],
+                timeline.angles[(axis, "earth")][idle],
+                s=9,
+                color="black",
+                alpha=0.12,
+                linewidths=0,
+            )
+            for target in sorted(timeline.targets):
+                mask = timeline.labels == target
+                ax.scatter(
+                    timeline.illumination[axis][mask],
+                    timeline.angles[(axis, "earth")][mask],
+                    s=11,
+                    color=colors[target],
+                    alpha=0.35,
+                    linewidths=0,
+                )
+            ax.axvline(90.0, color="gray", linestyle=":", linewidth=1.0)
+            ax.set_title(axis, fontsize=11, fontweight="bold")
+            ax.set_xlabel("Limb illumination angle (deg)")
+            ax.set_xlim(0, 180)
+            ax.set_ylim(0, 180)
+            ax.grid(True, alpha=0.3)
+
+        np.atleast_1d(axes)[0].set_ylabel("Angle to Earth centre (deg)")
+        np.atleast_1d(axes)[0].text(
+            90.0,
+            176.0,
+            "terminator",
+            fontsize=7,
+            color="gray",
+            ha="center",
+            va="top",
+        )
+        fig.suptitle(
+            f"{title}\nLeft is a sunlit limb, right is a dark limb; "
+            "low on the y axis is pointed at the Earth.",
+            fontsize=13,
+        )
+        self._add_pointing_legend(fig, timeline, colors)
+        fig.tight_layout(rect=(0.0, 0.1, 1.0, 0.93))
+        return fig
