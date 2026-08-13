@@ -1,3 +1,8 @@
+## v1.2.3 (2026-xxx)
+- Adds `st_gap_tolerance_start_buffer` (default 12 min). The star trackers must be visible for that many minutes at the beginning of every observation, measured from its start time, with no gap tolerance applied; without it the spacecraft cannot acquire good pointing. Observations that open with a tracker dropout have their start trimmed forward to the first minute that clears the buffer. Ones that cannot be fixed, because no stretch of the observation clears it or because trimming would drop below the minimum duration, are left alone and reported in the error log.
+- Fixes gap tolerance being judged at the wrong roll. `_is_gap_tolerable` took its star-tracker verdict from `get_all_constraints`, which accepts no roll argument and so always evaluated the trackers at the `Visibility` instance's roll rather than the roll the observation actually flies. The tracker check now goes through `get_star_tracker_breakdown` at the swept roll. A sun/moon/planet keepout failure is now also explicitly never tolerable, rather than falling through the classification.
+- A star-tracker check that cannot be evaluated is now reported to the error log instead of being inferred from whether the boresight was clear. The gap is then treated as intolerable and trimmed away.
+
 ## v1.2.2 (2026-xxx)
 
 - Lance noted that our nirda size was not divisible by 1024 which may lead to edge case problems that could be causing nirda crashes.

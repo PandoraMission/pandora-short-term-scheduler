@@ -1165,6 +1165,14 @@ class TestTrimToLongestVisibleBlock:
                     "earthlimb": True,
                 }
 
+            def get_star_tracker_breakdown(
+                self, coord, time, roll=None, pre=None
+            ):
+                # The dark minutes are exactly the tracker failures.
+                idx = int(np.rint((time - T0).sec / 60.0))
+                ok = pattern[idx] if 0 <= idx < len(pattern) else True
+                return {"passed": {"combined": bool(ok)}}
+
         proc = self._make_processor(_STFailVis("L1", "L2"))
         proc.st_gap_tolerance = 2
 
@@ -1761,3 +1769,269 @@ class TestForceGapFillRules:
         coord = SkyCoord(10, 20, frame="icrs", unit="deg")
         result = proc._classify_gap_minute(coord, T0 + 5 * u.min)
         assert result == proc._GAP_EL_FAIL
+
+
+# ================================================================
+# Tests: star-tracker start buffer and roll-aware gap tolerance
+# ================================================================
+
+
+class _STBreakdownVis:
+    """Visibility mock exposing a star-tracker breakdown from a mask.
+
+    st_mask is indexed in minutes since T0. ``roll_masks`` maps a rounded
+    roll in degrees to an alternative mask, so a test can show the verdict
+    actually depends on the roll it was asked about.
+    """
+
+    _st_constraint_active = True
+
+    def __init__(self, st_mask, roll_masks=None):
+        self.st_mask = np.asarray(st_mask, dtype=bool)
+        self.roll_masks = roll_masks or {}
+        self.rolls_seen = []
+
+    def get_visibility(self, coord, times, roll=None):
+        return np.ones(len(times), dtype=bool)
+
+    def get_all_constraints(self, coord, time):
+        return {"moon": True, "sun": True, "earthlimb": True}
+
+    def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):
+        roll_deg = None if roll is None else float(roll.to(u.deg).value)
+        self.rolls_seen.append(roll_deg)
+        mask = self.st_mask
+        if roll_deg is not None:
+            mask = self.roll_masks.get(round(roll_deg), mask)
+
+        def _lookup(index):
+            return bool(mask[index]) if 0 <= index < len(mask) else True
+
+        if time.isscalar:
+            index = int(np.rint((time - T0).sec / 60.0))
+            return {"passed": {"combined": _lookup(index)}}
+        indices = np.rint((time - T0).sec / 60.0).astype(int)
+        return {
+            "passed": {
+                "combined": np.array([_lookup(i) for i in indices], dtype=bool)
+            }
+        }
+
+
+class TestSTStartBuffer:
+    """The opening minutes of an observation must be star-tracker visible."""
+
+    def _make_processor(self, visibility, buffer_minutes=12):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.visibility = visibility
+        proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
+        proc._roll_sweep_enabled = False
+        proc._computed_target_rolls = {}
+        proc.st_gap_tolerance_start_buffer = buffer_minutes
+        return proc
+
+    def test_clear_start_left_alone(self):
+        """A start that already clears the buffer is untouched."""
+        proc = self._make_processor(_STBreakdownVis(np.ones(60, dtype=bool)))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_dark_start_trimmed_forward(self):
+        """A tracker dropout at the start moves start_time forward."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:5] = False
+        proc = self._make_processor(_STBreakdownVis(mask))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 5 * u.min)).sec) < 1
+        # Only the start moves; the stop is left where it was.
+        assert abs((out.stop_time - (T0 + 40 * u.min)).sec) < 1
+
+    def test_dropout_inside_buffer_pushes_past_it(self):
+        """A dropout inside the buffer moves past the dropout, not past 0."""
+        mask = np.ones(60, dtype=bool)
+        mask[3:6] = False  # minute 0 alone looks fine; the buffer does not
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=12)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 6 * u.min)).sec) < 1
+
+    def test_no_clear_run_logs_error_and_keeps_sequence(self, capsys):
+        """No qualifying run anywhere → error logged, sequence untouched."""
+        proc = self._make_processor(_STBreakdownVis(np.zeros(60, dtype=bool)))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert out.start_time == T0
+        assert out.stop_time == T0 + 40 * u.min
+        assert "ST START BUFFER" in capsys.readouterr().out
+
+    def test_trim_below_minimum_duration_is_refused(self, capsys):
+        """Trimming that would leave under min_sequence_duration is refused."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:14] = False
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=5)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        # Would have to start 14 min in, leaving 6 min < the 8 min minimum.
+        assert cal.visits[0].sequences[0].start_time == T0
+        assert "ST START BUFFER" in capsys.readouterr().out
+
+    def test_buffer_longer_than_observation_must_be_clear_throughout(self):
+        """A buffer past the stop time means the whole observation is clear."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:2] = False
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=30)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=12)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        # The buffer outruns the 12 min observation, so the requirement is
+        # "clear to the stop"; trimming the two dark minutes achieves that.
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 2 * u.min)).sec) < 1
+
+    def test_dropout_after_the_buffer_is_left_to_the_gap_tolerance(self):
+        """Dropouts beyond the buffer are not this pass's concern."""
+        mask = np.ones(60, dtype=bool)
+        mask[20:24] = False
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=12)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_disabled_by_zero_buffer(self):
+        """A zero buffer skips the check entirely."""
+        proc = self._make_processor(
+            _STBreakdownVis(np.zeros(60, dtype=bool)), buffer_minutes=0
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_skipped_when_star_trackers_inactive(self):
+        """No star-tracker constraints configured: nothing to enforce."""
+        vis = _STBreakdownVis(np.zeros(60, dtype=bool))
+        vis._st_constraint_active = False
+        proc = self._make_processor(vis)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+        assert vis.rolls_seen == []
+
+    def test_uses_the_swept_roll(self):
+        """The observation's swept roll is what the trackers are checked at."""
+        vis = _STBreakdownVis(
+            np.ones(60, dtype=bool),
+            roll_masks={137: np.zeros(60, dtype=bool)},
+        )
+        proc = self._make_processor(vis)
+        proc._roll_sweep_enabled = True
+        proc._computed_target_rolls = {"v1": {"T": 137.0}}
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_st_start_buffer(cal)
+
+        assert vis.rolls_seen == [137.0]
+        # At roll 137 the trackers never pass, so nothing can be trimmed.
+        assert cal.visits[0].sequences[0].start_time == T0
+
+
+class TestGapToleranceUsesObservationRoll:
+    """``_is_gap_tolerable`` must judge the trackers at the flown roll."""
+
+    def _make_processor(self, visibility):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.visibility = visibility
+        proc.earthlimb_gap_tolerance = 0
+        proc.st_gap_tolerance = 2
+        return proc
+
+    def test_roll_is_forwarded_to_the_tracker_check(self):
+        """The roll handed in reaches get_star_tracker_breakdown."""
+        vis = _STBreakdownVis(np.zeros(4, dtype=bool))
+        proc = self._make_processor(vis)
+        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
+
+        tolerable = proc._is_gap_tolerable(
+            coord, _make_time_grid(4), 0, 2, roll=137.0
+        )
+
+        assert tolerable is True
+        assert vis.rolls_seen == [137.0]
+
+    def test_trackers_clear_at_this_roll_needs_no_tolerance(self):
+        """Boresight and trackers both clear → the gap is not ridden out."""
+        vis = _STBreakdownVis(np.ones(4, dtype=bool))
+        proc = self._make_processor(vis)
+        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
+
+        result = proc._is_gap_tolerable(
+            coord, _make_time_grid(4), 0, 2, roll=137.0
+        )
+
+        assert result is False
+
+    def test_sun_or_moon_failure_is_never_tolerable(self):
+        """Only earth-limb and star-tracker failures have tolerances."""
+
+        class _SunFailVis(_STBreakdownVis):
+            def get_all_constraints(self, coord, time):
+                return {"moon": True, "sun": False, "earthlimb": True}
+
+        proc = self._make_processor(_SunFailVis(np.zeros(4, dtype=bool)))
+        proc.earthlimb_gap_tolerance = 30
+        proc.st_gap_tolerance = 30
+        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
+
+        result = proc._is_gap_tolerable(coord, _make_time_grid(4), 0, 2)
+
+        assert result is False
+
+    def test_unevaluable_tracker_check_is_reported_not_guessed(self, capsys):
+        """A tracker check that blows up is logged and the gap is trimmed."""
+
+        class _BrokenVis(_STBreakdownVis):
+            def get_star_tracker_breakdown(
+                self, coord, time, roll=None, pre=None
+            ):
+                raise RuntimeError("ephemeris unavailable")
+
+        proc = self._make_processor(_BrokenVis(np.zeros(4, dtype=bool)))
+        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
+
+        result = proc._is_gap_tolerable(coord, _make_time_grid(4), 0, 2)
+
+        # Keeping dark minutes on the strength of a verdict we never got
+        # would be the unsafe guess, so the gap is treated as intolerable.
+        assert result is False
+        assert "star-tracker check failed" in capsys.readouterr().out

@@ -1325,7 +1325,11 @@ class ScheduleProcessor:
             last_visible_idx = visible_indices[-1]
             tail_length = len(vis_arr) - (last_visible_idx + 1)
             if tail_length > 0 and self._is_gap_tolerable(
-                target_coord, times, last_visible_idx + 1, tail_length
+                target_coord,
+                times,
+                last_visible_idx + 1,
+                tail_length,
+                roll=target_roll if self._roll_sweep_enabled else None,
             ):
                 continue  # tolerable tail — leave it
 
@@ -1464,18 +1468,56 @@ class ScheduleProcessor:
 
         return working_cal
 
+    def _star_tracker_failed(
+        self,
+        target_coord: SkyCoord,
+        time: Time,
+        roll: Optional[float],
+    ) -> bool:
+        """Whether the star-tracker keepout fails at ``time`` for this roll.
+
+        ``get_all_constraints`` cannot answer this. It takes no ``roll``
+        argument, so its ``star_tracker`` verdict is always evaluated at the
+        ``Visibility`` instance's own roll rather than the roll the
+        observation will actually fly, which is exactly the roll the sweep
+        chose to keep the trackers clear. ``get_star_tracker_breakdown``
+        does accept a roll, so it is used instead.
+
+        A failure to evaluate the trackers is reported and answered "not a
+        tracker failure", which leaves the caller treating the gap as
+        intolerable and trimming it away. Guessing the other way would keep
+        dark minutes in the schedule on the strength of a verdict we never
+        actually got.
+        """
+        try:
+            breakdown = self.visibility.get_star_tracker_breakdown(
+                target_coord,
+                time,
+                roll=None if roll is None else roll * u.deg,
+            )
+            return not bool(breakdown["passed"]["combined"])
+        except Exception as exc:
+            self._print(
+                f"ERROR: star-tracker check failed at {time.isot} for "
+                f"RA/Dec {target_coord.ra.deg:.4f}/"
+                f"{target_coord.dec.deg:.4f}, roll {roll}: {exc}"
+            )
+            return False
+
     def _is_gap_tolerable(
         self,
         target_coord: SkyCoord,
         times: Any,
         gap_start: int,
         gap_length: int,
+        roll: Optional[float] = None,
     ) -> bool:
         """Check whether a non-visible gap is short enough to tolerate.
 
         Uses ``get_all_constraints`` at the first non-visible minute to
-        identify which constraint(s) failed, then compares the gap
-        length against the matching tolerance
+        identify which boresight constraint(s) failed, checks the star
+        tracker separately at *roll* (see :meth:`_star_tracker_failed`),
+        then compares the gap length against the matching tolerance
         (``earthlimb_gap_tolerance`` or ``st_gap_tolerance``).
 
         If both tolerances are zero (the default), every gap is
@@ -1494,18 +1536,19 @@ class ScheduleProcessor:
         except Exception:
             return False
 
+        # Drop the star-tracker verdict: it was computed at the wrong roll
+        # and is recomputed below. What is left is roll-independent.
         failed = {k for k, v in constraints.items() if not v}
-        if not failed:
-            # Visibility says False but no boresight constraint
-            # failed → likely a star-tracker / roll issue.
-            return gap_length <= st_tol
+        failed.discard("star_tracker")
 
-        # Classify the failure
         earthlimb_failed = "earthlimb" in failed
-        st_failed = any(
-            k.startswith("st") or k == "star_tracker" for k in failed
+        st_failed = self._star_tracker_failed(
+            target_coord, times[gap_start], roll
         )
 
+        if failed - {"earthlimb"}:
+            # A sun/moon/planet keepout failed — never tolerable.
+            return False
         if earthlimb_failed and st_failed:
             return gap_length <= min(el_tol, st_tol)
         if earthlimb_failed:
@@ -1513,7 +1556,6 @@ class ScheduleProcessor:
         if st_failed:
             return gap_length <= st_tol
 
-        # Some other constraint failed — not tolerable
         return False
 
     def _trim_to_longest_visible_block(
@@ -1559,12 +1601,18 @@ class ScheduleProcessor:
             if not gaps:
                 continue
 
+            seq_roll = (
+                self._computed_target_rolls.get(visit_id, {}).get(seq.target)
+                if self._roll_sweep_enabled
+                else None
+            )
             gap_tolerable = [
                 self._is_gap_tolerable(
                     target_coord,
                     times,
                     gap_start,
                     gap_end - gap_start,
+                    roll=seq_roll,
                 )
                 for gap_start, gap_end in gaps
             ]
@@ -1602,6 +1650,113 @@ class ScheduleProcessor:
             )
 
         return working_cal
+
+    def _enforce_st_start_buffer(
+        self, calendar: ScienceCalendar
+    ) -> ScienceCalendar:
+        """Require star-tracker visibility over each observation's opening.
+
+        ``st_gap_tolerance`` lets a star-tracker dropout be tolerated in
+        the middle of an observation, but the spacecraft cannot acquire
+        good pointing without the trackers at the start. So the first
+        ``st_gap_tolerance_start_buffer`` minutes, measured from the
+        observation's start time, not from when science begins after the
+        pre-observation overhead -- must be star-tracker visible with no
+        tolerance applied.
+
+        Sequences that open with a tracker dropout have their
+        ``start_time`` moved forward (in place) to the earliest minute that
+        clears the buffer.  When no minute in the sequence clears it, or
+        trimming there would leave the sequence shorter than
+        ``min_sequence_duration``, the sequence is left alone and the
+        problem is written to the error log.
+
+        This runs last among the passes that move a start time, so it has
+        the final say.  It only ever moves a start later, so it cannot
+        create an overlap.
+        """
+        buffer_minutes = int(
+            getattr(self, "st_gap_tolerance_start_buffer", 0) or 0
+        )
+        if buffer_minutes <= 0:
+            return calendar
+        if not getattr(self.visibility, "_st_constraint_active", False):
+            return calendar
+
+        for visit in calendar.visits:
+            visit_rolls = self._computed_target_rolls.get(visit.id, {})
+            for seq in visit.sequences:
+                n_mins = int(np.rint(seq.duration.sec / 60.0))
+                if n_mins <= 0:
+                    continue
+
+                target_coord = SkyCoord(
+                    seq.ra, seq.dec, frame="icrs", unit="deg"
+                )
+                times = seq.start_time + np.arange(n_mins) * u.min
+                target_roll = visit_rolls.get(seq.target)
+                try:
+                    breakdown = (
+                        self.visibility.get_star_tracker_breakdown(
+                            target_coord,
+                            times,
+                            roll=(
+                                target_roll * u.deg
+                                if self._roll_sweep_enabled
+                                and target_roll is not None
+                                else None
+                            ),
+                        )
+                    )
+                except Exception:
+                    continue
+                st_ok = np.atleast_1d(
+                    np.asarray(breakdown["passed"]["combined"])
+                )
+
+                # Walk the start forward past every tracker dropout that
+                # lands inside the buffer window. Dropouts are visited in
+                # order, so once one sits beyond the current window all the
+                # later ones do too. An observation shorter than the buffer
+                # simply has to be clear all the way to its stop.
+                offset = 0
+                for dark_minute in np.flatnonzero(~st_ok):
+                    if dark_minute >= offset + buffer_minutes:
+                        break
+                    if dark_minute >= offset:
+                        offset = int(dark_minute) + 1
+                if offset == 0:
+                    continue
+
+                prefix = self._seq_prefix(visit.id, seq)
+                if offset >= len(st_ok):
+                    self._print(
+                        f"ERROR: {prefix} | ST START BUFFER: star trackers "
+                        f"are never visible long enough anywhere in this "
+                        f"observation; pointing acquisition will be "
+                        f"unreliable. Left unchanged."
+                    )
+                    continue
+
+                new_start = seq.start_time + offset * u.min
+                if (seq.stop_time - new_start) < self.min_sequence_duration:
+                    self._print(
+                        f"ERROR: {prefix} | ST START BUFFER: star trackers "
+                        f"do not settle until {offset} min in, and trimming "
+                        f"there would leave under "
+                        f"{self.min_sequence_duration.sec / 60:.0f} min. "
+                        f"Left unchanged."
+                    )
+                    continue
+
+                self._print(
+                    f"{prefix} | ST START BUFFER: start moved later by "
+                    f"{offset} min to secure up to {buffer_minutes} min of "
+                    f"star-tracker visibility at the start."
+                )
+                seq.start_time = new_start
+
+        return calendar
 
     def _analyze_mid_sequence_visibility(
         self,
@@ -2088,11 +2243,19 @@ class ScheduleProcessor:
                     cur_coord = SkyCoord(
                         cur_ra, cur_dec, frame="icrs", unit="deg"
                     )
+                    cur_roll = (
+                        self._computed_target_rolls.get(
+                            assignments[gap_start_idx]["visit_id"], {}
+                        ).get(assignments[gap_start_idx]["target"])
+                        if self._roll_sweep_enabled
+                        else None
+                    )
                     if self._is_gap_tolerable(
                         cur_coord,
                         Time(gap_times),
                         0,
                         gap_len,
+                        roll=cur_roll,
                     ):
                         continue
 
