@@ -144,6 +144,7 @@ class ScheduleProcessor:
         st2_earthlimb_min: Optional[float] = None,
         roll_step: float = 2.0,
         min_power_frac: float = 0.7,
+        max_movement_minutes: int = 45,
         earthlimb_gap_tolerance: int = 0,
         earthlimb_gap_tolerance_start_buffer: int = 12,
         st_gap_tolerance: int = 0,
@@ -254,6 +255,15 @@ class ScheduleProcessor:
         min_power_frac : float, optional
             Minimum acceptable solar-panel power fraction (0-1).
             Roll candidates below this are rejected (default 0.7).
+        max_movement_minutes : int, optional
+            Furthest either boundary of an observation may end up from where
+            the long-term calendar put it, in minutes (default 45). The
+            short-term scheduler adjusts for a stale TLE, so an observation
+            is expected to shift by a few minutes; a shift of an orbit or
+            more means there is either a problem in the visibility calculation
+            or that the long-term scheduler should be adjusted. In either
+            case it requires further SOC investigation and should not be
+            allowed by the short-term scheduler. Set to 0 to disable clamping.
         earthlimb_gap_tolerance : int, optional
             Maximum number of contiguous minutes of earth-limb
             visibility violations to tolerate within a sequence
@@ -328,6 +338,9 @@ class ScheduleProcessor:
 
         self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
         self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
+
+        # Furthest either boundary may drift from its long-term time.
+        self.max_movement_minutes = max_movement_minutes
 
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
@@ -930,100 +943,42 @@ class ScheduleProcessor:
                 for tgt, r in visit_rolls.items():
                     self._print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
 
-        # Use initial time grid for processing
-        total_minutes, start_time, end_time, time_grid = (
-            self._get_synchronized_time_grid(working_calendar)
-        )
-        all_minutes_bool = np.zeros(total_minutes, dtype=bool)
-
-        i = 0
-        last_stop = deepcopy(start_time)
-
-        vis_bar = self._progress_bar(
-            sum(len(v.sequences) for v in working_calendar.visits),
-            desc="Computing visibility",
-        )
-        for visit in working_calendar.visits:
-            visit_rolls = self._computed_target_rolls.get(visit.id, {})
-
-            for j, seq in enumerate(visit.sequences):
-
-                # Compute gap since last sequence stop
-                gap_length = int(
-                    np.rint((seq.start_time - last_stop).sec / 60.0)
-                )
-                if gap_length > 0:
-                    self._print(
-                        f"{self._seq_prefix(visit.id, seq)} | GAP-FILL: "
-                        f"extending start earlier by {gap_length} min to "
-                        f"fill gap before this sequence"
-                    )
-
-                    if not self.force_gap_fill:
-                        seq = self._fill_gaps(
-                            seq, gap_length, visit_id=visit.id
-                        )
-                        visit.sequences[j] = seq  # persist change
-
-                # Evaluate visibility for this sequence
-                n_mins = int(np.rint(seq.duration.sec / 60.0))
-                ra, dec = seq.ra, seq.dec
-                target_coord = SkyCoord(ra, dec, frame="icrs", unit="deg")
-                deltas = np.arange(n_mins) * u.min
-                times = seq.start_time + deltas
-
-                # Use precomputed roll if sweep was enabled and roll found
-                target_roll = visit_rolls.get(seq.target)
-                if self._roll_sweep_enabled and target_roll is not None:
-                    vis = self.visibility.get_visibility(
-                        target_coord,
-                        times,
-                        roll=target_roll * u.deg,
-                    )
-                else:
-                    vis = self.visibility.get_visibility(target_coord, times)
-                end_index = min(i + len(vis), total_minutes)
-                all_minutes_bool[i:end_index] = vis[: end_index - i]
-
-                i += len(vis)
-                last_stop = seq.stop_time
-                vis_bar.update(1)
-        vis_bar.close()
-
-        # Fill remaining time after last sequence
-        if i < total_minutes:
-            all_minutes_bool[i:] = False
-            self._print(f"Filled trailing {total_minutes - i} minutes as False")
-
-        self.all_minutes_bool = (
-            all_minutes_bool  # this is only necessary for testing.
-        )
-
         if self.force_gap_fill:
             working_calendar = self._force_fill_gaps(working_calendar)
         else:
-            working_calendar = self._fix_visibility(
-                working_calendar, all_minutes_bool
-            )
+            # Observations keep the times the long-term calendar gave them
+            # and are adjusted in place. Idle time between them is expected
+            # under the current conops, so no attempt is made to close it by
+            # sliding observations earlier.
 
-            # Trim non-visible tails that _fix_visibility cannot handle
-            # (it only shrinks starts forward; tails need stop_time
-            # shrunk).
+            # Trim each observation back to the visible time it actually
+            # has: first trailing dark minutes, then any dark stretch in the
+            # middle (e.g. the target dipping below the Earth-limb keepout).
             working_calendar = self._trim_non_visible_tails(working_calendar)
-
-            # Trim sequences to their longest contiguous visible
-            # block so that no sequence contains mid-observation
-            # dark minutes (e.g. negative earth-limb angles where
-            # the instrument would look at the Earth).
             working_calendar = self._trim_to_longest_visible_block(
                 working_calendar
             )
 
-            # Finally require star-tracker visibility over each
-            # observation's opening minutes; without it the spacecraft
-            # cannot acquire good pointing. This runs last so it has the
-            # final say on every start time.
-            working_calendar = self._enforce_st_start_buffer(working_calendar)
+            # Trimming only ever shrinks, so grow each observation back out
+            # into the idle time around it wherever the target is visible.
+            working_calendar = self._grow_into_free_time(
+                working_calendar, original_timing
+            )
+
+            # Require the opening minutes of each observation to be clean:
+            # star trackers settled and the boresight clear of the Earth.
+            # Runs after growth so it judges the final start.
+            working_calendar = self._enforce_start_buffers(working_calendar)
+
+            # Nothing may end up further than max_movement_minutes from
+            # where the long-term calendar put it.
+            working_calendar = self._clamp_movement(
+                working_calendar, original_timing
+            )
+
+        # Overlaps can never be flown, so this runs in both modes and has
+        # the last word on timing.
+        working_calendar = self._repair_overlaps(working_calendar)
 
         # Report any timing changes (shrink/elongate) made above.
         self._log_timing_changes(working_calendar, original_timing)
@@ -1666,6 +1621,264 @@ class ScheduleProcessor:
             )
 
         return working_cal
+
+    def _ordered_sequences(
+        self, calendar: ScienceCalendar
+    ) -> List[Tuple[str, ObservationSequence]]:
+        """Return ``(visit_id, sequence)`` pairs in start-time order."""
+        pairs = [
+            (visit.id, seq)
+            for visit in calendar.visits
+            for seq in visit.sequences
+        ]
+        pairs.sort(key=lambda pair: pair[1].start_time)
+        return pairs
+
+    def _grow_into_free_time(
+        self,
+        calendar: ScienceCalendar,
+        original_timing: Dict[Any, Any],
+    ) -> ScienceCalendar:
+        """Extend observations into adjacent idle time while still visible.
+        
+        This grows each observation outward into the idle time around it for
+        as long as the target stays visible at its scheduled roll, bounded by:
+        - the neighbouring observations, so growth can never create an
+          overlap, and
+        - ``max_movement_minutes`` either side of the long-term start and
+          stop, so an observation grows in place instead of drifting.
+
+        Observations are handled in start-time order and each is bounded by
+        its neighbours' current boundaries, so a stop that has already grown
+        is accounted for when the next observation's start is considered.
+        Times are modified in place.
+        """
+        limit = getattr(self, "max_movement_minutes", 0) or 0
+        ordered = self._ordered_sequences(calendar)
+        gained_starts = 0
+        gained_stops = 0
+
+        for index, (visit_id, seq) in enumerate(ordered):
+            original = original_timing.get((visit_id, seq.id))
+            if original is None:
+                continue
+            target_coord = SkyCoord(
+                seq.ra, seq.dec, frame="icrs", unit="deg"
+            )
+
+            roll = (
+                self._computed_target_rolls.get(visit_id, {}).get(seq.target)
+                if self._roll_sweep_enabled
+                else None
+            )
+
+            # Grow the start earlier
+            earliest = original[0] - limit * u.min
+            if index > 0:
+                earliest = max(earliest, ordered[index - 1][1].stop_time)
+            room = int((seq.start_time - earliest).sec // 60)
+            if room > 0:
+                # Walk backwards a minute at a time from the current start.
+                times = seq.start_time - np.arange(1, room + 1) * u.min
+                visible = self._visibility_for_sequence(
+                    visit_id, seq, target_coord, times
+                )
+                gained = self._growable_minutes(
+                    visible, times, target_coord, roll
+                )
+                if gained:
+                    seq.start_time = seq.start_time - gained * u.min
+                    gained_starts += gained
+
+            # Grow the stop later
+            latest = original[1] + limit * u.min
+            if index + 1 < len(ordered):
+                latest = min(latest, ordered[index + 1][1].start_time)
+            room = int((latest - seq.stop_time).sec // 60)
+            if room > 0:
+                times = seq.stop_time + np.arange(room) * u.min
+                visible = self._visibility_for_sequence(
+                    visit_id, seq, target_coord, times
+                )
+                gained = self._growable_minutes(
+                    visible, times, target_coord, roll
+                )
+                if gained:
+                    seq.stop_time = seq.stop_time + gained * u.min
+                    gained_stops += gained
+
+        self._print(
+            f"Grew observations into idle time: {gained_starts} min added "
+            f"at starts, {gained_stops} min added at stops."
+        )
+        return calendar
+
+    def _growable_minutes(
+        self,
+        visible: np.ndarray,
+        times: Any,
+        target_coord: SkyCoord,
+        roll: Optional[float],
+    ) -> int:
+        """How many of ``times`` an observation may absorb, walking outward.
+ 
+        Visible minutes are taken. A section of non-visibility is stepped
+        over when it is short enough to tolerate (the same judgement
+        ``_trim_to_longest_visible_block`` applies to dark stretches already
+        inside an observation), so that a dip the tolerances accept does not
+        block growth through it while being kept when it happens to fall
+        inside. An intolerable run stops the walk.
+
+        The count returned always ends on a visible minute, so growth never
+        leaves a dark tail hanging off the end of an observation.
+        """
+        taken = 0
+        index = 0
+        while index < len(visible):
+            if visible[index]:
+                index += 1
+                taken = index
+                continue
+
+            run_end = index
+            while run_end < len(visible) and not visible[run_end]:
+                run_end += 1
+            if run_end >= len(visible):
+                # Dark all the way to the bound; nothing worth reaching.
+                break
+            if not self._is_gap_tolerable(
+                target_coord, times, index, run_end - index, roll=roll
+            ):
+                break
+            index = run_end
+
+        return taken
+
+    def _clamp_movement(
+        self,
+        calendar: ScienceCalendar,
+        original_timing: Dict[Any, Any],
+    ) -> ScienceCalendar:
+        """Hold every boundary within ``max_movement_minutes`` of its plan.
+
+        The short-term scheduler exists to absorb a stale TLE, so an
+        observation is expected to shift by a few minutes. Visibility can
+        nonetheless argue for moving one much further.
+        
+        This is, by default, not allowed as a change this big should be
+        rectified in the long-term scheduler not the short-term.
+        Therefore, the boundary is clamped to the limit and the observation
+        is reported.
+
+        Times are modified in place. A clamp that would leave the
+        observation shorter than ``min_sequence_duration`` is not applied.
+        """
+        limit = getattr(self, "max_movement_minutes", 0) or 0
+        if limit <= 0:
+            return calendar
+
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                original = original_timing.get((visit.id, seq.id))
+                if original is None:
+                    continue
+
+                drift_start = (seq.start_time - original[0]).sec / 60.0
+                drift_stop = (seq.stop_time - original[1]).sec / 60.0
+                new_start, new_stop = seq.start_time, seq.stop_time
+                prefix = self._seq_prefix(visit.id, seq)
+
+                # The tolerance keeps a boundary sitting exactly on the
+                # limit from tripping on floating-point time arithmetic.
+                if abs(drift_start) > limit + 1e-6:
+                    new_start = (
+                        original[0]
+                        + np.sign(drift_start) * limit * u.min
+                    )
+                    self._print(
+                        f"ERROR: {prefix} | MOVED TOO FAR: start wanted to "
+                        f"shift {drift_start:+.0f} min (limit {limit}); "
+                        f"clamped to {np.sign(drift_start) * limit:+.0f} "
+                        f"min. Visibility at the clamped time needs review."
+                    )
+                if abs(drift_stop) > limit + 1e-6:
+                    new_stop = (
+                        original[1] + np.sign(drift_stop) * limit * u.min
+                    )
+                    self._print(
+                        f"ERROR: {prefix} | MOVED TOO FAR: stop wanted to "
+                        f"shift {drift_stop:+.0f} min (limit {limit}); "
+                        f"clamped to {np.sign(drift_stop) * limit:+.0f} "
+                        f"min. Visibility at the clamped time needs review."
+                    )
+
+                if new_start == seq.start_time and new_stop == seq.stop_time:
+                    continue
+                if (new_stop - new_start) < self.min_sequence_duration:
+                    self._print(
+                        f"ERROR: {prefix} | MOVED TOO FAR: clamping would "
+                        f"leave under "
+                        f"{self.min_sequence_duration.sec / 60:.0f} min. "
+                        f"Left unclamped for manual review."
+                    )
+                    continue
+                seq.start_time, seq.stop_time = new_start, new_stop
+
+        return calendar
+
+    def _repair_overlaps(self, calendar: ScienceCalendar) -> ScienceCalendar:
+        """Guarantee the delivered calendar contains no overlaps.
+
+        The passes above are written so they cannot produce one, so anything
+        found here is a bug in this module. It is repaired rather than
+        delivered, because an overlapping calendar cannot be flown: the
+        earlier observation's stop is pulled back to the later one's start.
+        Every repair is reported, and so is any overlap still standing
+        afterwards, since that one needs fixing by hand.
+
+        Times are modified in place.
+        """
+        ordered = self._ordered_sequences(calendar)
+        repaired = 0
+
+        for (visit_id, earlier), (_, later) in zip(ordered, ordered[1:]):
+            overlap_sec = (earlier.stop_time - later.start_time).sec
+            if overlap_sec <= 1.0:
+                continue
+
+            prefix = self._seq_prefix(visit_id, earlier)
+            if (
+                later.start_time - earlier.start_time
+            ) < self.min_sequence_duration:
+                self._print(
+                    f"ERROR: {prefix} | OVERLAP: overlaps {later.target} by "
+                    f"{overlap_sec / 60:.1f} min and cannot be truncated "
+                    f"without dropping under "
+                    f"{self.min_sequence_duration.sec / 60:.0f} min. "
+                    f"Needs a manual fix."
+                )
+                continue
+
+            self._print(
+                f"ERROR: {prefix} | OVERLAP: overlapped {later.target} by "
+                f"{overlap_sec / 60:.1f} min; stop truncated to "
+                f"{later.start_time.isot}. This is a scheduler bug, please "
+                f"report it."
+            )
+            earlier.stop_time = later.start_time
+            repaired += 1
+
+        if repaired:
+            residual = self.validate_no_overlaps_astropy(
+                calendar, report_issues=False
+            )
+            if residual:
+                self._print(
+                    f"ERROR: {len(residual)} overlap(s) still present after "
+                    f"repairing {repaired}; these need a manual fix."
+                )
+
+        return calendar
 
     def _enforce_start_buffers(
         self, calendar: ScienceCalendar
