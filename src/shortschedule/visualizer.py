@@ -2099,12 +2099,19 @@ class ScheduleVisualizer:
         -------
         matplotlib.figure.Figure
         """
+        import cmasher as cmr
         from astropy import units as u
         from astropy.coordinates import SkyCoord
+        from matplotlib.cm import ScalarMappable
+        from matplotlib.colors import Normalize
         from matplotlib.patches import Patch
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         scheduler = self.scheduler
         priority_colors = self._get_priority_colors([1, 2, 3, 4, 5, 6, 7, 8])
+
+        roll_cmap = cmr.infinity
+        roll_norm = Normalize(vmin=-180.0, vmax=180.0)
 
         fig, ax = plt.subplots(figsize=figsize)
 
@@ -2127,14 +2134,20 @@ class ScheduleVisualizer:
                 deltas = np.arange(n_mins) * u.min
                 times = seq.start_time + deltas
 
-                roll = visit_rolls.get(seq.target)
-                if scheduler._roll_sweep_enabled and roll is not None:
+                # Get the roll written onto the observation
+                roll = (
+                    seq.roll
+                    if seq.roll is not None
+                    else visit_rolls.get(seq.target)
+                )
+                if roll is not None:
                     vis = scheduler.visibility.get_visibility(
                         coord, times, roll=roll * u.deg
                     )
                 else:
+                    # If we can't find a roll then just get the visibility without it.
                     vis = scheduler.visibility.get_visibility(coord, times)
-                rows.append((visit.id, seq, np.asarray(vis)))
+                rows.append((visit.id, seq, np.asarray(vis), roll))
 
         if not rows:
             ax.text(
@@ -2149,7 +2162,7 @@ class ScheduleVisualizer:
         # Build y-axis: one row per (visit, target)
         seen = {}
         y_labels = []
-        for vid, seq, _ in rows:
+        for vid, seq, _, _ in rows:
             key = (vid, seq.target)
             if key not in seen:
                 seen[key] = len(y_labels)
@@ -2161,7 +2174,7 @@ class ScheduleVisualizer:
         non_vis_total = 0
         total_mins = 0
 
-        for vid, seq, vis_arr in rows:
+        for vid, seq, vis_arr, prescribed_roll in rows:
             y = seen[(vid, seq.target)]
             start_num = float(mdates.date2num(seq.start_time.datetime))
             stop_num = float(mdates.date2num(seq.stop_time.datetime))
@@ -2170,18 +2183,32 @@ class ScheduleVisualizer:
             x_min = min(x_min, start_num)
             x_max = max(x_max, stop_num)
 
-            # Background bar: priority color
-            color = priority_colors.get(seq.priority, "lightgray")
-            rect = Rectangle(
-                (start_num, y - 0.35),
-                dur_days,
-                0.7,
-                facecolor=color,
-                edgecolor="none",
-                alpha=1.0,
-                linewidth=0,
+            # Each bar is split: priority on the upper half, the roll the
+            # spacecraft will fly on the lower half.
+            ax.add_patch(
+                Rectangle(
+                    (start_num, y - 0.35),
+                    dur_days,
+                    0.34,
+                    facecolor=priority_colors.get(seq.priority, "lightgray"),
+                    edgecolor="none",
+                    linewidth=0,
+                )
             )
-            ax.add_patch(rect)
+            ax.add_patch(
+                Rectangle(
+                    (start_num, y + 0.01),
+                    dur_days,
+                    0.34,
+                    facecolor=(
+                        "lightgray"
+                        if prescribed_roll is None
+                        else roll_cmap(roll_norm(prescribed_roll))
+                    ),
+                    edgecolor="none",
+                    linewidth=0,
+                )
+            )
 
             # Red overlay for non-visible minutes
             n_mins = len(vis_arr)
@@ -2242,27 +2269,58 @@ class ScheduleVisualizer:
             if total_mins > 0
             else 100.0
         )
+        # Duty cycle: observing time against the wall-clock span it covers,
+        # so the idle time between observations counts against it.
+        span_mins = (x_max - x_min) * 24.0 * 60.0
+        duty_pct = 100.0 * total_mins / span_mins if span_mins > 0 else 0.0
         ax.set_title(
             f"{title}\n"
             f"({non_vis_total} non-visible min / "
-            f"{total_mins} total — {vis_pct:.1f}% visible)",
+            f"{total_mins} total — {vis_pct:.1f}% visible)\n"
+            f"({total_mins:.0f} observed mins / {span_mins:.0f} total mins "
+            f"— {duty_pct:.1f}% duty cycle)",
             fontsize=12,
             pad=10,
         )
         ax.set_xlabel("Time (UTC)")
         ax.grid(True, axis="x", alpha=0.3)
 
+        # Roll colorbar. Ticks every 90 deg make the cyclic wrap at +/-180
+        # easy to read off. The axes are divided rather than passing ``ax``
+        # to colorbar() so the bar spans the full plot height: sizing it by
+        # ``fraction`` leaves the length tied to the figure aspect, which on
+        # a tall Gantt leaves it floating in the middle.
+        mappable = ScalarMappable(norm=roll_norm, cmap=roll_cmap)
+        mappable.set_array([])
+        colorbar_axes = make_axes_locatable(ax).append_axes(
+            "right", size="1.5%", pad=0.12, axes_class=plt.Axes
+        )
+        colorbar = fig.colorbar(
+            mappable, cax=colorbar_axes, ticks=[-180, -90, 0, 90, 180]
+        )
+        colorbar.set_label("Prescribed roll (deg)", fontsize=9)
+        colorbar.ax.tick_params(labelsize=7)
+
         # Legend
         legend_items = [
             Patch(facecolor="black", label="Non-visible"),
         ]
-        used_priorities = sorted(set(s.priority for _, s, _ in rows))
+        used_priorities = sorted(set(s.priority for _, s, _, _ in rows))
         for p in used_priorities:
             c = priority_colors.get(p, "silver")
             legend_items.append(Patch(facecolor=c, label=f"Priority {p}"))
-        ax.legend(handles=legend_items, loc="upper right", fontsize=7)
+        ax.legend(
+            handles=legend_items,
+            loc="upper right",
+            fontsize=7,
+            title="upper half: priority\nlower half: roll",
+            title_fontsize=7,
+        )
 
-        fig.tight_layout()
+        # Reserve a margin at the top: the title runs to three lines and
+        # tight_layout on its own leaves the first one against the figure
+        # edge, where it gets clipped.
+        fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.98))
         return fig
 
     def _get_priority_colors(self, priorities):
