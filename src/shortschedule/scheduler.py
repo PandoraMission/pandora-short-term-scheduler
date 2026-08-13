@@ -6,10 +6,16 @@ are provided. The processor performs these high-level steps:
 
 - extract a time window to process
 - compute minute-by-minute visibility using `pandoravisibility.Visibility`
-- identify visibility gaps and attempt to extend previous sequences or
-  shrink following sequences to reduce unobserved time
+- trim each observation back to the visible time it actually has, then
+  grow it into the surrounding idle time while the target stays visible
+- hold every boundary within `max_movement_minutes` of its long-term time
+  and guarantee the delivered calendar contains no overlaps
 - update payload integration parameters (VIS/NIR) to fit the new timing
-- assemble a comprehensive gap/processing report
+- assemble a report of what the passes changed
+
+Idle time between observations is expected: the scheduler adjusts each
+observation around the time the long-term calendar chose for it rather
+than sliding observations to close gaps.
 """
 
 # Standard library
@@ -150,8 +156,6 @@ class ScheduleProcessor:
         st_gap_tolerance: int = 0,
         st_gap_tolerance_start_buffer: int = 12,
         use_dynamic_earthlimb: bool = False,
-        force_gap_fill: bool = False,
-        earthlimb_hard_floor: float = 5.0,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -294,19 +298,6 @@ class ScheduleProcessor:
         use_dynamic_earthlimb : bool, default=true
             If True, then uses the dynamic DPC boresight Earth limb.
             This is the wedge shape keepout based on the Earth illumination.
-        force_gap_fill : bool, optional
-            When True, fill all gaps between sequences even if the
-            extended time violates keepout constraints.  The
-            visibility-fixing, tail-trimming, and mid-sequence
-            trimming passes are skipped so the schedule has no
-            temporal gaps.  Validation will still report keepout
-            violations (default False).
-        earthlimb_hard_floor : float, optional
-            Absolute minimum earth-limb angle (degrees) allowed when
-            force-filling gaps.  Even in force mode the scheduler
-            will not extend a sequence into minutes where the
-            earth-limb separation drops below this value
-            (default 5.0).
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -337,7 +328,6 @@ class ScheduleProcessor:
         self.visibility = Visibility(tle_line1, tle_line2, **_kw)
 
         self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        self.max_sequence_duration = TimeDelta(90 * 60 * u.s)
 
         # Furthest either boundary may drift from its long-term time.
         self.max_movement_minutes = max_movement_minutes
@@ -347,8 +337,6 @@ class ScheduleProcessor:
         self.earthlimb_gap_tolerance_start_buffer = earthlimb_gap_tolerance_start_buffer
         self.st_gap_tolerance = st_gap_tolerance
         self.st_gap_tolerance_start_buffer = st_gap_tolerance_start_buffer
-        self.force_gap_fill = force_gap_fill
-        self.earthlimb_hard_floor = earthlimb_hard_floor
 
         # Roll sweep configuration
         self.roll_step = roll_step
@@ -923,41 +911,38 @@ class ScheduleProcessor:
                 for tgt, r in visit_rolls.items():
                     self._print(f"  Visit {visit.id} / {tgt}: best roll = {r}")
 
-        if self.force_gap_fill:
-            working_calendar = self._force_fill_gaps(working_calendar)
-        else:
-            # Observations keep the times the long-term calendar gave them
-            # and are adjusted in place. Idle time between them is expected
-            # under the current conops, so no attempt is made to close it by
-            # sliding observations earlier.
+        # Observations keep the times the long-term calendar gave them and
+        # are adjusted in place. Idle time between them is expected under
+        # the current conops, so no attempt is made to close it by sliding
+        # observations earlier.
 
-            # Trim each observation back to the visible time it actually
-            # has: first trailing dark minutes, then any dark stretch in the
-            # middle (e.g. the target dipping below the Earth-limb keepout).
-            working_calendar = self._trim_non_visible_tails(working_calendar)
-            working_calendar = self._trim_to_longest_visible_block(
-                working_calendar
-            )
+        # Trim each observation back to the visible time it actually has:
+        # first trailing dark minutes, then any dark stretch in the middle
+        # (e.g. the target dipping below the Earth-limb keepout). Trimming
+        # a dark head falls out of the same pass.
+        working_calendar = self._trim_non_visible_tails(working_calendar)
+        working_calendar = self._trim_to_longest_visible_block(
+            working_calendar
+        )
 
-            # Trimming only ever shrinks, so grow each observation back out
-            # into the idle time around it wherever the target is visible.
-            working_calendar = self._grow_into_free_time(
-                working_calendar, original_timing
-            )
+        # Trimming only ever shrinks, so grow each observation back out
+        # into the idle time around it wherever the target is visible.
+        working_calendar = self._grow_into_free_time(
+            working_calendar, original_timing
+        )
 
-            # Require the opening minutes of each observation to be clean:
-            # star trackers settled and the boresight clear of the Earth.
-            # Runs after growth so it judges the final start.
-            working_calendar = self._enforce_start_buffers(working_calendar)
+        # Require the opening minutes of each observation to be clean:
+        # star trackers settled and the boresight clear of the Earth. Runs
+        # after growth so it judges the final start.
+        working_calendar = self._enforce_start_buffers(working_calendar)
 
-            # Nothing may end up further than max_movement_minutes from
-            # where the long-term calendar put it.
-            working_calendar = self._clamp_movement(
-                working_calendar, original_timing
-            )
+        # Nothing may end up further than max_movement_minutes from where
+        # the long-term calendar put it.
+        working_calendar = self._clamp_movement(
+            working_calendar, original_timing
+        )
 
-        # Overlaps can never be flown, so this runs in both modes and has
-        # the last word on timing.
+        # Overlaps can never be flown, so this has the last word on timing.
         working_calendar = self._repair_overlaps(working_calendar)
 
         # Report any timing changes (shrink/elongate) made above.
@@ -1027,48 +1012,6 @@ class ScheduleProcessor:
         summary["sequences_modified"] = (
             summary["sequences_lengthened"] + summary["sequences_shortened"]
         )
-
-    def _fill_gaps(
-        self,
-        sequence: ObservationSequence,
-        gap_length: int,
-        visit_id: Optional[str] = None,
-    ) -> ObservationSequence:
-        """Extend the start of a sequence backward in time to fill a gap.
-
-        This extension is intentionally **blind** (no visibility check).
-        Its sole purpose is to maintain schedule contiguity — every
-        minute between the first and last sequence must be assigned.
-        Non-visible minutes introduced here are cleaned up downstream
-        by ``_fix_visibility`` (heads) and ``_trim_non_visible_tails``
-        (tails).
-
-        Parameters
-        ----------
-        sequence : ObservationSequence
-            The sequence to adjust.
-        gap_length : int
-            Gap length in minutes.
-        visit_id : str, optional
-            Reserved for future use.
-
-        Returns
-        -------
-        ObservationSequence
-            A new ObservationSequence with start time shifted earlier.
-        """
-        new_start = sequence.start_time - gap_length * u.min
-        return ObservationSequence(
-            id=sequence.id,
-            target=sequence.target,
-            priority=sequence.priority,
-            start_time=new_start,
-            stop_time=sequence.stop_time,
-            ra=sequence.ra,
-            dec=sequence.dec,
-            payload_params=deepcopy(sequence.payload_params),
-        )
-
     def _get_synchronized_time_grid(
         self, calendar: ScienceCalendar
     ) -> Tuple[int, Optional[Time], Optional[Time], Any]:
@@ -1099,149 +1042,6 @@ class ScheduleProcessor:
         time_grid = start_time + np.arange(total_minutes) * u.min
 
         return total_minutes, start_time, end_time, time_grid
-
-    def _trim_non_visible_heads(
-        self, calendar: ScienceCalendar
-    ) -> ScienceCalendar:
-        """Trim non-visible heads from sequences.
-
-        For each sequence whose first minute(s) are not visible, shrink
-        ``start_time`` forward to the first visible minute.  Then
-        attempt to extend the *previous* sequence forward to absorb
-        the freed time (only where that target is visible).
-
-        This is the complement of ``_trim_non_visible_tails``.
-        """
-        working_cal = deepcopy(calendar)
-
-        all_sequences: List[Tuple[str, ObservationSequence]] = []
-        for visit in working_cal.visits:
-            for seq in visit.sequences:
-                all_sequences.append((visit.id, seq))
-        all_sequences.sort(key=lambda x: x[1].start_time)
-
-        for idx, (visit_id, seq) in self._progress(
-            list(enumerate(all_sequences)),
-            desc="Trimming non-visible heads",
-            total=len(all_sequences),
-        ):
-            n_mins = int(np.rint(seq.duration.sec / 60.0))
-            if n_mins <= 0:
-                continue
-
-            target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
-            deltas = np.arange(n_mins) * u.min
-            times = seq.start_time + deltas
-
-            target_roll = self._computed_target_rolls.get(visit_id, {}).get(
-                seq.target
-            )
-            if self._roll_sweep_enabled and target_roll is not None:
-                vis = self.visibility.get_visibility(
-                    target_coord,
-                    times,
-                    roll=target_roll * u.deg,
-                )
-            else:
-                vis = self.visibility.get_visibility(target_coord, times)
-
-            vis_arr = np.asarray(vis)
-
-            # Nothing to do if the first minute is already visible
-            if len(vis_arr) == 0 or vis_arr[0]:
-                continue
-
-            visible_indices = np.where(vis_arr)[0]
-            if len(visible_indices) == 0:
-                continue  # entirely non-visible — skip
-
-            first_visible_idx = visible_indices[0]
-
-            new_start = seq.start_time + first_visible_idx * u.min
-            if (seq.stop_time - new_start) < self.min_sequence_duration:
-                continue  # trimming would make sequence too short
-
-            trimmed = ObservationSequence(
-                id=seq.id,
-                target=seq.target,
-                priority=seq.priority,
-                start_time=new_start,
-                stop_time=seq.stop_time,
-                ra=seq.ra,
-                dec=seq.dec,
-                payload_params=deepcopy(seq.payload_params),
-            )
-            working_cal.replace_sequence(visit_id, seq.id, trimmed)
-            all_sequences[idx] = (visit_id, trimmed)
-
-            # Try extending the previous sequence forward to fill
-            # the gap.
-            if idx == 0:
-                continue
-
-            prev_visit_id, prev_seq = all_sequences[idx - 1]
-            gap_minutes = int(
-                np.rint((new_start - prev_seq.stop_time).sec / 60.0)
-            )
-            if gap_minutes <= 0:
-                continue
-
-            prev_coord = SkyCoord(
-                prev_seq.ra,
-                prev_seq.dec,
-                frame="icrs",
-                unit="deg",
-            )
-            gap_deltas = np.arange(gap_minutes) * u.min
-            gap_times = prev_seq.stop_time + gap_deltas
-
-            prev_roll = self._computed_target_rolls.get(prev_visit_id, {}).get(
-                prev_seq.target
-            )
-            if self._roll_sweep_enabled and prev_roll is not None:
-                prev_vis = self.visibility.get_visibility(
-                    prev_coord,
-                    gap_times,
-                    roll=prev_roll * u.deg,
-                )
-            else:
-                prev_vis = self.visibility.get_visibility(
-                    prev_coord, gap_times
-                )
-            prev_vis_arr = np.asarray(prev_vis)
-
-            # Walk forward from prev.stop_time to find the last
-            # contiguous visible minute.
-            if len(prev_vis_arr) == 0 or not prev_vis_arr[0]:
-                # Prev not visible at gap start — extend blindly
-                # to maintain contiguity.
-                new_prev_stop = new_start
-            else:
-                last_contiguous = 0
-                while (
-                    last_contiguous + 1 < len(prev_vis_arr)
-                    and prev_vis_arr[last_contiguous + 1]
-                ):
-                    last_contiguous += 1
-                new_prev_stop = gap_times[last_contiguous] + 1 * u.min
-
-            extended_prev = ObservationSequence(
-                id=prev_seq.id,
-                target=prev_seq.target,
-                priority=prev_seq.priority,
-                start_time=prev_seq.start_time,
-                stop_time=new_prev_stop,
-                ra=prev_seq.ra,
-                dec=prev_seq.dec,
-                payload_params=deepcopy(prev_seq.payload_params),
-            )
-            working_cal.replace_sequence(
-                prev_visit_id, prev_seq.id, extended_prev
-            )
-            all_sequences[idx - 1] = (prev_visit_id, extended_prev)
-
-        return working_cal
-
     def _trim_non_visible_tails(
         self, calendar: ScienceCalendar
     ) -> ScienceCalendar:
@@ -1252,9 +1052,9 @@ class ScheduleProcessor:
         extend the *next* sequence backward to absorb the freed time
         (only where that target is visible).
 
-        This is the complement of ``_fix_visibility`` which handles
-        non-visible *heads* by extending the previous sequence forward
-        and shrinking the current sequence's start.
+        Non-visible starts are handled by
+        ``_trim_to_longest_visible_block``, which strips leading dark
+        minutes off the span it selects.
         """
         working_cal = deepcopy(calendar)
 
@@ -1539,12 +1339,13 @@ class ScheduleProcessor:
     def _trim_to_longest_visible_block(
         self, calendar: ScienceCalendar
     ) -> ScienceCalendar:
-        """Trim sequences to remove intolerable mid-observation dark gaps.
+        """Trim sequences to their longest acceptable visible span.
 
-        After ``_fix_visibility`` and ``_trim_non_visible_tails`` have
-        handled leading and trailing non-visible minutes, sequences can
-        still contain non-visible minutes in the **middle** (e.g. when
-        the target dips below the Earth-limb keepout during an orbit).
+        Runs after ``_trim_non_visible_tails``. A sequence can be dark at
+        its head, in the middle (e.g. the target dipping below the
+        Earth-limb keepout during an orbit), or both; the span selected
+        here has its leading and trailing dark minutes stripped, so this
+        is what trims a dark head.
 
         Short gaps are tolerated when their duration does not exceed the
         configured tolerances (``earthlimb_gap_tolerance`` and
@@ -2277,421 +2078,6 @@ class ScheduleProcessor:
         )
         working_cal.replace_sequence(next_visit_id, next_seq.id, extended_next)
         all_sequences[idx + 1] = (next_visit_id, extended_next)
-
-    # ── Force gap-fill helpers ─────────────────────────────────
-
-    # Numeric scores for gap-minute classification (higher = better)
-    _GAP_FLOOR = 0  # earthlimb < hard floor — never fill
-    _GAP_EL_FAIL = 1  # earthlimb constraint fail (>= floor)
-    _GAP_ST_ONLY = 2  # only star-tracker constraints fail
-    _GAP_VISIBLE = 3  # fully visible
-
-    def _classify_gap_minute(self, coord: SkyCoord, time: Time) -> int:
-        """Score a non-visible gap minute for one target.
-
-        Returns one of ``_GAP_FLOOR``, ``_GAP_EL_FAIL``,
-        ``_GAP_ST_ONLY``, or ``_GAP_VISIBLE``.
-        """
-        try:
-            seps = self.visibility.get_separations(coord, time)
-            el = seps.get("earthlimb", 90 * u.deg)
-            if el.to(u.deg).value < self.earthlimb_hard_floor:
-                return self._GAP_FLOOR
-        except Exception:
-            return self._GAP_FLOOR
-
-        try:
-            constraints = self.visibility.get_all_constraints(coord, time)
-            failed = {k for k, v in constraints.items() if not v}
-            if not failed:
-                # Boresight constraints pass — likely a
-                # roll-dependent star-tracker failure.
-                return self._GAP_ST_ONLY
-            el_failed = "earthlimb" in failed
-            st_failed = any(
-                k.startswith("st") or k == "star_tracker" for k in failed
-            )
-            if st_failed and not el_failed:
-                return self._GAP_ST_ONLY
-            return self._GAP_EL_FAIL
-        except Exception:
-            return self._GAP_EL_FAIL
-
-    def _force_fill_gaps(self, calendar: ScienceCalendar) -> ScienceCalendar:
-        """Fill gaps between sequences with constraint-aware rules.
-
-        Rules applied (in priority order):
-
-        1. **Earth-limb hard floor** — never extend into a minute
-           where the earth-limb separation is below
-           ``earthlimb_hard_floor`` (default 5°).
-        2. **Prefer star-tracker violations** — when choosing which
-           neighbour to extend into a gap, prefer the direction
-           whose only constraint violation is star-tracker rather
-           than earth-limb.
-        3. **Prefer gaps at end** — extend the *previous* sequence
-           forward first (placing any remaining non-visible time at
-           its tail) before extending the *next* sequence backward.
-        """
-        working_cal = deepcopy(calendar)
-
-        # Collect all sequences globally, sorted by start_time
-        all_sequences: List[Tuple[str, ObservationSequence]] = []
-        for visit in working_cal.visits:
-            for seq in visit.sequences:
-                all_sequences.append((visit.id, seq))
-        all_sequences.sort(key=lambda x: x[1].start_time)
-
-        for idx in self._progress(
-            range(len(all_sequences) - 1),
-            desc="Force-filling gaps",
-            total=len(all_sequences) - 1,
-        ):
-            prev_vid, prev_seq = all_sequences[idx]
-            next_vid, next_seq = all_sequences[idx + 1]
-
-            gap_start = prev_seq.stop_time
-            gap_end = next_seq.start_time
-            gap_mins = int(np.rint((gap_end - gap_start).sec / 60.0))
-            if gap_mins <= 0:
-                continue
-
-            prev_coord = SkyCoord(
-                prev_seq.ra,
-                prev_seq.dec,
-                frame="icrs",
-                unit="deg",
-            )
-            next_coord = SkyCoord(
-                next_seq.ra,
-                next_seq.dec,
-                frame="icrs",
-                unit="deg",
-            )
-            gap_deltas = np.arange(gap_mins) * u.min
-            gap_times = gap_start + gap_deltas
-
-            # Batch visibility for both targets
-            prev_roll = self._computed_target_rolls.get(prev_vid, {}).get(
-                prev_seq.target
-            )
-            next_roll = self._computed_target_rolls.get(next_vid, {}).get(
-                next_seq.target
-            )
-
-            if self._roll_sweep_enabled and prev_roll is not None:
-                prev_vis = np.asarray(
-                    self.visibility.get_visibility(
-                        prev_coord,
-                        gap_times,
-                        roll=prev_roll * u.deg,
-                    )
-                )
-            else:
-                prev_vis = np.asarray(
-                    self.visibility.get_visibility(prev_coord, gap_times)
-                )
-
-            if self._roll_sweep_enabled and next_roll is not None:
-                next_vis = np.asarray(
-                    self.visibility.get_visibility(
-                        next_coord,
-                        gap_times,
-                        roll=next_roll * u.deg,
-                    )
-                )
-            else:
-                next_vis = np.asarray(
-                    self.visibility.get_visibility(next_coord, gap_times)
-                )
-
-            # Classify each gap minute for both targets.
-            # Visible minutes get the top score automatically;
-            # non-visible minutes are scored via _classify_gap_minute.
-            prev_score = np.full(gap_mins, self._GAP_VISIBLE)
-            next_score = np.full(gap_mins, self._GAP_VISIBLE)
-            for i in range(gap_mins):
-                if not prev_vis[i]:
-                    prev_score[i] = self._classify_gap_minute(
-                        prev_coord, gap_times[i]
-                    )
-                if not next_vis[i]:
-                    next_score[i] = self._classify_gap_minute(
-                        next_coord, gap_times[i]
-                    )
-
-            # --- Assign minutes ---
-            # Walk forward from gap start extending *prev* (rule 3).
-            # Stop when prev hits the hard floor or when prev has an
-            # earth-limb failure while next is strictly better
-            # (rule 2 / rule 1).
-            prev_extend = 0
-            for i in range(gap_mins):
-                ps = prev_score[i]
-                ns = next_score[i]
-                if ps == self._GAP_FLOOR:
-                    break
-                if ps == self._GAP_EL_FAIL and ns > ps:
-                    break
-                prev_extend = i + 1
-
-            # Walk backward from gap end extending *next*.
-            next_extend_start = gap_mins
-            for i in range(gap_mins - 1, prev_extend - 1, -1):
-                if next_score[i] == self._GAP_FLOOR:
-                    break
-                next_extend_start = i
-
-            # Apply prev-forward extension
-            if prev_extend > 0:
-                new_stop = gap_start + prev_extend * u.min
-                extended_prev = ObservationSequence(
-                    id=prev_seq.id,
-                    target=prev_seq.target,
-                    priority=prev_seq.priority,
-                    start_time=prev_seq.start_time,
-                    stop_time=new_stop,
-                    ra=prev_seq.ra,
-                    dec=prev_seq.dec,
-                    payload_params=deepcopy(prev_seq.payload_params),
-                )
-                working_cal.replace_sequence(
-                    prev_vid, prev_seq.id, extended_prev
-                )
-                all_sequences[idx] = (prev_vid, extended_prev)
-
-            # Apply next-backward extension
-            if next_extend_start < gap_mins:
-                new_start = gap_start + next_extend_start * u.min
-                extended_next = ObservationSequence(
-                    id=next_seq.id,
-                    target=next_seq.target,
-                    priority=next_seq.priority,
-                    start_time=new_start,
-                    stop_time=next_seq.stop_time,
-                    ra=next_seq.ra,
-                    dec=next_seq.dec,
-                    payload_params=deepcopy(next_seq.payload_params),
-                )
-                working_cal.replace_sequence(
-                    next_vid, next_seq.id, extended_next
-                )
-                all_sequences[idx + 1] = (next_vid, extended_next)
-
-        return working_cal
-
-    def _fix_visibility(
-        self, calendar: ScienceCalendar, all_minutes_bool: Any
-    ) -> ScienceCalendar:
-        """
-        Fix visibility gaps by extending previous sequences and shrinking current sequences.
-        """
-        working_cal = deepcopy(calendar)
-
-        # Get synchronized time grid
-        total_minutes, start_time, end_time, time_grid = (
-            self._get_synchronized_time_grid(working_cal)
-        )
-        assignments_result = self.get_minute_by_minute_assignments(working_cal)
-        assignments = assignments_result["assignments"]
-
-        # Find visibility gaps
-        false_blocks, false_idx = _find_false_blocks(
-            all_minutes_bool, time_grid, return_index=True
-        )
-
-        # Track gaps for reporting
-        visibility_gaps = []
-        gaps_filled = 0
-        gaps_total = len(false_idx)
-
-        if not false_idx:
-            # No visibility gaps found
-            return working_cal
-
-        # Define helper functions for assignment access
-        def get_previous(j, target):
-            while j > 0 and assignments[j]["target"] == target:
-                j -= 1
-            return j if j >= 0 else None
-
-        def get_ra_dec(idx):
-            return assignments[idx]["ra"], assignments[idx]["dec"]
-
-        # Process each visibility gap
-        for gap_start_idx, gap_end_idx in self._progress(
-            false_idx, desc="Fixing visibility gaps", total=gaps_total
-        ):
-            # Get times for this gap
-            gap_times = []
-            for x in range(0, gap_end_idx - gap_start_idx):
-                if gap_start_idx + x < len(assignments):
-                    gap_times.append(assignments[gap_start_idx + x]["time"])
-
-            if not gap_times:
-                continue
-
-            # Check if this gap is short enough to tolerate for the
-            # current sequence's target (the one whose head is
-            # non-visible).  If so, skip — no extend/shrink needed.
-            gap_len = len(gap_times)
-            if gap_start_idx < len(assignments):
-                cur_ra = assignments[gap_start_idx]["ra"]
-                cur_dec = assignments[gap_start_idx]["dec"]
-                if cur_ra is not None and cur_dec is not None:
-                    cur_coord = SkyCoord(
-                        cur_ra, cur_dec, frame="icrs", unit="deg"
-                    )
-                    cur_roll = (
-                        self._computed_target_rolls.get(
-                            assignments[gap_start_idx]["visit_id"], {}
-                        ).get(assignments[gap_start_idx]["target"])
-                        if self._roll_sweep_enabled
-                        else None
-                    )
-                    if self._is_gap_tolerable(
-                        cur_coord,
-                        Time(gap_times),
-                        0,
-                        gap_len,
-                        roll=cur_roll,
-                    ):
-                        continue
-
-            # Get previous sequence's target coordinates
-            prev_idx = get_previous(
-                gap_start_idx, assignments[gap_start_idx]["target"]
-            )
-            if prev_idx is None:
-                continue
-
-            ra, dec = get_ra_dec(prev_idx)
-            if ra is None or dec is None:
-                continue
-            target_coord = SkyCoord(ra, dec, frame="icrs", unit="deg")
-
-            # Look up precomputed roll for the previous target
-            prev_target = assignments[prev_idx]["target"]
-            prev_visit_id = assignments[prev_idx]["visit_id"]
-            prev_roll = self._computed_target_rolls.get(prev_visit_id, {}).get(
-                prev_target
-            )
-
-            # Check visibility of previous target during gap
-            if self._roll_sweep_enabled and prev_roll is not None:
-                vis = self.visibility.get_visibility(
-                    target_coord,
-                    Time(gap_times),
-                    roll=prev_roll * u.deg,
-                )
-            else:
-                vis = self.visibility.get_visibility(
-                    target_coord, Time(gap_times)
-                )
-
-            # ── Pre-check: is shrinking the following sequence feasible? ──
-            # We must decide this BEFORE extending the previous sequence so
-            # that an extend followed by a failed shrink cannot create an
-            # overlap between the two adjacent sequences.
-            shrink_feasible = False
-            seq_to_shrink = None
-            current_visit_id = None
-            current_sequence_id = None
-            gap_end_time = None
-
-            if gap_start_idx < len(assignments):
-                cur_asgn = assignments[gap_start_idx]
-                current_visit_id = cur_asgn["visit_id"]
-                current_sequence_id = cur_asgn["sequence_id"]
-                seq_to_shrink = working_cal.get_sequence(
-                    current_visit_id, current_sequence_id
-                )
-                if seq_to_shrink:
-                    gap_end_time = Time(gap_times[-1]) + 1 * u.minute
-                    remaining_duration = seq_to_shrink.stop_time - gap_end_time
-                    shrink_feasible = (
-                        remaining_duration >= self.min_sequence_duration
-                    )
-
-            # Extend previous sequence only when the following sequence can
-            # also be shrunk — keeping extend and shrink atomic.
-            did_extend = False
-            extend_stop_time = None
-            if np.any(vis) and shrink_feasible:
-                visible_times = np.array(gap_times)[vis]
-                if len(visible_times) > 0:
-                    last_visible_time = visible_times[-1]
-                    prev_assignment = assignments[prev_idx]
-                    visit_id = prev_assignment["visit_id"]
-                    sequence_id = prev_assignment["sequence_id"]
-
-                    seq_to_extend = working_cal.get_sequence(
-                        visit_id, sequence_id
-                    )
-                    if seq_to_extend:
-                        new_stop_time = Time(last_visible_time) + 1 * u.minute
-                        extended_seq = ObservationSequence(
-                            id=seq_to_extend.id,
-                            target=seq_to_extend.target,
-                            priority=seq_to_extend.priority,
-                            start_time=seq_to_extend.start_time,
-                            stop_time=new_stop_time,
-                            ra=seq_to_extend.ra,
-                            dec=seq_to_extend.dec,
-                            payload_params=deepcopy(
-                                seq_to_extend.payload_params
-                            ),
-                        )
-                        working_cal.replace_sequence(
-                            visit_id, sequence_id, extended_seq
-                        )
-                        gaps_filled += 1
-                        did_extend = True
-                        extend_stop_time = new_stop_time
-
-            # Track remaining visibility gaps
-            if np.any(~vis):
-                non_visible_times = np.array(gap_times)[~vis]
-                if len(non_visible_times) > 0:
-                    first_false_time = non_visible_times[0]
-                    last_false_time = non_visible_times[-1]
-                    visibility_gaps.append(
-                        (
-                            Time(first_false_time),
-                            Time(last_false_time) + 1 * u.minute,
-                        )
-                    )
-
-            # Shrink the current sequence (only when extend succeeded).
-            # Use extend_stop_time so B starts exactly where A ended —
-            # no gap.
-            if did_extend and shrink_feasible and seq_to_shrink is not None:
-                shrunk_seq = ObservationSequence(
-                    id=seq_to_shrink.id,
-                    target=seq_to_shrink.target,
-                    priority=seq_to_shrink.priority,
-                    start_time=extend_stop_time,
-                    stop_time=seq_to_shrink.stop_time,
-                    ra=seq_to_shrink.ra,
-                    dec=seq_to_shrink.dec,
-                    payload_params=deepcopy(seq_to_shrink.payload_params),
-                )
-                working_cal.replace_sequence(
-                    current_visit_id, current_sequence_id, shrunk_seq
-                )
-
-        # Update gap report
-        self.gap_report["visibility_gaps"] = visibility_gaps
-        self.gap_report["processing_summary"].update(
-            {
-                "gaps_processed": gaps_total,
-                "gaps_filled": gaps_filled,
-                "gaps_remaining": len(visibility_gaps),
-            }
-        )
-
-        return working_cal
-
     def get_minute_by_minute_assignments(
         self, calendar: ScienceCalendar
     ) -> Dict[str, Any]:
