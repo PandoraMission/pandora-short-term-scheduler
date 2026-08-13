@@ -145,6 +145,7 @@ class ScheduleProcessor:
         roll_step: float = 2.0,
         min_power_frac: float = 0.7,
         earthlimb_gap_tolerance: int = 0,
+        earthlimb_gap_tolerance_start_buffer: int = 12,
         st_gap_tolerance: int = 0,
         st_gap_tolerance_start_buffer: int = 12,
         use_dynamic_earthlimb: bool = False,
@@ -257,7 +258,16 @@ class ScheduleProcessor:
             Maximum number of contiguous minutes of earth-limb
             visibility violations to tolerate within a sequence
             (default 0).  Short dips are kept; longer gaps trigger
-            trimming.
+            trimming.  A dip this short also does not stop an observation
+            growing through it into the visible time beyond.
+        earthlimb_gap_tolerance_start_buffer : int, optional
+            Minutes at the beginning of every observation that must be
+            clear of the boresight Earth-limb keepout, measured from its
+            start time (default 12).  ``earthlimb_gap_tolerance`` lets a
+            dip be tolerated mid-observation, but an observation that
+            opens with the boresight in the Earth limb may not acquire VITL,
+            so its not worth starting, therefore no tolerance is applied
+            inside this buffer. Set to 0 to disable.
         st_gap_tolerance : int, optional
             Maximum number of contiguous minutes of star-tracker
             visibility violations to tolerate within a sequence
@@ -321,6 +331,7 @@ class ScheduleProcessor:
 
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
+        self.earthlimb_gap_tolerance_start_buffer = earthlimb_gap_tolerance_start_buffer
         self.st_gap_tolerance = st_gap_tolerance
         self.st_gap_tolerance_start_buffer = st_gap_tolerance_start_buffer
         self.force_gap_fill = force_gap_fill
@@ -1656,36 +1667,45 @@ class ScheduleProcessor:
 
         return working_cal
 
-    def _enforce_st_start_buffer(
+    def _enforce_start_buffers(
         self, calendar: ScienceCalendar
     ) -> ScienceCalendar:
-        """Require star-tracker visibility over each observation's opening.
+        """Require clean pointing over each observation's opening minutes.
 
-        ``st_gap_tolerance`` lets a star-tracker dropout be tolerated in
-        the middle of an observation, but the spacecraft cannot acquire
-        good pointing without the trackers at the start. So the first
-        ``st_gap_tolerance_start_buffer`` minutes, measured from the
-        observation's start time, not from when science begins after the
-        pre-observation overhead -- must be star-tracker visible with no
-        tolerance applied.
+        The gap tolerances let a keepout violation be ridden out in the
+        middle of an observation, but not at the start: the spacecraft
+        cannot acquire good pointing without the star trackers, and an
+        observation that opens with the boresight in the Earth is not worth
+        starting. So the opening minutes, measured from the observation's
+        start time rather than from when science begins after the
+        pre-observation overhead, must be clean with no tolerance applied:
 
-        Sequences that open with a tracker dropout have their
+        - ``st_gap_tolerance_start_buffer`` minutes of star-tracker
+          visibility, evaluated at the roll the observation will fly, and
+        - ``earthlimb_gap_tolerance_start_buffer`` minutes clear of the
+          boresight Earth-limb keepout, whichever limb model is configured.
+
+        Both are enforced together, because clearing one can push the start
+        into a violation of the other. Sequences that open dirty have their
         ``start_time`` moved forward (in place) to the earliest minute that
-        clears the buffer.  When no minute in the sequence clears it, or
-        trimming there would leave the sequence shorter than
+        clears both. When no minute in the sequence clears them, or trimming
+        there would leave the sequence shorter than
         ``min_sequence_duration``, the sequence is left alone and the
         problem is written to the error log.
 
         This runs last among the passes that move a start time, so it has
-        the final say.  It only ever moves a start later, so it cannot
+        the final say. It only ever moves a start later, so it cannot
         create an overlap.
         """
-        buffer_minutes = int(
+        st_buffer = int(
             getattr(self, "st_gap_tolerance_start_buffer", 0) or 0
         )
-        if buffer_minutes <= 0:
-            return calendar
+        earthlimb_buffer = int(
+            getattr(self, "earthlimb_gap_tolerance_start_buffer", 0) or 0
+        )
         if not getattr(self.visibility, "_st_constraint_active", False):
+            st_buffer = 0
+        if st_buffer <= 0 and earthlimb_buffer <= 0:
             return calendar
 
         for visit in calendar.visits:
@@ -1700,68 +1720,115 @@ class ScheduleProcessor:
                 )
                 times = seq.start_time + np.arange(n_mins) * u.min
                 target_roll = visit_rolls.get(seq.target)
-                try:
-                    breakdown = (
-                        self.visibility.get_star_tracker_breakdown(
-                            target_coord,
-                            times,
-                            roll=(
-                                target_roll * u.deg
-                                if self._roll_sweep_enabled
-                                and target_roll is not None
-                                else None
-                            ),
-                        )
-                    )
-                except Exception:
-                    continue
-                st_ok = np.atleast_1d(
-                    np.asarray(breakdown["passed"]["combined"])
+                roll = (
+                    target_roll * u.deg
+                    if self._roll_sweep_enabled and target_roll is not None
+                    else None
                 )
 
-                # Walk the start forward past every tracker dropout that
-                # lands inside the buffer window. Dropouts are visited in
-                # order, so once one sits beyond the current window all the
-                # later ones do too. An observation shorter than the buffer
-                # simply has to be clear all the way to its stop.
-                offset = 0
-                for dark_minute in np.flatnonzero(~st_ok):
-                    if dark_minute >= offset + buffer_minutes:
-                        break
-                    if dark_minute >= offset:
-                        offset = int(dark_minute) + 1
+                requirements = []
+                if st_buffer > 0:
+                    try:
+                        breakdown = (
+                            self.visibility.get_star_tracker_breakdown(
+                                target_coord, times, roll=roll
+                            )
+                        )
+                    except Exception:
+                        breakdown = None
+                    if breakdown is not None:
+                        requirements.append(
+                            (
+                                "star trackers are not settled",
+                                st_buffer,
+                                np.atleast_1d(
+                                    np.asarray(
+                                        breakdown["passed"]["combined"]
+                                    )
+                                ),
+                            )
+                        )
+                if earthlimb_buffer > 0:
+                    try:
+                        clear = self.visibility.get_constraint(
+                            target_coord, "earthlimb", times
+                        )
+                    except Exception:
+                        clear = None
+                    if clear is not None:
+                        requirements.append(
+                            (
+                                "the boresight is inside the Earth limb",
+                                earthlimb_buffer,
+                                np.atleast_1d(np.asarray(clear)),
+                            )
+                        )
+                if not requirements:
+                    continue
+
+                offset = self._first_clean_start(requirements, n_mins)
                 if offset == 0:
                     continue
 
                 prefix = self._seq_prefix(visit.id, seq)
-                if offset >= len(st_ok):
+                reasons = ", ".join(name for name, _, _ in requirements)
+                if offset is None:
                     self._print(
-                        f"ERROR: {prefix} | ST START BUFFER: star trackers "
-                        f"are never visible long enough anywhere in this "
-                        f"observation; pointing acquisition will be "
-                        f"unreliable. Left unchanged."
+                        f"ERROR: {prefix} | START BUFFER: no stretch of this "
+                        f"observation opens cleanly ({reasons}); pointing "
+                        f"will be unreliable. Left unchanged."
                     )
                     continue
 
                 new_start = seq.start_time + offset * u.min
                 if (seq.stop_time - new_start) < self.min_sequence_duration:
                     self._print(
-                        f"ERROR: {prefix} | ST START BUFFER: star trackers "
-                        f"do not settle until {offset} min in, and trimming "
-                        f"there would leave under "
+                        f"ERROR: {prefix} | START BUFFER: does not open "
+                        f"cleanly until {offset} min in ({reasons}), and "
+                        f"trimming there would leave under "
                         f"{self.min_sequence_duration.sec / 60:.0f} min. "
                         f"Left unchanged."
                     )
                     continue
 
                 self._print(
-                    f"{prefix} | ST START BUFFER: start moved later by "
-                    f"{offset} min to secure up to {buffer_minutes} min of "
-                    f"star-tracker visibility at the start."
+                    f"{prefix} | START BUFFER: start moved later by "
+                    f"{offset} min so the observation opens cleanly "
+                    f"({reasons})."
                 )
                 seq.start_time = new_start
 
         return calendar
+
+    @staticmethod
+    def _first_clean_start(
+        requirements: List[Tuple[str, int, np.ndarray]],
+        n_mins: int,
+    ) -> Optional[int]:
+        """Earliest offset at which every requirement holds for its buffer.
+
+        Each requirement is ``(name, buffer_minutes, ok_per_minute)``. The
+        offset is walked forward past any violation falling inside that
+        requirement's window and rechecked against all of them, because
+        satisfying one can drag the start into a violation of another. An
+        observation shorter than a buffer simply has to be clean all the
+        way to its stop, which the slicing handles on its own.
+
+        Returns the offset, or ``None`` when no offset clears everything.
+        """
+        offset = 0
+        while offset < n_mins:
+            advanced = False
+            for _, buffer_minutes, ok in requirements:
+                window = ok[offset:offset + buffer_minutes]
+                if window.size and not window.all():
+                    # Jump past the last violation in this window; anything
+                    # earlier would still leave it inside the buffer.
+                    offset += int(np.flatnonzero(~window)[-1]) + 1
+                    advanced = True
+            if not advanced:
+                return offset
+        return None
 
     def _analyze_mid_sequence_visibility(
         self,

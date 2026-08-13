@@ -64,6 +64,7 @@ scheduler = ScheduleProcessor(
     earthlimb_gap_tolerance=6,    # max allowed Earth-limb gap (minutes)
     st_gap_tolerance=12,          # max allowed star-tracker gap (minutes)
     st_gap_tolerance_start_buffer=12, # buffer time at the start of an observation before a ST gap is tolerated.
+    earthlimb_gap_tolerance_start_buffer=12, # buffer time at the start of an observation before a Earth-limb gap is tolerated.
     earthlimb_day_min=44,         # min Earth-limb angle, daytime (deg)
     earthlimb_night_min=13,       # min Earth-limb angle, nighttime (deg)
     sun_min=91,                   # min payload Sun keel angle (deg)

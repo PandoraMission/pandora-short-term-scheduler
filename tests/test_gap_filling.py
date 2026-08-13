@@ -1828,6 +1828,9 @@ class TestSTStartBuffer:
         proc._roll_sweep_enabled = False
         proc._computed_target_rolls = {}
         proc.st_gap_tolerance_start_buffer = buffer_minutes
+        # These tests are about the star-tracker buffer specifically, so
+        # the Earth-limb one is left off.
+        proc.earthlimb_gap_tolerance_start_buffer = 0
         return proc
 
     def test_clear_start_left_alone(self):
@@ -1836,7 +1839,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         assert cal.visits[0].sequences[0].start_time == T0
 
@@ -1848,7 +1851,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         out = cal.visits[0].sequences[0]
         assert abs((out.start_time - (T0 + 5 * u.min)).sec) < 1
@@ -1863,7 +1866,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         out = cal.visits[0].sequences[0]
         assert abs((out.start_time - (T0 + 6 * u.min)).sec) < 1
@@ -1874,12 +1877,12 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         out = cal.visits[0].sequences[0]
         assert out.start_time == T0
         assert out.stop_time == T0 + 40 * u.min
-        assert "ST START BUFFER" in capsys.readouterr().out
+        assert "START BUFFER" in capsys.readouterr().out
 
     def test_trim_below_minimum_duration_is_refused(self, capsys):
         """Trimming that would leave under min_sequence_duration is refused."""
@@ -1889,11 +1892,11 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=20)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         # Would have to start 14 min in, leaving 6 min < the 8 min minimum.
         assert cal.visits[0].sequences[0].start_time == T0
-        assert "ST START BUFFER" in capsys.readouterr().out
+        assert "START BUFFER" in capsys.readouterr().out
 
     def test_buffer_longer_than_observation_must_be_clear_throughout(self):
         """A buffer past the stop time means the whole observation is clear."""
@@ -1903,7 +1906,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=12)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         # The buffer outruns the 12 min observation, so the requirement is
         # "clear to the stop"; trimming the two dark minutes achieves that.
@@ -1918,7 +1921,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         assert cal.visits[0].sequences[0].start_time == T0
 
@@ -1930,7 +1933,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         assert cal.visits[0].sequences[0].start_time == T0
 
@@ -1942,7 +1945,7 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         assert cal.visits[0].sequences[0].start_time == T0
         assert vis.rolls_seen == []
@@ -1959,11 +1962,178 @@ class TestSTStartBuffer:
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
         cal = _make_calendar([seq])
 
-        proc._enforce_st_start_buffer(cal)
+        proc._enforce_start_buffers(cal)
 
         assert vis.rolls_seen == [137.0]
         # At roll 137 the trackers never pass, so nothing can be trimmed.
         assert cal.visits[0].sequences[0].start_time == T0
+
+
+class _EarthlimbPatternVis:
+    """Boresight Earth-limb clearance from a minute-indexed mask.
+
+    Star trackers are always clear, so these tests isolate the Earth-limb
+    start buffer.
+    """
+
+    _st_constraint_active = False
+
+    def __init__(self, clear_mask):
+        self.clear_mask = np.asarray(clear_mask, dtype=bool)
+
+    def _lookup(self, times):
+        indices = np.rint((times - T0).sec / 60.0).astype(int)
+        return np.array(
+            [
+                bool(self.clear_mask[i])
+                if 0 <= i < len(self.clear_mask)
+                else True
+                for i in np.atleast_1d(indices)
+            ],
+            dtype=bool,
+        )
+
+    def get_visibility(self, coord, times, roll=None):
+        return self._lookup(times)
+
+    def get_constraint(self, coord, body, time, pre=None):
+        assert body == "earthlimb"
+        return self._lookup(time)
+
+
+class TestEarthlimbStartBuffer:
+    """The boresight must be clear of the Earth over the opening minutes."""
+
+    def _make_processor(self, visibility, buffer_minutes=12):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.visibility = visibility
+        proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
+        proc._roll_sweep_enabled = False
+        proc._computed_target_rolls = {}
+        proc.st_gap_tolerance_start_buffer = 0
+        proc.earthlimb_gap_tolerance_start_buffer = buffer_minutes
+        return proc
+
+    def test_clear_start_left_alone(self):
+        proc = self._make_processor(
+            _EarthlimbPatternVis(np.ones(60, dtype=bool))
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_start_inside_the_earth_limb_is_trimmed_forward(self):
+        """An observation opening with the boresight in the Earth moves."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:7] = False
+        proc = self._make_processor(_EarthlimbPatternVis(mask))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 7 * u.min)).sec) < 1
+        assert abs((out.stop_time - (T0 + 40 * u.min)).sec) < 1
+
+    def test_dip_inside_the_buffer_pushes_past_it(self):
+        """A dip the gap tolerance would accept still moves the start."""
+        mask = np.ones(60, dtype=bool)
+        mask[4:9] = False
+        proc = self._make_processor(
+            _EarthlimbPatternVis(mask), buffer_minutes=12
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 9 * u.min)).sec) < 1
+
+    def test_dip_after_the_buffer_is_left_alone(self):
+        """Beyond the buffer the gap tolerance takes over again."""
+        mask = np.ones(60, dtype=bool)
+        mask[20:24] = False
+        proc = self._make_processor(
+            _EarthlimbPatternVis(mask), buffer_minutes=12
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_never_clear_logs_error_and_keeps_sequence(self, capsys):
+        proc = self._make_processor(
+            _EarthlimbPatternVis(np.zeros(60, dtype=bool))
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+        assert "START BUFFER" in capsys.readouterr().out
+
+    def test_disabled_by_zero_buffer(self):
+        proc = self._make_processor(
+            _EarthlimbPatternVis(np.zeros(60, dtype=bool)), buffer_minutes=0
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_both_buffers_are_satisfied_together(self):
+        """Clearing one constraint must not land the start inside the other.
+
+        The trackers are dark over 0-5 and the boresight over 8-12, so
+        neither requirement alone gives the right answer: satisfying the
+        trackers would start at 6, which puts the Earth-limb violation
+        straight back inside the buffer.
+        """
+        tracker_ok = np.ones(60, dtype=bool)
+        tracker_ok[0:6] = False
+        limb_clear = np.ones(60, dtype=bool)
+        limb_clear[8:13] = False
+
+        class _BothVis(_EarthlimbPatternVis):
+            _st_constraint_active = True
+
+            def get_star_tracker_breakdown(
+                self, coord, time, roll=None, pre=None
+            ):
+                indices = np.rint((time - T0).sec / 60.0).astype(int)
+                return {
+                    "passed": {
+                        "combined": np.array(
+                            [
+                                bool(tracker_ok[i])
+                                if 0 <= i < len(tracker_ok)
+                                else True
+                                for i in np.atleast_1d(indices)
+                            ],
+                            dtype=bool,
+                        )
+                    }
+                }
+
+        proc = self._make_processor(_BothVis(limb_clear), buffer_minutes=12)
+        proc.st_gap_tolerance_start_buffer = 12
+        seq = _make_seq("s1", "T", start_min=0, duration_min=50)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 13 * u.min)).sec) < 1
 
 
 class TestGapToleranceUsesObservationRoll:
