@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shortschedule"
-version = "1.2.2"
+version = "1.2.3"
 description = ""
 authors = ["Tom Barclay <barclay.astro@gmail.com>"]
 readme = "README.md"

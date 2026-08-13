@@ -146,6 +146,7 @@ class ScheduleProcessor:
         min_power_frac: float = 0.7,
         earthlimb_gap_tolerance: int = 0,
         st_gap_tolerance: int = 0,
+        st_gap_tolerance_start_buffer: int = 12,
         use_dynamic_earthlimb: bool = False,
         force_gap_fill: bool = False,
         earthlimb_hard_floor: float = 5.0,
@@ -258,6 +259,15 @@ class ScheduleProcessor:
             Maximum number of contiguous minutes of star-tracker
             visibility violations to tolerate within a sequence
             (default 0).
+        st_gap_tolerance_start_buffer : int, optional
+            Minutes of uninterrupted star-tracker visibility required at
+            the beginning of every observation, measured from its start
+            time (default 12). ``st_gap_tolerance`` lets a tracker dropout
+            be tolerated mid-observation, but the spacecraft cannot
+            acquire good pointing without the trackers at the start, so no
+            tolerance is applied inside this buffer. Sequences that open
+            dark are trimmed forward to the first minute that clears it;
+            set to 0 to disable the check.
         use_dynamic_earthlimb : bool, default=true
             If True, then uses the dynamic DPC boresight Earth limb.
             This is the wedge shape keepout based on the Earth illumination.
@@ -313,6 +323,7 @@ class ScheduleProcessor:
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
         self.st_gap_tolerance = st_gap_tolerance
+        self.st_gap_tolerance_start_buffer = st_gap_tolerance_start_buffer
         self.force_gap_fill = force_gap_fill
         self.earthlimb_hard_floor = earthlimb_hard_floor
 
@@ -991,6 +1002,12 @@ class ScheduleProcessor:
             working_calendar = self._trim_to_longest_visible_block(
                 working_calendar
             )
+
+            # Finally require star-tracker visibility over each
+            # observation's opening minutes; without it the spacecraft
+            # cannot acquire good pointing. This runs last so it has the
+            # final say on every start time.
+            working_calendar = self._enforce_st_start_buffer(working_calendar)
 
         # Report any timing changes (shrink/elongate) made above.
         self._log_timing_changes(working_calendar, original_timing)
