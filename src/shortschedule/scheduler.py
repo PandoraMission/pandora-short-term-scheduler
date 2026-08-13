@@ -454,29 +454,9 @@ class ScheduleProcessor:
         # scanned for NaN-like values (reported as warnings).
         self.fix_bad_data = fix_bad_data
 
-        # Enhanced gap tracking with before/after comparison
-        self.gap_report = {
-            "original_calendar_stats": {},
-            "processed_calendar_stats": {},
-            "visibility_analysis": {
-                "original_gaps": [],
-                "filled_gaps": [],
-                "remaining_gaps": [],
-                "unfillable_gaps": [],
-            },
-            "sequence_modifications": {
-                "extended_sequences": [],
-                "shortened_sequences": [],
-                "unchanged_sequences": [],
-            },
-            "processing_summary": {
-                "total_gaps_found": 0,
-                "gaps_filled": 0,
-                "gaps_remaining": 0,
-                "total_time_recovered_minutes": 0,
-                "sequences_modified": 0,
-            },
-        }
+        # Before/after tracking of what the processing passes did. Built by
+        # the same routine that resets it per run, so the two cannot drift.
+        self._initialize_gap_report()
 
     def process_calendar(
         self,
@@ -992,7 +972,16 @@ class ScheduleProcessor:
         self, calendar: ScienceCalendar, original_timing: Dict[Any, Any]
     ) -> None:
         """Log per-sequence shrink/elongate vs the snapshot in
-        *original_timing* (keyed by ``(visit_id, sequence_id)``)."""
+        original_timing (keyed by ``(visit_id, sequence_id)``).
+
+        This is the one pass that sees every observation's final timing
+        against its long-term timing, so it also records the modification
+        tallies in ``gap_report``.
+        """
+        modifications = self.gap_report["sequence_modifications"]
+        for key in modifications:
+            modifications[key] = []
+
         for visit in calendar.visits:
             for seq in visit.sequences:
                 orig = original_timing.get((visit.id, seq.id))
@@ -1001,7 +990,9 @@ class ScheduleProcessor:
                 old_start, old_stop = orig
                 d_start = (seq.start_time - old_start).sec
                 d_stop = (seq.stop_time - old_stop).sec
+                prefix = self._seq_prefix(visit.id, seq)
                 if abs(d_start) < 1.0 and abs(d_stop) < 1.0:
+                    modifications["unchanged_sequences"].append(prefix)
                     continue
 
                 parts = []
@@ -1014,12 +1005,28 @@ class ScheduleProcessor:
 
                 old_dur = (old_stop - old_start).sec / 60.0
                 new_dur = seq.duration.sec / 60.0
-                verb = "ELONGATED" if new_dur > old_dur else "SHRANK"
+                lengthened = new_dur > old_dur
+                verb = "ELONGATED" if lengthened else "SHRANK"
+                modifications[
+                    "extended_sequences" if lengthened
+                    else "shortened_sequences"
+                ].append(prefix)
                 self._print(
-                    f"{self._seq_prefix(visit.id, seq)} | {verb}: "
+                    f"{prefix} | {verb}: "
                     + ", ".join(parts)
                     + f" (duration {old_dur:.1f} -> {new_dur:.1f} min)"
                 )
+
+        summary = self.gap_report["processing_summary"]
+        summary["sequences_lengthened"] = len(
+            modifications["extended_sequences"]
+        )
+        summary["sequences_shortened"] = len(
+            modifications["shortened_sequences"]
+        )
+        summary["sequences_modified"] = (
+            summary["sequences_lengthened"] + summary["sequences_shortened"]
+        )
 
     def _fill_gaps(
         self,
@@ -1707,6 +1714,9 @@ class ScheduleProcessor:
                     seq.stop_time = seq.stop_time + gained * u.min
                     gained_stops += gained
 
+        summary = self.gap_report["processing_summary"]
+        summary["minutes_grown_at_starts"] = gained_starts
+        summary["minutes_grown_at_stops"] = gained_stops
         self._print(
             f"Grew observations into idle time: {gained_starts} min added "
             f"at starts, {gained_stops} min added at stops."
@@ -1776,6 +1786,7 @@ class ScheduleProcessor:
         limit = getattr(self, "max_movement_minutes", 0) or 0
         if limit <= 0:
             return calendar
+        clamped = 0
 
         for visit in calendar.visits:
             for seq in visit.sequences:
@@ -1823,7 +1834,9 @@ class ScheduleProcessor:
                     )
                     continue
                 seq.start_time, seq.stop_time = new_start, new_stop
+                clamped += 1
 
+        self.gap_report["processing_summary"]["boundaries_clamped"] = clamped
         return calendar
 
     def _repair_overlaps(self, calendar: ScienceCalendar) -> ScienceCalendar:
@@ -1878,6 +1891,7 @@ class ScheduleProcessor:
                     f"repairing {repaired}; these need a manual fix."
                 )
 
+        self.gap_report["processing_summary"]["overlaps_repaired"] = repaired
         return calendar
 
     def _enforce_start_buffers(
@@ -4332,11 +4346,13 @@ class ScheduleProcessor:
                 "unchanged_sequences": [],
             },
             "processing_summary": {
-                "total_gaps_found": 0,
-                "gaps_filled": 0,
-                "gaps_remaining": 0,
-                "total_time_recovered_minutes": 0,
                 "sequences_modified": 0,
+                "sequences_lengthened": 0,
+                "sequences_shortened": 0,
+                "minutes_grown_at_starts": 0,
+                "minutes_grown_at_stops": 0,
+                "boundaries_clamped": 0,
+                "overlaps_repaired": 0,
                 "original_gap_time_minutes": 0,
                 "duty_cycle_improvement_percent": 0,
                 "duration_improvement_minutes": 0,
@@ -4484,12 +4500,26 @@ class ScheduleProcessor:
         self._print(
             f"  Duty Cycle Improved: {summary.get('duty_cycle_improvement_percent', 0):.1f}%"
         )
-        self._print(f"  Sequences Modified: {summary.get('sequences_modified', 0)}")
-
-        if "gaps_filled" in summary:
-            self._print(
-                f"  Gaps Filled: {summary['gaps_filled']}/{summary['gaps_filled'] + summary['gaps_remaining']}"
-            )
+        self._print(
+            f"  Sequences Modified: "
+            f"{summary.get('sequences_modified', 0)} "
+            f"({summary.get('sequences_lengthened', 0)} grown, "
+            f"{summary.get('sequences_shortened', 0)} trimmed)"
+        )
+        self._print(
+            f"  Grown Into Idle: "
+            f"{summary.get('minutes_grown_at_starts', 0)} min at starts, "
+            f"{summary.get('minutes_grown_at_stops', 0)} min at stops"
+        )
+        self._print(
+            f"  Boundaries Clamped: "
+            f"{summary.get('boundaries_clamped', 0)} "
+            f"(over the {getattr(self, 'max_movement_minutes', 0)} min "
+            f"movement limit)"
+        )
+        self._print(
+            f"  Overlaps Repaired: {summary.get('overlaps_repaired', 0)}"
+        )
 
     def debug_sequence_visibility(
         self,

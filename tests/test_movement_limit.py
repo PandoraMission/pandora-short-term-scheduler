@@ -93,6 +93,9 @@ def _processor(visibility=None, limit=45, earthlimb_gap_tolerance=0):
     # keeps most of these tests about bounds rather than about tolerances.
     proc.earthlimb_gap_tolerance = earthlimb_gap_tolerance
     proc.st_gap_tolerance = 0
+    # The passes record what they did, so give the double the real report
+    # schema rather than a hand-rolled stand-in that could drift from it.
+    proc._initialize_gap_report()
     return proc
 
 
@@ -286,6 +289,68 @@ class TestClampMovement:
 # ================================================================
 # The overlap guarantee
 # ================================================================
+
+
+class TestGapReportRecordsWhatHappened:
+    """The report must describe the passes that actually run now.
+
+    The old filled-versus-remaining gap counters were left behind when gap
+    filling was removed, and reported zero forever.
+    """
+
+    def test_growth_is_recorded(self):
+        pattern = np.zeros(120, dtype=bool)
+        pattern[20:80] = True
+        proc = _processor(_PatternVis(pattern))
+        seq = _make_seq("s1", "T", start_min=40, duration_min=10)
+        cal = _make_calendar([seq])
+
+        proc._grow_into_free_time(cal, _timing(cal))
+
+        summary = proc.gap_report["processing_summary"]
+        assert summary["minutes_grown_at_starts"] == 20
+        assert summary["minutes_grown_at_stops"] == 30
+
+    def test_clamping_is_recorded(self):
+        proc = _processor()
+        seq = _make_seq("s1", "T", start_min=200, duration_min=30)
+        original = _timing(cal := _make_calendar([seq]))
+        seq.start_time = seq.start_time - 97 * u.min
+
+        proc._clamp_movement(cal, original)
+
+        assert proc.gap_report["processing_summary"]["boundaries_clamped"] == 1
+
+    def test_overlap_repairs_are_recorded(self):
+        proc = _processor()
+        cal = _make_calendar(
+            [
+                _make_seq("s1", "A", start_min=0, duration_min=40),
+                _make_seq("s2", "B", start_min=30, duration_min=20),
+            ]
+        )
+
+        proc._repair_overlaps(cal)
+
+        assert proc.gap_report["processing_summary"]["overlaps_repaired"] == 1
+
+    def test_modifications_are_tallied(self):
+        proc = _processor()
+        grown = _make_seq("s1", "A", start_min=0, duration_min=20)
+        trimmed = _make_seq("s2", "B", start_min=60, duration_min=20)
+        untouched = _make_seq("s3", "C", start_min=120, duration_min=20)
+        original = _timing(cal := _make_calendar([grown, trimmed, untouched]))
+        grown.stop_time = grown.stop_time + 10 * u.min
+        trimmed.stop_time = trimmed.stop_time - 5 * u.min
+
+        proc._log_timing_changes(cal, original)
+
+        summary = proc.gap_report["processing_summary"]
+        assert summary["sequences_lengthened"] == 1
+        assert summary["sequences_shortened"] == 1
+        assert summary["sequences_modified"] == 2
+        modifications = proc.gap_report["sequence_modifications"]
+        assert len(modifications["unchanged_sequences"]) == 1
 
 
 class TestRepairOverlaps:

@@ -872,36 +872,47 @@ class ScheduleVisualizer:
             )
 
     def _plot_gap_analysis(self, ax):
-        """Plot gap analysis."""
+        """Plot how the scheduler adjusted each observation.
+
+        The scheduler no longer tries to close every gap, so there is no
+        filled-versus-remaining split to draw. What matters now is how many
+        observations it grew, trimmed, or left where the long-term calendar
+        put them.
+        """
         summary = self.gap_report.get("processing_summary", {})
 
-        gaps_found = summary.get("total_gaps_found", 0)
-        gaps_filled = summary.get("gaps_filled", 0)
-        gaps_remaining = summary.get("gaps_remaining", 0)
+        modifications = self.gap_report.get("sequence_modifications", {})
+        grown = summary.get("sequences_lengthened", 0)
+        trimmed = summary.get("sequences_shortened", 0)
+        unchanged = len(modifications.get("unchanged_sequences", []))
+        total = grown + trimmed + unchanged
 
-        if gaps_found > 0:
-            labels = ["Filled", "Remaining"]
-            sizes = [gaps_filled, gaps_remaining]
-            colors = ["lightgreen", "lightcoral"]
+        if total > 0:
+            labels = ["Grown", "Trimmed", "Unchanged"]
+            sizes = [grown, trimmed, unchanged]
+            colors = ["lightgreen", "lightcoral", "lightgray"]
+            keep = [i for i, size in enumerate(sizes) if size > 0]
 
-            wedges, texts, autotexts = ax.pie(
-                sizes,
-                labels=labels,
-                colors=colors,
+            ax.pie(
+                [sizes[i] for i in keep],
+                labels=[labels[i] for i in keep],
+                colors=[colors[i] for i in keep],
                 autopct="%1.1f%%",
                 startangle=90,
             )
-            ax.set_title(f"Gap Resolution\n({gaps_found} total gaps found)")
+            ax.set_title(
+                f"Observation Adjustments\n({total} observations)"
+            )
         else:
             ax.text(
                 0.5,
                 0.5,
-                "No gap data available",
+                "No adjustment data available",
                 ha="center",
                 va="center",
                 transform=ax.transAxes,
             )
-            ax.set_title("Gap Resolution")
+            ax.set_title("Observation Adjustments")
 
     def _plot_processing_summary(self, ax):
         """Plot processing summary as text."""
@@ -912,8 +923,14 @@ class ScheduleVisualizer:
             "",
             f"Duration Improvement: {summary.get('duration_improvement_hours', 0):.1f} hrs",
             f"Duty Cycle Improvement: {summary.get('duty_cycle_improvement_percent', 0):.1f}%",
-            f"Sequences Modified: {summary.get('sequences_modified', 0)}",
-            f"Gaps Filled: {summary.get('gaps_filled', 0)}/{summary.get('gaps_filled', 0) + summary.get('gaps_remaining', 0)}",
+            f"Sequences Modified: {summary.get('sequences_modified', 0)}"
+            f" ({summary.get('sequences_lengthened', 0)} grown,"
+            f" {summary.get('sequences_shortened', 0)} trimmed)",
+            f"Grown Into Idle:"
+            f" {summary.get('minutes_grown_at_starts', 0)} min starts,"
+            f" {summary.get('minutes_grown_at_stops', 0)} min stops",
+            f"Boundaries Clamped: {summary.get('boundaries_clamped', 0)}",
+            f"Overlaps Repaired: {summary.get('overlaps_repaired', 0)}",
         ]
 
         ax.text(
