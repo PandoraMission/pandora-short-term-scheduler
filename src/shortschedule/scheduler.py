@@ -130,9 +130,9 @@ class ScheduleProcessor:
         vitl_settling_time: u.Quantity = 60.0 * u.s,
         convert_single_roi_to_predefined: bool = True,
         fix_bad_data: bool = True,
-        moon_min: Optional[float] = 20.0,
-        sun_min: Optional[float] = 91.0,
-        earthlimb_min: Optional[float] = 20.0,
+        moon_min: Optional[float] = None,
+        sun_min: Optional[float] = None,
+        earthlimb_min: Optional[float] = None,
         earthlimb_day_min: Optional[float] = None,
         earthlimb_night_min: Optional[float] = None,
         mars_min: Optional[float] = None,
@@ -234,6 +234,9 @@ class ScheduleProcessor:
             because their RA/Dec are expected to be NaN.
         moon_min, sun_min, earthlimb_min, mars_min, jupiter_min : float, optional
             Minimum angular separations (degrees) for visibility constraints.
+            Every keepout defaults to ``None`` deferring to ``pandoravisibility``
+            as the single source of truth for keepout defaults, so they are
+            deliberately not restated here.
         earthlimb_day_min : float, optional
             Earth-limb keepout angle (degrees) on the **day** side of the
             terminator.  When ``None`` (default), ``earthlimb_min`` is used
@@ -304,14 +307,10 @@ class ScheduleProcessor:
             st_earthlimb_min=self._to_deg(st_earthlimb_min),
             st1_earthlimb_min=self._to_deg(st1_earthlimb_min),
             st2_earthlimb_min=self._to_deg(st2_earthlimb_min),
-            use_dynamic_earthlimb=use_dynamic_earthlimb
+            earthlimb_day_min=self._to_deg(earthlimb_day_min),
+            earthlimb_night_min=self._to_deg(earthlimb_night_min),
+            use_dynamic_earthlimb=use_dynamic_earthlimb,
         )
-        # Only forward day/night earthlimb keepouts when explicitly set so that
-        # Visibility falls back to earthlimb_min for whichever side is None.
-        if earthlimb_day_min is not None:
-            _kw["earthlimb_day_min"] = self._to_deg(earthlimb_day_min)
-        if earthlimb_night_min is not None:
-            _kw["earthlimb_night_min"] = self._to_deg(earthlimb_night_min)
         # Strip None entries so Visibility uses its own class-level defaults
         # for any constraint the caller left unset.
         _kw = {k: v for k, v in _kw.items() if v is not None}
@@ -331,17 +330,23 @@ class ScheduleProcessor:
         self.roll_step = roll_step
         self.min_power_frac = min_power_frac
         # Roll sweep is only meaningful when star-tracker constraints are
-        # active (those constraints depend on roll; boresight constraints
-        # do not).  Disable the sweep when no ST parameters were given so
-        # that vanilla ScheduleProcessor(tle1, tle2) behaves as before.
-        _st_params = (
-            st_sun_min,
-            st_moon_min,
-            st_earthlimb_min,
-            st1_earthlimb_min,
-            st2_earthlimb_min,
+        # active (those constraints depend on roll; boresight constraints do
+        # not). A limit of zero disables that keepout in pandoravisibility,
+        # so "an argument was passed" is a different question from "a
+        # constraint is active": st_sun_min=0 used to switch the sweep on
+        # for constraints that were never applied.
+        # tests/test_keepout_plumb_through.py pins this to
+        # Visibility._st_constraint_active so the two cannot drift apart.
+        self._roll_sweep_enabled: bool = any(
+            limit is not None and limit > 0
+            for limit in (
+                st_sun_min,
+                st_moon_min,
+                st_earthlimb_min,
+                st1_earthlimb_min,
+                st2_earthlimb_min,
+            )
         )
-        self._roll_sweep_enabled: bool = any(p is not None for p in _st_params)
 
         # Per-visit, per-target precomputed rolls populated during
         # _process_all_sequences.  Structure:
