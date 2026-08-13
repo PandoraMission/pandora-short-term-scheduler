@@ -38,7 +38,10 @@ class XMLWriter:
         calendar : ScienceCalendar
             Calendar to write
         output_path : str, optional
-            Full output path. If None, generates filename automatically
+            Full output path. If None, a filename is generated
+            and written beside the long-term calendar this one came from
+            (``ScienceCalendar.source_path``), falling back to the working
+            directory only when that is unknown.
         mission_phase : str
             Mission phase code: 'TST', 'COM', or 'OPS' (default: 'TST')
         revision : int
@@ -55,6 +58,12 @@ class XMLWriter:
             output_path = self._generate_filename(
                 calendar, mission_phase, revision
             )
+            # The delivered calendar belongs with the rest of the run's
+            # products, next to the calendar it was built from, rather than
+            # in whatever directory the script happened to be launched in.
+            source = getattr(calendar, "source_path", None)
+            if source is not None:
+                output_path = str(source.parent / output_path)
 
         if verbose:
             print(f"Writing calendar to: {output_path}")

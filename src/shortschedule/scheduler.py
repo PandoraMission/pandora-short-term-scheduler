@@ -3377,11 +3377,13 @@ class ScheduleProcessor:
         text = self._render_diagnostics(daily, fmt, data_str)
 
         # Resolve where to write the .diag file.
-        base = output_path
-        if base is None:
-            base = (calendar.metadata or {}).get("source_path")
+        base = (
+            Path(output_path)
+            if output_path is not None
+            else getattr(calendar, "source_path", None)
+        )
         if base is not None:
-            diag_path = Path(base).with_suffix(".diag")
+            diag_path = base.with_suffix(".diag")
             diag_path.write_text(text, encoding="utf-8")
             self._print(f"Wrote diagnostics to {diag_path}")
 
@@ -3633,12 +3635,12 @@ class ScheduleProcessor:
         logger.addHandler(console)
 
         # Resolve the log file base path.
-        base = log_path
-        if base is None:
-            source = (calendar.metadata or {}).get("source_path")
-            base = source
+        base = (
+            Path(log_path)
+            if log_path is not None
+            else getattr(calendar, "source_path", None)
+        )
         if base is not None:
-            base = Path(base)
             log_file = base.with_suffix(".log")
             errors_file = base.with_suffix(".errors.log")
 

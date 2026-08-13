@@ -17,6 +17,7 @@ Notes
 
 # Standard library
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Third-party
@@ -319,6 +320,21 @@ class ScienceCalendar:
     def set_visibility_calculator(self, visibility: Any) -> None:
         """Set or update the visibility calculator."""
         self.visibility = visibility
+
+    @property
+    def source_path(self) -> Optional[Path]:
+        """Path of the long-term calendar this one was parsed from.
+
+        Everything the scheduler produces for a calendar, the delivered
+        XML, the run logs, the diagnostics, the plots, is saved beside the
+        calendar it came from rather than in whatever directory the run
+        happened to start in.
+
+        Returns None when the calendar was not parsed from a file, in
+        which case callers fall back to their own default.
+        """
+        source = (self.metadata or {}).get("source_path")
+        return Path(source) if source else None
 
     @property
     def total_sequences(self):
