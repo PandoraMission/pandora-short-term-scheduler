@@ -451,7 +451,7 @@ class ScheduleProcessor:
         calendar: ScienceCalendar,
         window_start: Optional[Any] = None,
         window_duration_days: int = 21,
-        merge_similar_observations: bool = False,
+        merge_similar_observations: bool = True,
         log_path: Optional[Any] = None,
         verbose: bool = False,
     ) -> ScienceCalendar:
@@ -481,7 +481,7 @@ class ScheduleProcessor:
             When True, adjacent observation sequences in the same visit that
             share the same target and pointing are merged into a single
             longer sequence.
-            Defaults to False.
+            Defaults to True.
         log_path : str or pathlib.Path, optional
             Base path for the run log files. The ".log" (everything) and
             ".errors.log" (warnings/errors only, created lazily) files are

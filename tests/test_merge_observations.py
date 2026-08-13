@@ -292,8 +292,10 @@ class TestProcessCalendarMergeKwarg:
         assert n_on > 0
 
     @pytest.mark.slow
-    def test_merge_disabled_by_default(self, monkeypatch, tmp_path):
-        """Omitting the kwarg leaves merging off (no error, processes)."""
+    def test_merge_enabled_by_default(self, monkeypatch, tmp_path):
+        """Omitting the kwarg merges: back-to-back same-target observations
+        are an artifact of how the long-term calendar splits visits, so the
+        delivered calendar should join them unless asked not to."""
         monkeypatch.setattr(
             "shortschedule.scheduler.Visibility",
             _DummyVisibilityAllTrue,
@@ -301,12 +303,23 @@ class TestProcessCalendarMergeKwarg:
         cal = self._load_sample()
         first_seq = cal.visits[0].sequences[0]
         sched = ScheduleProcessor("L1", "L2")
+
+        merged = []
+        original = sched._merge_similar_observations
+
+        def _spy(calendar, verbose=False):
+            merged.append(calendar)
+            return original(calendar, verbose)
+
+        monkeypatch.setattr(sched, "_merge_similar_observations", _spy)
+
         processed = sched.process_calendar(
             cal,
             window_start=first_seq.start_time.isot,
             window_duration_days=1,
             log_path=tmp_path / "run",
         )
+        assert merged, "merging should run when the kwarg is omitted"
         assert processed is not None
 
 
