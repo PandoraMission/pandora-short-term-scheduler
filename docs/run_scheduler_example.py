@@ -28,7 +28,17 @@ from shortschedule.visualizer import ScheduleVisualizer
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
-xml_file_path = Path("path", "to", "Pandora_science_calendar.xml")
+xml_file_path = Path(
+    "N:\\",
+    "Joe Documents",
+    "Work Documents",
+    "Organizations",
+    "NASA - Pandora",
+    "Short Term Scheduler",
+    "2026-08-17_08-24",
+    "Long-term",
+    "Pandora_science_calendar.xml",
+)
 
 # Base name (without extension) used to label the output plots, e.g.
 # "Pandora_science_calendar".
@@ -36,16 +46,16 @@ calendar_name = xml_file_path.stem
 
 # Observing window: the short-term schedule is built starting at ``window_start``
 # and spanning ``window_duration_days``.
-window_start = Time("2026-07-20T00:00:00Z")
+window_start = Time("2026-08-17T00:00:00Z")
 window_duration_days = 7
 
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
 new_tle1 = (
-    "1 67395U 80229J   26196.69732639  .00000000  00000-0  37770-3 0    00"
+    "1 67395U 80229J   26223.79570602  .00000000  00000-0  37770-3 0    02"
 )
 new_tle2 = (
-    "2 67395  97.8056 194.9117 0006480  50.2285  39.6294 14.88117629    09"
+    "2 67395  97.8072 221.5977 0003967 320.1766 134.7478 14.88176196    03"
 )
 
 # ---------------------------------------------------------------------------
@@ -66,8 +76,8 @@ scheduler = ScheduleProcessor(
     new_tle2,
     earthlimb_gap_tolerance=6,  # max allowed Earth-limb gap (minutes)
     st_gap_tolerance=12,  # max allowed star-tracker gap (minutes)
-    st_gap_tolerance_start_buffer=12,  # buffer time at the start of an observation before a ST gap is tolerated.
-    earthlimb_gap_tolerance_start_buffer=12,  # buffer time at the start of an observation before a Earth-limb gap is tolerated.
+    st_gap_tolerance_start_buffer=7.5,  # buffer time at the start of an observation before a ST gap is tolerated.
+    earthlimb_gap_tolerance_start_buffer=7.5,  # buffer time at the start of an observation before a Earth-limb gap is tolerated.
     earthlimb_day_min=44,  # min Earth-limb angle, daytime (deg)
     earthlimb_night_min=13,  # min Earth-limb angle, nighttime (deg)
     priority_0_earthlimb_min=None,  # if not `None`: min Earth-limb angle applied only to priority-0 targets so they can be used to dissipate heat. No day/night or dynamic illumination angle is used. All other keepouts are left the same.

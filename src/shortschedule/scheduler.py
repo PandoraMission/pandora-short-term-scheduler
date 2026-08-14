@@ -171,9 +171,9 @@ class ScheduleProcessor:
         min_power_frac: float = 0.7,
         max_movement_minutes: int = 45,
         earthlimb_gap_tolerance: int = 0,
-        earthlimb_gap_tolerance_start_buffer: int = 12,
+        earthlimb_gap_tolerance_start_buffer: int = 7.5,
         st_gap_tolerance: int = 0,
-        st_gap_tolerance_start_buffer: int = 12,
+        st_gap_tolerance_start_buffer: int = 7.5,
         use_dynamic_earthlimb: bool = False,
     ) -> None:
         """
