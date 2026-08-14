@@ -435,6 +435,7 @@ def find_best_rolls_for_visit(
     visit: Any,
     roll_step: float = 2.0,
     min_power_frac: float = 0.8,
+    priority_0_visibility: Any = None,
 ) -> Dict[str, Optional[float]]:
     """Find the best roll angle for every target in a visit.
 
@@ -452,6 +453,12 @@ def find_best_rolls_for_visit(
         Sweep resolution in degrees (default 2.0).
     min_power_frac : float, optional
         Minimum acceptable mean solar-panel power fraction.
+    priority_0_visibility : pandoravisibility.Visibility, optional
+        Stricter model to score a target by when every observation of
+        it in this visit is priority 0. A target with a mix of
+        priorities keeps the nominal model, because one roll has to serve
+        the whole visit and scoring it against the strictest member would
+        over-constrain the rest.
 
     Returns
     -------
@@ -484,8 +491,18 @@ def find_best_rolls_for_visit(
         # Sun-derived roll as tiebreaker reference
         sun_roll = calculate_roll(ra, dec, sequences_sorted[0].start_time)
 
+        # Score the roll under the keepouts this target will actually fly.
+        # The boresight Earth limb is roll-independent, but it still masks
+        # which minutes count, so a stricter limb can change which roll
+        # wins on visible-minute count.
+        target_visibility = visibility
+        if priority_0_visibility is not None and all(
+            getattr(seq, "priority", None) == 0 for seq in sequences_sorted
+        ):
+            target_visibility = priority_0_visibility
+
         result[target] = find_best_roll_for_target(
-            visibility,
+            target_visibility,
             ra,
             dec,
             combined_times,

@@ -2155,13 +2155,15 @@ class ScheduleVisualizer:
                     if seq.roll is not None
                     else visit_rolls.get(seq.target)
                 )
+                # Judge each bar by the keepouts its own priority flies,
+                # so a stricter priority-0 Earth limb shows up here rather
+                # than the plot disagreeing with the delivered calendar.
+                model = scheduler._visibility_for_priority(seq.priority)
                 if roll is not None:
-                    vis = scheduler.visibility.get_visibility(
-                        coord, times, roll=roll * u.deg
-                    )
+                    vis = model.get_visibility(coord, times, roll=roll * u.deg)
                 else:
                     # If we can't find a roll then just get the visibility without it.
-                    vis = scheduler.visibility.get_visibility(coord, times)
+                    vis = model.get_visibility(coord, times)
                 rows.append((visit.id, seq, np.asarray(vis), roll))
 
         if not rows:

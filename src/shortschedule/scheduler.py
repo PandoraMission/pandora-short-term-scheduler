@@ -142,6 +142,7 @@ class ScheduleProcessor:
         earthlimb_min: Optional[float] = None,
         earthlimb_day_min: Optional[float] = None,
         earthlimb_night_min: Optional[float] = None,
+        priority_0_earthlimb_min: Optional[float] = None,
         mars_min: Optional[float] = None,
         jupiter_min: Optional[float] = None,
         st_sun_min: Optional[float] = None,
@@ -252,6 +253,14 @@ class ScheduleProcessor:
             Earth-limb keepout angle (degrees) on the **night** side of the
             terminator.  When ``None`` (default), ``earthlimb_min`` is used
             for both day and night sides (``Visibility`` default behaviour).
+        priority_0_earthlimb_min : float, optional
+            Earth-limb keepout angle (degrees) applied to priority-0
+            observations only, so they can be held further off the Earth
+            and dissipate more heat.
+            It is a flat angle: the day/night split and the dynamic Earth
+            illumination wedge does not apply. Every other keepout, including all the
+            star-tracker ones, are unchanged. When ``None`` (default),
+            priority-0 observations are judged exactly like any other.
         st_sun_min, st_moon_min, st_earthlimb_min, st1_earthlimb_min,
         st2_earthlimb_min : float, optional
             Additional constraints for star trackers.
@@ -327,6 +336,21 @@ class ScheduleProcessor:
         # for any constraint the caller left unset.
         _kw = {k: v for k, v in _kw.items() if v is not None}
         self.visibility = Visibility(tle_line1, tle_line2, **_kw)
+
+        # Priority-0 observations may be held further off the Earth limb so
+        # the spacecraft can dissipate more heat.
+        # Every other keepout, the star trackers included, is unchanged
+        self.priority_0_earthlimb_min = priority_0_earthlimb_min
+        self.priority_0_visibility = None
+        if priority_0_earthlimb_min is not None:
+            _pri0_kw = dict(_kw)
+            _pri0_kw.pop("earthlimb_day_min", None)
+            _pri0_kw.pop("earthlimb_night_min", None)
+            _pri0_kw["use_dynamic_earthlimb"] = False
+            _pri0_kw["earthlimb_min"] = self._to_deg(priority_0_earthlimb_min)
+            self.priority_0_visibility = Visibility(
+                tle_line1, tle_line2, **_pri0_kw
+            )
 
         self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
 
@@ -953,9 +977,10 @@ class ScheduleProcessor:
                 first.target
             )
 
+        model = self._visibility_for_priority(first.priority)
         visible = np.atleast_1d(
             np.asarray(
-                self.visibility.get_visibility(
+                model.get_visibility(
                     target_coord,
                     times,
                     **({} if roll is None else {"roll": roll * u.deg}),
@@ -967,7 +992,12 @@ class ScheduleProcessor:
             return True  # nothing to ride out
 
         return self._is_gap_tolerable(
-            target_coord, times, int(dark[0]), int(dark.size), roll=roll
+            target_coord,
+            times,
+            int(dark[0]),
+            int(dark.size),
+            roll=roll,
+            visibility=model,
         )
 
     def _process_all_sequences(
@@ -1018,6 +1048,9 @@ class ScheduleProcessor:
                     visit,
                     roll_step=self.roll_step,
                     min_power_frac=self.min_power_frac,
+                    priority_0_visibility=getattr(
+                        self, "priority_0_visibility", None
+                    ),
                 )
                 self._computed_target_rolls[visit.id] = visit_rolls
                 for tgt, r in visit_rolls.items():
@@ -1159,6 +1192,30 @@ class ScheduleProcessor:
 
         return total_minutes, start_time, end_time, time_grid
 
+    def _visibility_for_priority(self, priority: Any) -> Any:
+        """The visibility model an observation of this priority is judged by.
+
+        Everything goes through here rather than reading ``self.visibility``
+        directly, so a pass cannot trim an observation against one set of
+        keepouts while another pass grows it against a different set.
+
+        Parameters
+        ----------
+        priority : int
+            The observation's priority, as read from the long-term
+            calendar.
+
+        Returns
+        -------
+        pandoravisibility.Visibility
+            The stricter priority-0 model when one is configured and this
+            is a priority-0 observation, otherwise the nominal model.
+        """
+        stricter = getattr(self, "priority_0_visibility", None)
+        if stricter is not None and priority == 0:
+            return stricter
+        return self.visibility
+
     def _below_minimum_duration(self, duration: TimeDelta) -> bool:
         """Checks if ``duration`` shorter than ``min_sequence_duration``
 
@@ -1216,12 +1273,13 @@ class ScheduleProcessor:
             target_roll = self._computed_target_rolls.get(visit_id, {}).get(
                 seq.target
             )
+            model = self._visibility_for_priority(seq.priority)
             if self._roll_sweep_enabled and target_roll is not None:
-                vis = self.visibility.get_visibility(
+                vis = model.get_visibility(
                     target_coord, times, roll=target_roll * u.deg
                 )
             else:
-                vis = self.visibility.get_visibility(target_coord, times)
+                vis = model.get_visibility(target_coord, times)
 
             vis_arr = np.asarray(vis)
 
@@ -1243,6 +1301,7 @@ class ScheduleProcessor:
                 last_visible_idx + 1,
                 tail_length,
                 roll=target_roll if self._roll_sweep_enabled else None,
+                visibility=model,
             ):
                 continue  # tolerable tail — leave it
 
@@ -1272,14 +1331,17 @@ class ScheduleProcessor:
                     next_roll = self._computed_target_rolls.get(
                         next_visit_id, {}
                     ).get(next_seq.target)
+                    next_model = self._visibility_for_priority(
+                        next_seq.priority
+                    )
                     if self._roll_sweep_enabled and next_roll is not None:
-                        next_vis = self.visibility.get_visibility(
+                        next_vis = next_model.get_visibility(
                             next_coord,
                             gap_times,
                             roll=next_roll * u.deg,
                         )
                     else:
-                        next_vis = self.visibility.get_visibility(
+                        next_vis = next_model.get_visibility(
                             next_coord, gap_times
                         )
                     next_vis_arr = np.asarray(next_vis)
@@ -1339,16 +1401,15 @@ class ScheduleProcessor:
             next_roll = self._computed_target_rolls.get(next_visit_id, {}).get(
                 next_seq.target
             )
+            next_model = self._visibility_for_priority(next_seq.priority)
             if self._roll_sweep_enabled and next_roll is not None:
-                next_vis = self.visibility.get_visibility(
+                next_vis = next_model.get_visibility(
                     next_coord,
                     gap_times,
                     roll=next_roll * u.deg,
                 )
             else:
-                next_vis = self.visibility.get_visibility(
-                    next_coord, gap_times
-                )
+                next_vis = next_model.get_visibility(next_coord, gap_times)
             next_vis_arr = np.asarray(next_vis)
 
             # Walk backward from the original next start to find the
@@ -1386,6 +1447,7 @@ class ScheduleProcessor:
         target_coord: SkyCoord,
         time: Time,
         roll: Optional[float],
+        visibility: Any = None,
     ) -> bool:
         """Whether the star-tracker keepout fails at ``time`` for this roll.
 
@@ -1403,7 +1465,9 @@ class ScheduleProcessor:
         actually got.
         """
         try:
-            breakdown = self.visibility.get_star_tracker_breakdown(
+            breakdown = (
+                visibility or self.visibility
+            ).get_star_tracker_breakdown(
                 target_coord,
                 time,
                 roll=None if roll is None else roll * u.deg,
@@ -1424,6 +1488,7 @@ class ScheduleProcessor:
         gap_start: int,
         gap_length: int,
         roll: Optional[float] = None,
+        visibility: Any = None,
     ) -> bool:
         """Check whether a non-visible gap is short enough to tolerate.
 
@@ -1442,8 +1507,9 @@ class ScheduleProcessor:
         if el_tol == 0 and st_tol == 0:
             return False
 
+        model = visibility or self.visibility
         try:
-            constraints = self.visibility.get_all_constraints(
+            constraints = model.get_all_constraints(
                 target_coord, times[gap_start]
             )
         except Exception:
@@ -1456,7 +1522,7 @@ class ScheduleProcessor:
 
         earthlimb_failed = "earthlimb" in failed
         st_failed = self._star_tracker_failed(
-            target_coord, times[gap_start], roll
+            target_coord, times[gap_start], roll, visibility=model
         )
 
         if failed - {"earthlimb"}:
@@ -1527,6 +1593,7 @@ class ScheduleProcessor:
                     gap_start,
                     gap_end - gap_start,
                     roll=seq_roll,
+                    visibility=self._visibility_for_priority(seq.priority),
                 )
                 for gap_start, gap_end in gaps
             ]
@@ -1625,7 +1692,11 @@ class ScheduleProcessor:
                     visit_id, seq, target_coord, times
                 )
                 gained = self._growable_minutes(
-                    visible, times, target_coord, roll
+                    visible,
+                    times,
+                    target_coord,
+                    roll,
+                    visibility=self._visibility_for_priority(seq.priority),
                 )
                 if gained:
                     seq.start_time = seq.start_time - gained * u.min
@@ -1642,7 +1713,11 @@ class ScheduleProcessor:
                     visit_id, seq, target_coord, times
                 )
                 gained = self._growable_minutes(
-                    visible, times, target_coord, roll
+                    visible,
+                    times,
+                    target_coord,
+                    roll,
+                    visibility=self._visibility_for_priority(seq.priority),
                 )
                 if gained:
                     seq.stop_time = seq.stop_time + gained * u.min
@@ -1663,6 +1738,7 @@ class ScheduleProcessor:
         times: Any,
         target_coord: SkyCoord,
         roll: Optional[float],
+        visibility: Any = None,
     ) -> int:
         """How many of ``times`` an observation may absorb, walking outward.
 
@@ -1691,7 +1767,12 @@ class ScheduleProcessor:
                 # Dark all the way to the bound; nothing worth reaching.
                 break
             if not self._is_gap_tolerable(
-                target_coord, times, index, run_end - index, roll=roll
+                target_coord,
+                times,
+                index,
+                run_end - index,
+                roll=roll,
+                visibility=visibility,
             ):
                 break
             index = run_end
@@ -1884,10 +1965,11 @@ class ScheduleProcessor:
                     else None
                 )
 
+                model = self._visibility_for_priority(seq.priority)
                 requirements = []
                 if st_buffer > 0:
                     try:
-                        breakdown = self.visibility.get_star_tracker_breakdown(
+                        breakdown = model.get_star_tracker_breakdown(
                             target_coord, times, roll=roll
                         )
                     except Exception:
@@ -1904,7 +1986,7 @@ class ScheduleProcessor:
                         )
                 if earthlimb_buffer > 0:
                     try:
-                        clear = self.visibility.get_constraint(
+                        clear = model.get_constraint(
                             target_coord, "earthlimb", times
                         )
                     except Exception:
@@ -2015,14 +2097,15 @@ class ScheduleProcessor:
         target_roll = self._computed_target_rolls.get(visit_id, {}).get(
             seq.target
         )
+        model = self._visibility_for_priority(seq.priority)
         if self._roll_sweep_enabled and target_roll is not None:
-            vis = self.visibility.get_visibility(
+            vis = model.get_visibility(
                 target_coord,
                 times,
                 roll=target_roll * u.deg,
             )
         else:
-            vis = self.visibility.get_visibility(target_coord, times)
+            vis = model.get_visibility(target_coord, times)
         return np.asarray(vis)
 
     def _find_nonvisible_gaps(
@@ -3032,14 +3115,15 @@ class ScheduleProcessor:
                 times = seq.start_time + deltas
 
                 target_roll = visit_rolls.get(seq.target)
+                model = self._visibility_for_priority(seq.priority)
                 if self._roll_sweep_enabled and target_roll is not None:
-                    vis = self.visibility.get_visibility(
+                    vis = model.get_visibility(
                         target_coord,
                         times,
                         roll=target_roll * u.deg,
                     )
                 else:
-                    vis = self.visibility.get_visibility(target_coord, times)
+                    vis = model.get_visibility(target_coord, times)
 
                 if not np.all(vis):
                     vis_arr = np.asarray(vis)
@@ -3063,18 +3147,16 @@ class ScheduleProcessor:
                     constraint_details = {}
                     try:
                         fail_time = times[non_vis_indices[0]]
-                        constraint_failures = (
-                            self.visibility.get_all_constraints(
-                                target_coord,
-                                fail_time,
-                            )
+                        constraint_failures = model.get_all_constraints(
+                            target_coord,
+                            fail_time,
                         )
                         # Capture actual separations and limits
                         try:
-                            seps = self.visibility.get_separations(
+                            seps = model.get_separations(
                                 target_coord, fail_time
                             )
-                            vis_obj = self.visibility
+                            vis_obj = model
                             for body in [
                                 "moon",
                                 "sun",
@@ -4087,7 +4169,9 @@ class ScheduleProcessor:
         deltas = np.arange(n_mins) * u.min
         times = target_seq.start_time + deltas
 
-        vis = self.visibility.get_visibility(target_coord, times)
+        vis = self._visibility_for_priority(
+            target_seq.priority
+        ).get_visibility(target_coord, times)
 
         self._print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):
