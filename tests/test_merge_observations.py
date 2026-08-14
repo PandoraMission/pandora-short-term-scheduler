@@ -359,9 +359,7 @@ class _DarkGapVis:
         minutes = np.atleast_1d(self._minutes(time))
         combined = np.array([i not in self.dark for i in minutes], dtype=bool)
         return {
-            "passed": {
-                "combined": combined[0] if time.isscalar else combined
-            }
+            "passed": {"combined": combined[0] if time.isscalar else combined}
         }
 
 

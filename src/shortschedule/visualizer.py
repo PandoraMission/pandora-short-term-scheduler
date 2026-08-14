@@ -900,9 +900,7 @@ class ScheduleVisualizer:
                 autopct="%1.1f%%",
                 startangle=90,
             )
-            ax.set_title(
-                f"Observation Adjustments\n({total} observations)"
-            )
+            ax.set_title(f"Observation Adjustments\n({total} observations)")
         else:
             ax.text(
                 0.5,
@@ -2867,9 +2865,7 @@ class ScheduleVisualizer:
         axes[0].set_yticks(np.arange(0, 361, 60))
         axes[1].set_ylim(-90, 90)
         axes[1].set_yticks(np.arange(-90, 91, 30))
-        axes[1].xaxis.set_major_formatter(
-            mdates.DateFormatter("%m-%d %H:%M")
-        )
+        axes[1].xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
         for tick in axes[1].get_xticklabels():
             tick.set_rotation(30)
             tick.set_ha("right")

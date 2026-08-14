@@ -25,7 +25,6 @@ from astropy.time import Time
 from shortschedule import ScheduleProcessor, XMLWriter, parse_science_calendar
 from shortschedule.visualizer import ScheduleVisualizer
 
-
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
@@ -42,8 +41,12 @@ window_duration_days = 7
 
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
-new_tle1 = "1 67395U 80229J   26196.69732639  .00000000  00000-0  37770-3 0    00"
-new_tle2 = "2 67395  97.8056 194.9117 0006480  50.2285  39.6294 14.88117629    09"
+new_tle1 = (
+    "1 67395U 80229J   26196.69732639  .00000000  00000-0  37770-3 0    00"
+)
+new_tle2 = (
+    "2 67395  97.8056 194.9117 0006480  50.2285  39.6294 14.88117629    09"
+)
 
 # ---------------------------------------------------------------------------
 # Load the long-term calendar
@@ -61,22 +64,22 @@ print("\n\nBuilding scheduler...")
 scheduler = ScheduleProcessor(
     new_tle1,
     new_tle2,
-    earthlimb_gap_tolerance=6,    # max allowed Earth-limb gap (minutes)
-    st_gap_tolerance=12,          # max allowed star-tracker gap (minutes)
-    st_gap_tolerance_start_buffer=12, # buffer time at the start of an observation before a ST gap is tolerated.
-    earthlimb_gap_tolerance_start_buffer=12, # buffer time at the start of an observation before a Earth-limb gap is tolerated.
-    earthlimb_day_min=44,         # min Earth-limb angle, daytime (deg)
-    earthlimb_night_min=13,       # min Earth-limb angle, nighttime (deg)
-    sun_min=91,                   # min payload Sun keel angle (deg)
-    moon_min=20,                  # min payload Moon keel angle (deg)
-    st_sun_min=50,                # min star-tracker Sun angle (deg)
-    st_moon_min=20,               # min star-tracker Moon angle (deg)
-    st_earthlimb_min=30,          # min star-tracker Earth-limb angle (deg)
-    use_dynamic_earthlimb=True,   # Use dynamic DPC Earth Limb keepout flag.
-    roll_step=1.0,                # roll search step size (deg)
-    min_power_frac=0.68,          # min acceptable orbit-average power fraction
+    earthlimb_gap_tolerance=6,  # max allowed Earth-limb gap (minutes)
+    st_gap_tolerance=12,  # max allowed star-tracker gap (minutes)
+    st_gap_tolerance_start_buffer=12,  # buffer time at the start of an observation before a ST gap is tolerated.
+    earthlimb_gap_tolerance_start_buffer=12,  # buffer time at the start of an observation before a Earth-limb gap is tolerated.
+    earthlimb_day_min=44,  # min Earth-limb angle, daytime (deg)
+    earthlimb_night_min=13,  # min Earth-limb angle, nighttime (deg)
+    sun_min=91,  # min payload Sun keel angle (deg)
+    moon_min=20,  # min payload Moon keel angle (deg)
+    st_sun_min=50,  # min star-tracker Sun angle (deg)
+    st_moon_min=20,  # min star-tracker Moon angle (deg)
+    st_earthlimb_min=30,  # min star-tracker Earth-limb angle (deg)
+    use_dynamic_earthlimb=True,  # Use dynamic DPC Earth Limb keepout flag.
+    roll_step=1.0,  # roll search step size (deg)
+    min_power_frac=0.68,  # min acceptable orbit-average power fraction
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
-    fix_bad_data=True,            # replace invalid name symbols (e.g. "+") and report NaN-like values
+    fix_bad_data=True,  # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------
     # Per-priority payload overrides, by literal XML tag (CalendarCleaner
     # config.json format): {priority: {section: {xml_tag: value}}}. These are
@@ -97,7 +100,7 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeY": 256,
                 "SC_Resets2": 1,
                 "SC_DropFrames1": 1,
-                "SC_Groups": 2
+                "SC_Groups": 2,
             },
             "AcquireVisCamScienceData": {
                 "FramesPerCoadd": 50,
@@ -120,7 +123,7 @@ scheduler = ScheduleProcessor(
                 "RiceY": 28,
                 "SC_Resets2": 1,
                 "SC_DropFrames1": 1,
-                "SC_Groups": 2
+                "SC_Groups": 2,
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
@@ -140,7 +143,7 @@ scheduler = ScheduleProcessor(
                 "ROI_SizeY": 256,
                 "SC_Resets2": 1,
                 "SC_DropFrames1": 1,
-                "SC_Groups": 2
+                "SC_Groups": 2,
             },
             "AcquireVisCamScienceData": {
                 "StarRoiDimension": 50,
@@ -163,7 +166,7 @@ processed_calendar = scheduler.process_calendar(
     original_calendar,
     window_start=window_start,
     window_duration_days=window_duration_days,
-    merge_similar_observations=True
+    merge_similar_observations=True,
 )
 
 # Human-readable summaries.
@@ -242,7 +245,9 @@ keepout_fig = visualizer.plot_keepout_angles(
     processed_calendar,
     title="Keep-out Angles",
 )
-keepout_fig.savefig(output_dir / f"{calendar_name}_keepout_angles.png", dpi=300)
+keepout_fig.savefig(
+    output_dir / f"{calendar_name}_keepout_angles.png", dpi=300
+)
 
 # Where each axis sits in Earth-angle vs limb-illumination phase space.
 illumination_fig = visualizer.plot_earth_illumination(

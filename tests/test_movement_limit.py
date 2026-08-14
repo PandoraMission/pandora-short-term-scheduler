@@ -169,9 +169,7 @@ class TestGrowIntoFreeTime:
         """
         pattern = np.ones(120, dtype=bool)
         pattern[62:66] = False  # 4 dark minutes, then visible again
-        proc = _processor(
-            _PatternVis(pattern), earthlimb_gap_tolerance=6
-        )
+        proc = _processor(_PatternVis(pattern), earthlimb_gap_tolerance=6)
         seq = _make_seq("s1", "T", start_min=40, duration_min=20)
         cal = _make_calendar([seq])
 
@@ -186,9 +184,7 @@ class TestGrowIntoFreeTime:
         """A dip longer than the tolerance still stops the walk."""
         pattern = np.ones(120, dtype=bool)
         pattern[62:75] = False  # 13 dark minutes against a 6 min tolerance
-        proc = _processor(
-            _PatternVis(pattern), earthlimb_gap_tolerance=6
-        )
+        proc = _processor(_PatternVis(pattern), earthlimb_gap_tolerance=6)
         seq = _make_seq("s1", "T", start_min=40, duration_min=20)
         cal = _make_calendar([seq])
 
@@ -202,9 +198,7 @@ class TestGrowIntoFreeTime:
         pattern = np.ones(120, dtype=bool)
         pattern[62:66] = False
         pattern[70:] = False  # nothing visible beyond minute 70
-        proc = _processor(
-            _PatternVis(pattern), earthlimb_gap_tolerance=6
-        )
+        proc = _processor(_PatternVis(pattern), earthlimb_gap_tolerance=6)
         seq = _make_seq("s1", "T", start_min=40, duration_min=20)
         cal = _make_calendar([seq])
 
@@ -230,7 +224,9 @@ class TestClampMovement:
 
         assert abs((seq.start_time - (T0 + 20 * u.min)).sec) < 1
 
-    def test_a_start_that_drifted_too_far_is_clamped_and_reported(self, capsys):
+    def test_a_start_that_drifted_too_far_is_clamped_and_reported(
+        self, capsys
+    ):
         """The orbit-scale shift this todo exists to stop."""
         proc = _processor()
         seq = _make_seq("s1", "T", start_min=200, duration_min=30)

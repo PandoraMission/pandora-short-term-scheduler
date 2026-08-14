@@ -70,49 +70,42 @@ class OverheadTiming:
         # These are the commands that the MOC generates for each observation
         # based on SOC-provided calendars.
 
-        time_delta = 0.0                                      # 0 s
+        time_delta = 0.0  # 0 s
         # COMMANDS:
-        # GOTO_TARGET 
-        time_delta += 2.0                                     # 2 s
-        # MACRO_EXECUTE 65 
+        # GOTO_TARGET
+        time_delta += 2.0  # 2 s
+        # MACRO_EXECUTE 65
         # TODO: We generally say macro65 should run 25 seconds before a read but moc is only doing 20 here.
-        time_delta += 20.0                                    # 22 s
+        time_delta += 20.0  # 22 s
         # PAYLOAD_READ
-        time_delta += 186.0                                   # 208 s
+        time_delta += 186.0  # 208 s
         # SADA_MODE 1 INDEX STOP
-        time_delta += 50.0                                    # 258 s
-        # PAYLOAD_ACQUIRE_INF_CAM_IMAGES 
+        time_delta += 50.0  # 258 s
+        # PAYLOAD_ACQUIRE_INF_CAM_IMAGES
         if self.nirda_pre_overhead_time is None:
-            self.nirda_pre_overhead_time = time_delta * u.s   # 258 s
-        time_delta += 2.0                                     # 260 s
+            self.nirda_pre_overhead_time = time_delta * u.s  # 258 s
+        time_delta += 2.0  # 260 s
         # PAYLOAD_ACQUIRE_VIS_CAM_SCIENCE_DATA
         if self.visda_pre_overhead_time is None:
-            self.visda_pre_overhead_time = time_delta * u.s   # 260 s
-        
-        # ... 
+            self.visda_pre_overhead_time = time_delta * u.s  # 260 s
+
+        # ...
         # Observation
         # ...
 
         # Post-Observation COMMANDS:
-        time_delta = 0.0                                      # 0 s
+        time_delta = 0.0  # 0 s
         # PAYLOAD_HALT_IMAGING_OR_COMMAND_SEQUENCE
-        time_delta += 2.0                                     # 2 s
+        time_delta += 2.0  # 2 s
         # SADA_MODE with SADA_NUM 1, INDEX AUTO_TRACK_QEST
-        time_delta += 40.0                                    # 42 s
+        time_delta += 40.0  # 42 s
         # GOTO_TARGET Idle
-        time_delta += 18.0                                    # 60 s
+        time_delta += 18.0  # 60 s
         # PAYLOAD_READ close file
         # Below is the delta between end of sequence and when MOC considers the slew to idle to be complete.
-        time_delta += 42.0                                    # 102 s
+        time_delta += 42.0  # 102 s
         # End of Observation
         if self.nirda_post_overhead_time is None:
             self.nirda_post_overhead_time = time_delta * u.s  # 102 s
         if self.visda_post_overhead_time is None:
             self.visda_post_overhead_time = time_delta * u.s  # 102 s
-
-
-
-
-
-
-

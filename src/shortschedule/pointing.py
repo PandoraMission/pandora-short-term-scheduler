@@ -293,9 +293,7 @@ def build_pointing_timeline(
 
     span_start = observations[0][1].start_time
     span_stop = max(seq.stop_time for _, seq in observations)
-    n_steps = int(
-        np.rint((span_stop - span_start).sec / 60.0 / step_minutes)
-    )
+    n_steps = int(np.rint((span_stop - span_start).sec / 60.0 / step_minutes))
     if n_steps <= 0:
         raise ValueError("Calendar spans less than one grid step.")
     times = span_start + np.arange(n_steps) * step_minutes * u.min
@@ -335,9 +333,7 @@ def build_pointing_timeline(
     zenith_unit = observer_eci / observer_distance[np.newaxis, :]
     nadir_unit = -zenith_unit
     with np.errstate(invalid="ignore"):
-        limb_angle_rad = np.arccos(
-            R_earth.to(u.m).value / observer_distance
-        )
+        limb_angle_rad = np.arccos(R_earth.to(u.m).value / observer_distance)
 
     sun_coord = get_body("sun", times, location=location)
     moon_coord = get_body("moon", times, location=location)
@@ -421,9 +417,9 @@ def build_pointing_timeline(
             sun_unit,
             limb_angle_rad=limb_angle_rad,
         )
-        right_ascension[axis] = np.degrees(
-            np.arctan2(unit[1], unit[0])
-        ) % 360.0
+        right_ascension[axis] = (
+            np.degrees(np.arctan2(unit[1], unit[0])) % 360.0
+        )
         declination[axis] = np.degrees(np.arcsin(np.clip(unit[2], -1.0, 1.0)))
 
     if verbose:

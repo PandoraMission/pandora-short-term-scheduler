@@ -1028,9 +1028,11 @@ class _EarthlimbPatternVis:
         indices = np.rint((times - T0).sec / 60.0).astype(int)
         return np.array(
             [
-                bool(self.clear_mask[i])
-                if 0 <= i < len(self.clear_mask)
-                else True
+                (
+                    bool(self.clear_mask[i])
+                    if 0 <= i < len(self.clear_mask)
+                    else True
+                )
                 for i in np.atleast_1d(indices)
             ],
             dtype=bool,
@@ -1158,9 +1160,11 @@ class TestEarthlimbStartBuffer:
                     "passed": {
                         "combined": np.array(
                             [
-                                bool(tracker_ok[i])
-                                if 0 <= i < len(tracker_ok)
-                                else True
+                                (
+                                    bool(tracker_ok[i])
+                                    if 0 <= i < len(tracker_ok)
+                                    else True
+                                )
                                 for i in np.atleast_1d(indices)
                             ],
                             dtype=bool,

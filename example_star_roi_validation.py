@@ -21,7 +21,9 @@ from shortschedule.writer import XMLWriter
 def main():
     # Parse a science calendar
     calendar_path = (
-        Path("src") / "shortschedule" / "data"
+        Path("src")
+        / "shortschedule"
+        / "data"
         / "Pandora_science_calendar_20251018_tsb-futz.xml"
     )
     print(f"Parsing calendar: {calendar_path}")

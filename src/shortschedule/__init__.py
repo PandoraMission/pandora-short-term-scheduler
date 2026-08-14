@@ -31,7 +31,7 @@ __all__ = [
     "apply_rolls_to_calendar",
     "get_version",
     "setup_logging",
-    "NirdaData"
+    "NirdaData",
 ]
 
 

@@ -42,9 +42,7 @@ def _vis_payload(num_total_frames):
     cfg = VisdaData().get_config()
     for field, (tag, _from, to_xml) in VisdaData.CONFIG_SPEC.items():
         ET.SubElement(root, tag).text = to_xml(cfg[field])
-    ET.SubElement(root, "NumTotalFramesRequested").text = str(
-        num_total_frames
-    )
+    ET.SubElement(root, "NumTotalFramesRequested").text = str(num_total_frames)
     return root
 
 
@@ -152,11 +150,12 @@ class TestGenerateDiagnostics:
         """FITS lines are nested (tabbed) directly under their .bin line."""
         lines = _sched().generate_diagnostics(_calendar()).splitlines()
         bin_idx = next(
-            i for i, ln in enumerate(lines)
+            i
+            for i, ln in enumerate(lines)
             if ln.startswith("- /mnt/data/sci/20260302T000000_TargetA.bin")
         )
         # The lines immediately following the bin are tab-indented FITS files.
-        following = lines[bin_idx + 1:bin_idx + 4]
+        following = lines[bin_idx + 1 : bin_idx + 4]
         assert all(ln.startswith("\t- ") for ln in following)
         assert any("_InfImg_" in ln for ln in following)
         assert any("_engineering.fits" in ln for ln in following)

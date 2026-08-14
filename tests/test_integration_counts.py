@@ -377,9 +377,7 @@ def _expected_nirda_integrations(
     nd = _nirda_from_kwargs(**kwargs)
     integrations, _, _ = nd.solve_integrations(
         duration_sec * u.s,
-        _nirda_overhead(
-            pre_sequence_overhead_sec, post_sequence_overhead_sec
-        ),
+        _nirda_overhead(pre_sequence_overhead_sec, post_sequence_overhead_sec),
     )
     return int(integrations)
 
@@ -525,9 +523,7 @@ class TestUpdateNIRDAIntegrations:
 
         # Small positive margins keep both cases off the floating-point edge.
         one = _count(first_integration_time + 1e-3)
-        two = _count(
-            first_integration_time + other_integration_time + 1e-3
-        )
+        two = _count(first_integration_time + other_integration_time + 1e-3)
         assert two == one + 1
 
 
@@ -709,9 +705,7 @@ class TestUpdatePayloadParametersSequence:
             )
 
         one = _count(first_integration_time + 1e-3)
-        two = _count(
-            first_integration_time + other_integration_time + 1e-3
-        )
+        two = _count(first_integration_time + other_integration_time + 1e-3)
         assert two == one + 1
 
     def test_nirda_overhead_exceeds_duration_yields_zero_integrations(self):
@@ -764,8 +758,11 @@ class TestNirdaParameterOverride:
             duration_sec=1800,
             sc_drop1=5,
             sc_drop3=7,
-            **{k: v for k, v in _NIRDA_KWARGS.items() if k not in
-               ("sc_drop1", "sc_drop3")},
+            **{
+                k: v
+                for k, v in _NIRDA_KWARGS.items()
+                if k not in ("sc_drop1", "sc_drop3")
+            },
         )
         sched = _sched()
         seq_out = sched._update_NIRDA_integrations(
@@ -885,9 +882,7 @@ class TestVisdaParameterOverride:
         exposure = seq_out.get_payload_parameter(
             "AcquireVisCamScienceData", "ExposureTime_us"
         )
-        assert int(exposure) == int(
-            defaults.exposure_time_s.to(u.us).value
-        )
+        assert int(exposure) == int(defaults.exposure_time_s.to(u.us).value)
 
 
 class TestParameterOverrideValues:
@@ -899,8 +894,11 @@ class TestParameterOverrideValues:
             duration_sec=1800,
             sc_drop1=5,
             sc_drop3=7,
-            **{k: v for k, v in _NIRDA_KWARGS.items() if k not in
-               ("sc_drop1", "sc_drop3")},
+            **{
+                k: v
+                for k, v in _NIRDA_KWARGS.items()
+                if k not in ("sc_drop1", "sc_drop3")
+            },
         )
         sched = _sched()
         out = sched._update_NIRDA_integrations(
@@ -928,19 +926,19 @@ class TestParameterOverrideValues:
         sched = _sched()
         n_small = int(
             sched._update_NIRDA_integrations(
-                seq_default, seq_default.duration, overhead=_overhead(),
+                seq_default,
+                seq_default.duration,
+                overhead=_overhead(),
                 override_fields={"reset_frames_1": 1},
-            ).get_payload_parameter(
-                "AcquireInfCamImages", "SC_Integrations"
-            )
+            ).get_payload_parameter("AcquireInfCamImages", "SC_Integrations")
         )
         n_big = int(
             sched._update_NIRDA_integrations(
-                seq_big, seq_big.duration, overhead=_overhead(),
+                seq_big,
+                seq_big.duration,
+                overhead=_overhead(),
                 override_fields={"reset_frames_1": 5000},
-            ).get_payload_parameter(
-                "AcquireInfCamImages", "SC_Integrations"
-            )
+            ).get_payload_parameter("AcquireInfCamImages", "SC_Integrations")
         )
         # A much larger first-integration reset count fits fewer integrations.
         assert n_big <= n_small
@@ -1315,13 +1313,19 @@ class TestRenumberIds:
         return ScienceCalendar(
             metadata={},
             visits=[
-                Visit(id="0007", sequences=[
-                    _seq_with_id("050"), _seq_with_id("099")
-                ]),
+                Visit(
+                    id="0007",
+                    sequences=[_seq_with_id("050"), _seq_with_id("099")],
+                ),
                 Visit(id="0003", sequences=[_seq_with_id("012")]),
-                Visit(id="ABC", sequences=[
-                    _seq_with_id("x"), _seq_with_id("y"), _seq_with_id("z")
-                ]),
+                Visit(
+                    id="ABC",
+                    sequences=[
+                        _seq_with_id("x"),
+                        _seq_with_id("y"),
+                        _seq_with_id("z"),
+                    ],
+                ),
             ],
         )
 
@@ -1339,9 +1343,7 @@ class TestRenumberIds:
         sched._renumber_ids(cal)
         assert [s.id for s in cal.visits[0].sequences] == ["001", "002"]
         assert [s.id for s in cal.visits[1].sequences] == ["001"]
-        assert [s.id for s in cal.visits[2].sequences] == [
-            "001", "002", "003"
-        ]
+        assert [s.id for s in cal.visits[2].sequences] == ["001", "002", "003"]
 
     def test_already_sequential_is_noop(self):
         """Correctly numbered IDs are left unchanged."""
@@ -1350,9 +1352,10 @@ class TestRenumberIds:
             metadata={},
             visits=[
                 Visit(id="0001", sequences=[_seq_with_id("001")]),
-                Visit(id="0002", sequences=[
-                    _seq_with_id("001"), _seq_with_id("002")
-                ]),
+                Visit(
+                    id="0002",
+                    sequences=[_seq_with_id("001"), _seq_with_id("002")],
+                ),
             ],
         )
         sched._renumber_ids(cal)
@@ -1365,11 +1368,7 @@ class TestRenumberIds:
         cal = self._cal()
         sched._renumber_ids(cal)
         assert all(len(v.id) == 4 for v in cal.visits)
-        assert all(
-            len(s.id) == 3
-            for v in cal.visits
-            for s in v.sequences
-        )
+        assert all(len(s.id) == 3 for v in cal.visits for s in v.sequences)
 
     def test_roll_cache_follows_renumbered_visit_ids(self):
         """The precomputed roll cache is re-keyed onto the new visit IDs.

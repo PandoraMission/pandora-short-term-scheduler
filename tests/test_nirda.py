@@ -32,6 +32,7 @@ def _nirda_overhead(pre=0 * u.s, post=0 * u.s):
         nirda_post_overhead_time=post,
     )
 
+
 # ---------------------------------------------------------------------------
 # Shared test fixture — small, round-number parameters for easy hand calculation
 #
@@ -66,26 +67,26 @@ _SIMPLE = dict(
     bytes_per_pixel=2 * u.byte,
     dropped_integrations=0,
     compression_ratio=0.8,
-    read_time_per_pixel = 1.0e-5 * u.s,
-    global_reset_method='off',  # no per-integration global-reset overhead
+    read_time_per_pixel=1.0e-5 * u.s,
+    global_reset_method="off",  # no per-integration global-reset overhead
     additional_overhead_time=0 * u.s,
 )
 
 # Individual fixture fields, pulled out so the derived constants and the
 # assertions below all track _SIMPLE automatically when it is edited.
-_ROI_X = _SIMPLE['roi_x_size']
-_ROI_Y = _SIMPLE['roi_y_size']
-_X_BUF = _SIMPLE['roi_x_buffer_pixels']
-_Y_BUF = _SIMPLE['roi_y_buffer_pixels']
-_RESET_1 = _SIMPLE['reset_frames_1']
-_RESET_2 = _SIMPLE['reset_frames_2']
-_DROP_1 = _SIMPLE['drop_frames_1']
-_DROP_2 = _SIMPLE['drop_frames_2']
-_DROP_3 = _SIMPLE['drop_frames_3']
-_READ_FRAMES = _SIMPLE['read_frames']
-_GROUPS = _SIMPLE['groups']
-_READ_TIME = _SIMPLE['read_time_per_pixel'].to_value(u.s)
-_BYTES_PER_PIXEL = _SIMPLE['bytes_per_pixel'].to_value(u.byte)
+_ROI_X = _SIMPLE["roi_x_size"]
+_ROI_Y = _SIMPLE["roi_y_size"]
+_X_BUF = _SIMPLE["roi_x_buffer_pixels"]
+_Y_BUF = _SIMPLE["roi_y_buffer_pixels"]
+_RESET_1 = _SIMPLE["reset_frames_1"]
+_RESET_2 = _SIMPLE["reset_frames_2"]
+_DROP_1 = _SIMPLE["drop_frames_1"]
+_DROP_2 = _SIMPLE["drop_frames_2"]
+_DROP_3 = _SIMPLE["drop_frames_3"]
+_READ_FRAMES = _SIMPLE["read_frames"]
+_GROUPS = _SIMPLE["groups"]
+_READ_TIME = _SIMPLE["read_time_per_pixel"].to_value(u.s)
+_BYTES_PER_PIXEL = _SIMPLE["bytes_per_pixel"].to_value(u.byte)
 
 # Derived quantities (plain floats in SI units) computed straight from the
 # fixture, mirroring NirdaData._update_derived so the maths lives in one place.
@@ -99,6 +100,7 @@ _BYTES_PER_FRAME = _SAVED_PIXELS * _BYTES_PER_PIXEL
 _FRAME_TIME = _PIXELS * _READ_TIME
 _FIRST_INT_TIME = _FRAME_TIME * (_COMMON_FRAMES + _RESET_1)
 _OTHER_INT_TIME = _FRAME_TIME * (_COMMON_FRAMES + _RESET_2)
+
 
 def _make(**overrides):
     """Return a NirdaData built from _SIMPLE with optional field overrides."""
@@ -138,7 +140,7 @@ class TestNirdaDataDefaults:
     def test_default_global_reset_method_is_off(self):
         """The default global_reset_method should be 'off' (no per-integration overhead)."""
         nd = NirdaData()
-        assert nd.global_reset_method == 'off'
+        assert nd.global_reset_method == "off"
 
     def test_default_first_integration_time_exceeds_other(self):
         """First integration uses more reset frames so it should take longer."""
@@ -185,7 +187,10 @@ class TestPixelsPerFrame:
     def test_zero_roi_gives_zero(self):
         """A zero-area ROI with no buffer pixels should yield zero pixels per frame."""
         nd = _make(
-            roi_x_size=0, roi_y_size=0, roi_x_buffer_pixels=0, roi_y_buffer_pixels=0
+            roi_x_size=0,
+            roi_y_size=0,
+            roi_x_buffer_pixels=0,
+            roi_y_buffer_pixels=0,
         )
         assert nd.pixels_per_frame == 0
 
@@ -213,7 +218,9 @@ class TestSavedPixelsPerFrame:
         nd_base = _make()
         nd_big_buf = _make(roi_x_buffer_pixels=100, roi_y_buffer_pixels=50)
         assert nd_big_buf.single_frame_time > nd_base.single_frame_time
-        assert nd_big_buf.first_integration_time > nd_base.first_integration_time
+        assert (
+            nd_big_buf.first_integration_time > nd_base.first_integration_time
+        )
 
     def test_zero_roi_gives_zero(self):
         """A zero-area ROI saves no pixels, even with buffer pixels present."""
@@ -242,7 +249,10 @@ class TestSingleFrameTime:
     def test_zero_pixels_zero_frame_time(self):
         """Zero-size ROI with no buffer pixels should give zero frame time."""
         nd = _make(
-            roi_x_size=0, roi_y_size=0, roi_x_buffer_pixels=0, roi_y_buffer_pixels=0
+            roi_x_size=0,
+            roi_y_size=0,
+            roi_x_buffer_pixels=0,
+            roi_y_buffer_pixels=0,
         )
         assert nd.single_frame_time.to(u.s).value == 0
 
@@ -250,11 +260,14 @@ class TestSingleFrameTime:
         """Halving read_time_per_pixel should halve single_frame_time."""
         nd_slow = _make(read_time_per_pixel=2e-5 * u.s)
         nd_fast = _make(read_time_per_pixel=1e-5 * u.s)
-        assert abs(
-            nd_slow.single_frame_time.to(u.s).value
-            / nd_fast.single_frame_time.to(u.s).value
-            - 2.0
-        ) < 1e-10
+        assert (
+            abs(
+                nd_slow.single_frame_time.to(u.s).value
+                / nd_fast.single_frame_time.to(u.s).value
+                - 2.0
+            )
+            < 1e-10
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +289,10 @@ class TestResetFrameTime:
     def test_zero_when_frame_time_zero(self):
         """A zero-area ROI gives zero single_frame_time and therefore zero reset_frame_time."""
         nd = _make(
-            roi_x_size=0, roi_y_size=0, roi_x_buffer_pixels=0, roi_y_buffer_pixels=0
+            roi_x_size=0,
+            roi_y_size=0,
+            roi_x_buffer_pixels=0,
+            roi_y_buffer_pixels=0,
         )
         assert nd.reset_frame_time.to(u.s).value == 0.0
 
@@ -289,14 +305,20 @@ class TestGlobalReset:
 
     def test_off_adds_no_overhead(self):
         """'off' should match the plain (common_frames + reset) * frame_time formula."""
-        nd = _make(global_reset_method='off')
-        assert abs(nd.first_integration_time.to(u.s).value - _FIRST_INT_TIME) < 1e-12
-        assert abs(nd.other_integration_time.to(u.s).value - _OTHER_INT_TIME) < 1e-12
+        nd = _make(global_reset_method="off")
+        assert (
+            abs(nd.first_integration_time.to(u.s).value - _FIRST_INT_TIME)
+            < 1e-12
+        )
+        assert (
+            abs(nd.other_integration_time.to(u.s).value - _OTHER_INT_TIME)
+            < 1e-12
+        )
 
     def test_global_adds_small_fixed_overhead(self):
         """'global' should add a small (1e-6 s) overhead to both integration times."""
-        nd_off = _make(global_reset_method='off')
-        nd_global = _make(global_reset_method='global')
+        nd_off = _make(global_reset_method="off")
+        nd_global = _make(global_reset_method="global")
         for off, glob in (
             (nd_off.first_integration_time, nd_global.first_integration_time),
             (nd_off.other_integration_time, nd_global.other_integration_time),
@@ -306,33 +328,42 @@ class TestGlobalReset:
     def test_line_by_line_adds_rows_times_per_row(self):
         """'line_by_line' overhead should equal lbl_rows * lbl_time_per_row."""
         rows, per_row = 256, 10.0e-6 * u.s
-        nd_off = _make(global_reset_method='off')
+        nd_off = _make(global_reset_method="off")
         nd_lbl = _make(
-            global_reset_method='line_by_line',
+            global_reset_method="line_by_line",
             global_reset_lbl_rows=rows,
             global_reset_lbl_time_per_row=per_row,
         )
         expected = (rows * per_row).to(u.s).value
-        assert abs(
-            (nd_lbl.first_integration_time - nd_off.first_integration_time).to(u.s).value
-            - expected
-        ) < 1e-15
+        assert (
+            abs(
+                (nd_lbl.first_integration_time - nd_off.first_integration_time)
+                .to(u.s)
+                .value
+                - expected
+            )
+            < 1e-15
+        )
 
     def test_line_by_line_overhead_scales_with_rows(self):
         """More reset rows should produce a larger line_by_line overhead."""
-        nd_few = _make(global_reset_method='line_by_line', global_reset_lbl_rows=10)
-        nd_many = _make(global_reset_method='line_by_line', global_reset_lbl_rows=500)
+        nd_few = _make(
+            global_reset_method="line_by_line", global_reset_lbl_rows=10
+        )
+        nd_many = _make(
+            global_reset_method="line_by_line", global_reset_lbl_rows=500
+        )
         assert nd_many.first_integration_time > nd_few.first_integration_time
 
     def test_method_is_case_and_whitespace_insensitive(self):
         """Method strings should be normalized (lowercased and stripped)."""
-        nd = _make(global_reset_method='  GLOBAL  ')
-        assert nd.global_reset_method == 'global'
+        nd = _make(global_reset_method="  GLOBAL  ")
+        assert nd.global_reset_method == "global"
 
     def test_unknown_method_raises(self):
         """An unrecognized method should raise ValueError."""
         with pytest.raises(ValueError):
-            _make(global_reset_method='nonsense')
+            _make(global_reset_method="nonsense")
 
 
 # ---------------------------------------------------------------------------
@@ -344,12 +375,18 @@ class TestIntegrationTimes:
     def test_first_integration_time_value(self):
         """first_integration_time should be (common_frames + reset_frames_1) * frame_time."""
         nd = _make()
-        assert abs(nd.first_integration_time.to(u.s).value - _FIRST_INT_TIME) < 1e-12
+        assert (
+            abs(nd.first_integration_time.to(u.s).value - _FIRST_INT_TIME)
+            < 1e-12
+        )
 
     def test_other_integration_time_value(self):
         """other_integration_time should be (common_frames + reset_frames_2) * frame_time."""
         nd = _make()
-        assert abs(nd.other_integration_time.to(u.s).value - _OTHER_INT_TIME) < 1e-12
+        assert (
+            abs(nd.other_integration_time.to(u.s).value - _OTHER_INT_TIME)
+            < 1e-12
+        )
 
     def test_first_longer_than_other(self):
         """First integration is longer because reset_frames_1 > reset_frames_2."""
@@ -371,7 +408,10 @@ class TestIntegrationTimes:
         """Non-zero drop_frames_2 between groups lengthens integration time."""
         nd_no_drop = _make(drop_frames_2=0)
         nd_with_drop = _make(drop_frames_2=4)
-        assert nd_with_drop.other_integration_time > nd_no_drop.other_integration_time
+        assert (
+            nd_with_drop.other_integration_time
+            > nd_no_drop.other_integration_time
+        )
 
     def test_times_nonnegative_with_zero_frames(self):
         """All-zero frame counts should give zero integration time, not negative."""
@@ -476,7 +516,10 @@ class TestUpdateForVitl:
         """
         # A zero-area ROI drives single_frame_time (and thus reset_frame_time) to zero.
         nd = _make(
-            roi_x_size=0, roi_y_size=0, roi_x_buffer_pixels=0, roi_y_buffer_pixels=0
+            roi_x_size=0,
+            roi_y_size=0,
+            roi_x_buffer_pixels=0,
+            roi_y_buffer_pixels=0,
         )
         assert nd.reset_frame_time.to(u.s).value == 0.0
         nd.update_for_vitl(10.0 * u.s)
@@ -504,7 +547,9 @@ class TestSolveIntegrations:
     def test_zero_duration_yields_zero_integrations(self):
         """A zero-length window should produce no integrations."""
         nd = _make()
-        integrations, data, data_c = nd.solve_integrations(0.0 * u.s, _nirda_overhead())
+        integrations, data, data_c = nd.solve_integrations(
+            0.0 * u.s, _nirda_overhead()
+        )
         assert integrations == 0
         assert data.to(u.byte).value == 0
         assert data_c.to(u.byte).value == 0
@@ -548,7 +593,9 @@ class TestSolveIntegrations:
         """data should equal integrations * integration_data."""
         nd = _make()
         duration = 56e-3 * u.s
-        integrations, data, _ = nd.solve_integrations(duration, _nirda_overhead())
+        integrations, data, _ = nd.solve_integrations(
+            duration, _nirda_overhead()
+        )
         expected = integrations * nd.integration_data
         assert abs(data.to(u.byte).value - expected.to(u.byte).value) < 1e-10
 
@@ -556,7 +603,9 @@ class TestSolveIntegrations:
         """data_compressed should equal data * compression_ratio."""
         nd = _make(compression_ratio=0.5)
         _, data, data_c = nd.solve_integrations(56e-3 * u.s, _nirda_overhead())
-        assert abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-10
+        assert (
+            abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-10
+        )
 
     def test_dropped_integrations_reduce_count(self):
         """dropped_integrations should be subtracted from the raw count."""
@@ -566,7 +615,9 @@ class TestSolveIntegrations:
         # stays above the dropped count.
         duration = (_FIRST_INT_TIME + 3 * _OTHER_INT_TIME) * u.s
         n_no, _, _ = nd_no_drop.solve_integrations(duration, _nirda_overhead())
-        n_drop, _, _ = nd_dropped.solve_integrations(duration, _nirda_overhead())
+        n_drop, _, _ = nd_dropped.solve_integrations(
+            duration, _nirda_overhead()
+        )
         assert n_no - n_drop == 2
 
     def test_dropped_integrations_cannot_go_below_zero(self):
@@ -581,9 +632,13 @@ class TestSolveIntegrations:
         nd_with_oh = _make(additional_overhead_time=_OTHER_INT_TIME * u.s)
         # Window fits two integrations; one integration's worth of additional
         # overhead must drop the count.
-        duration = (_FIRST_INT_TIME + _OTHER_INT_TIME) * u.s + _OTHER_INT_TIME * 1e-6 * u.s
+        duration = (
+            _FIRST_INT_TIME + _OTHER_INT_TIME
+        ) * u.s + _OTHER_INT_TIME * 1e-6 * u.s
         n_no, _, _ = nd_no_oh.solve_integrations(duration, _nirda_overhead())
-        n_with, _, _ = nd_with_oh.solve_integrations(duration, _nirda_overhead())
+        n_with, _, _ = nd_with_oh.solve_integrations(
+            duration, _nirda_overhead()
+        )
         assert n_with < n_no
 
     def test_duration_shorter_than_first_integration_gives_zero(self):
@@ -643,9 +698,10 @@ class TestSolveDuration:
         pre, post = 30e-3 * u.s, 10e-3 * u.s
         dur_no_oh, _, _ = nd.solve_duration(3, _nirda_overhead())
         dur_with_oh, _, _ = nd.solve_duration(3, _nirda_overhead(pre, post))
-        assert abs(
-            dur_with_oh.to(u.s).value - dur_no_oh.to(u.s).value - 40e-3
-        ) < 1e-12
+        assert (
+            abs(dur_with_oh.to(u.s).value - dur_no_oh.to(u.s).value - 40e-3)
+            < 1e-12
+        )
 
     def test_data_scales_with_integrations(self):
         """data should be integrations * integration_data."""
@@ -659,7 +715,9 @@ class TestSolveDuration:
         """data_compressed should equal data * compression_ratio."""
         nd = _make(compression_ratio=0.6)
         _, data, data_c = nd.solve_duration(4, _nirda_overhead())
-        assert abs(data_c.to(u.byte).value - 0.6 * data.to(u.byte).value) < 1e-10
+        assert (
+            abs(data_c.to(u.byte).value - 0.6 * data.to(u.byte).value) < 1e-10
+        )
 
     def test_dropped_integrations_ignored(self):
         """dropped_integrations must not affect solve_duration (by spec)."""
@@ -693,8 +751,12 @@ class TestSolveRoundtrip:
             duration, _, _ = nd.solve_duration(n, _nirda_overhead())
             # Tiny relative guard against floating-point loss when re-dividing.
             duration = duration + nd.other_integration_time * 1e-6
-            recovered, _, _ = nd.solve_integrations(duration, _nirda_overhead())
-            assert recovered == n, f"Roundtrip failed for n={n}: recovered {recovered}"
+            recovered, _, _ = nd.solve_integrations(
+                duration, _nirda_overhead()
+            )
+            assert (
+                recovered == n
+            ), f"Roundtrip failed for n={n}: recovered {recovered}"
 
     def test_roundtrip_with_overhead(self):
         """Roundtrip should also hold when consistent overhead is used in both calls."""
@@ -705,10 +767,12 @@ class TestSolveRoundtrip:
             # Add a tiny relative epsilon so floating-point boundary comparisons
             # stay on the correct (>=) side without fitting an extra integration.
             duration = duration + nd.other_integration_time * 1e-6
-            recovered, _, _ = nd.solve_integrations(duration, _nirda_overhead(pre, post))
-            assert recovered == n, (
-                f"Roundtrip with overhead failed for n={n}: recovered {recovered}"
+            recovered, _, _ = nd.solve_integrations(
+                duration, _nirda_overhead(pre, post)
             )
+            assert (
+                recovered == n
+            ), f"Roundtrip with overhead failed for n={n}: recovered {recovered}"
 
     def test_roundtrip_with_dropped_integrations(self):
         """With dropped_integrations the schedule must use n_drop+n_science integrations."""
@@ -733,10 +797,13 @@ class TestBytesPerPixel:
         """Doubling bytes_per_pixel should double integration_data."""
         nd_2 = _make(bytes_per_pixel=2 * u.byte)
         nd_4 = _make(bytes_per_pixel=4 * u.byte)
-        assert abs(
-            nd_4.integration_data.to(u.byte).value
-            - 2 * nd_2.integration_data.to(u.byte).value
-        ) < 1e-10
+        assert (
+            abs(
+                nd_4.integration_data.to(u.byte).value
+                - 2 * nd_2.integration_data.to(u.byte).value
+            )
+            < 1e-10
+        )
 
     def test_explicit_value_matches_pixels_times_groups(self):
         """integration_data (averaged) == bytes_per_pixel * saved pixels * groups."""
@@ -808,9 +875,9 @@ class TestAdditionalOverheadInSolveDuration:
         nd_with_oh = _make(additional_overhead_time=5e-3 * u.s)
         dur_no, _, _ = nd_no_oh.solve_duration(3, _nirda_overhead())
         dur_with, _, _ = nd_with_oh.solve_duration(3, _nirda_overhead())
-        assert abs(
-            dur_with.to(u.s).value - dur_no.to(u.s).value - 5e-3
-        ) < 1e-12
+        assert (
+            abs(dur_with.to(u.s).value - dur_no.to(u.s).value - 5e-3) < 1e-12
+        )
 
     def test_additional_overhead_not_added_when_zero_integrations(self):
         """Zero integrations should give zero duration regardless of overhead."""

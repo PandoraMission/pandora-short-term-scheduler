@@ -65,7 +65,6 @@ from .overhead import OverheadTiming
 from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
 from .visda import VisdaData
 
-
 # Characters that are not allowed in target name fields (``Target`` /
 # ``TargetID``) because they break downstream filename and identifier
 # handling. Each bad symbol is mapped to its safe replacement and substituted
@@ -129,7 +128,9 @@ class ScheduleProcessor:
         nirda_post_sequence_overhead: u.Quantity | None = None,
         override_nirda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
         override_visda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
-        override_payload_parameters: Optional[Dict[Any, Dict[str, Dict[str, Any]]]] = None,
+        override_payload_parameters: Optional[
+            Dict[Any, Dict[str, Dict[str, Any]]]
+        ] = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
@@ -334,7 +335,9 @@ class ScheduleProcessor:
 
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
-        self.earthlimb_gap_tolerance_start_buffer = earthlimb_gap_tolerance_start_buffer
+        self.earthlimb_gap_tolerance_start_buffer = (
+            earthlimb_gap_tolerance_start_buffer
+        )
         self.st_gap_tolerance = st_gap_tolerance
         self.st_gap_tolerance_start_buffer = st_gap_tolerance_start_buffer
 
@@ -435,7 +438,9 @@ class ScheduleProcessor:
         # auto-detect method (MaxNumStarRois == 1, StarRoiDetMethod == 2) is
         # converted to the predefined-ROI method (StarRoiDetMethod == 1) with
         # the target RA/Dec supplied as the single predefined ROI.
-        self.convert_single_roi_to_predefined = convert_single_roi_to_predefined
+        self.convert_single_roi_to_predefined = (
+            convert_single_roi_to_predefined
+        )
 
         # Bad-data fixes: when enabled, target name fields have invalid
         # symbols (see BAD_NAME_SYMBOLS) replaced, and all other fields are
@@ -628,7 +633,9 @@ class ScheduleProcessor:
                 "for actionable details.\n"
             )
         else:
-            self._print(f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n")
+            self._print(
+                f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n"
+            )
 
         new_metadata = copy.deepcopy(processed_calendar.metadata)
         new_metadata.update(
@@ -677,7 +684,9 @@ class ScheduleProcessor:
         for visit in calendar.visits:
             # complain if there are empty visits
             if not visit.sequences:
-                self._print(f"Warning: Empty sequence list for visit {visit.id}")
+                self._print(
+                    f"Warning: Empty sequence list for visit {visit.id}"
+                )
             windowed_sequences = []
             for seq in visit.sequences:
                 seq_start = seq.start_time
@@ -870,7 +879,9 @@ class ScheduleProcessor:
         See :meth:`_merge_similar_observations` for the merge criteria.
         """
         # Same target (case-insensitive, whitespace-insensitive).
-        if (first.target or "").strip().lower() != (second.target or "").strip().lower():
+        if (first.target or "").strip().lower() != (
+            second.target or ""
+        ).strip().lower():
             return False
 
         # Same pointing.
@@ -924,7 +935,9 @@ class ScheduleProcessor:
         minutes the merge would actually swallow, classified at the first of
         them, rather than on the whole gap measured from its first minute.
         """
-        minutes = int(np.rint((second.start_time - first.stop_time).sec / 60.0))
+        minutes = int(
+            np.rint((second.start_time - first.stop_time).sec / 60.0)
+        )
         if minutes <= 0:
             return True
         if self.earthlimb_gap_tolerance == 0 and self.st_gap_tolerance == 0:
@@ -1092,8 +1105,11 @@ class ScheduleProcessor:
                 lengthened = new_dur > old_dur
                 verb = "ELONGATED" if lengthened else "SHRANK"
                 modifications[
-                    "extended_sequences" if lengthened
-                    else "shortened_sequences"
+                    (
+                        "extended_sequences"
+                        if lengthened
+                        else "shortened_sequences"
+                    )
                 ].append(prefix)
                 self._print(
                     f"{prefix} | {verb}: "
@@ -1111,6 +1127,7 @@ class ScheduleProcessor:
         summary["sequences_modified"] = (
             summary["sequences_lengthened"] + summary["sequences_shortened"]
         )
+
     def _get_synchronized_time_grid(
         self, calendar: ScienceCalendar
     ) -> Tuple[int, Optional[Time], Optional[Time], Any]:
@@ -1566,7 +1583,7 @@ class ScheduleProcessor:
         original_timing: Dict[Any, Any],
     ) -> ScienceCalendar:
         """Extend observations into adjacent idle time while still visible.
-        
+
         This grows each observation outward into the idle time around it for
         as long as the target stays visible at its scheduled roll, bounded by:
         - the neighbouring observations, so growth can never create an
@@ -1588,9 +1605,7 @@ class ScheduleProcessor:
             original = original_timing.get((visit_id, seq.id))
             if original is None:
                 continue
-            target_coord = SkyCoord(
-                seq.ra, seq.dec, frame="icrs", unit="deg"
-            )
+            target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
 
             roll = (
                 self._computed_target_rolls.get(visit_id, {}).get(seq.target)
@@ -1650,7 +1665,7 @@ class ScheduleProcessor:
         roll: Optional[float],
     ) -> int:
         """How many of ``times`` an observation may absorb, walking outward.
- 
+
         Visible minutes are taken. A section of non-visibility is stepped
         over when it is short enough to tolerate (the same judgement
         ``_trim_to_longest_visible_block`` applies to dark stretches already
@@ -1693,7 +1708,7 @@ class ScheduleProcessor:
         The short-term scheduler exists to absorb a stale TLE, so an
         observation is expected to shift by a few minutes. Visibility can
         nonetheless argue for moving one much further.
-        
+
         This is, by default, not allowed as a change this big should be
         rectified in the long-term scheduler not the short-term.
         Therefore, the boundary is clamped to the limit and the observation
@@ -1722,8 +1737,7 @@ class ScheduleProcessor:
                 # limit from tripping on floating-point time arithmetic.
                 if abs(drift_start) > limit + 1e-6:
                     new_start = (
-                        original[0]
-                        + np.sign(drift_start) * limit * u.min
+                        original[0] + np.sign(drift_start) * limit * u.min
                     )
                     self._print(
                         f"ERROR: {prefix} | MOVED TOO FAR: start wanted to "
@@ -1843,9 +1857,7 @@ class ScheduleProcessor:
         the final say. It only ever moves a start later, so it cannot
         create an overlap.
         """
-        st_buffer = int(
-            getattr(self, "st_gap_tolerance_start_buffer", 0) or 0
-        )
+        st_buffer = int(getattr(self, "st_gap_tolerance_start_buffer", 0) or 0)
         earthlimb_buffer = int(
             getattr(self, "earthlimb_gap_tolerance_start_buffer", 0) or 0
         )
@@ -1875,10 +1887,8 @@ class ScheduleProcessor:
                 requirements = []
                 if st_buffer > 0:
                     try:
-                        breakdown = (
-                            self.visibility.get_star_tracker_breakdown(
-                                target_coord, times, roll=roll
-                            )
+                        breakdown = self.visibility.get_star_tracker_breakdown(
+                            target_coord, times, roll=roll
                         )
                     except Exception:
                         breakdown = None
@@ -1888,9 +1898,7 @@ class ScheduleProcessor:
                                 "star trackers are not settled",
                                 st_buffer,
                                 np.atleast_1d(
-                                    np.asarray(
-                                        breakdown["passed"]["combined"]
-                                    )
+                                    np.asarray(breakdown["passed"]["combined"])
                                 ),
                             )
                         )
@@ -1966,7 +1974,7 @@ class ScheduleProcessor:
         while offset < n_mins:
             advanced = False
             for _, buffer_minutes, ok in requirements:
-                window = ok[offset:offset + buffer_minutes]
+                window = ok[offset : offset + buffer_minutes]
                 if window.size and not window.all():
                     # Jump past the last violation in this window; anything
                     # earlier would still leave it inside the buffer.
@@ -2196,6 +2204,7 @@ class ScheduleProcessor:
         )
         working_cal.replace_sequence(next_visit_id, next_seq.id, extended_next)
         all_sequences[idx + 1] = (next_visit_id, extended_next)
+
     def get_minute_by_minute_assignments(
         self, calendar: ScienceCalendar
     ) -> Dict[str, Any]:
@@ -2420,7 +2429,9 @@ class ScheduleProcessor:
             warnings.warn(msg, stacklevel=2)
 
     @staticmethod
-    def _normalize_priority_keys(raw: Optional[Dict[Any, Any]]) -> Dict[int, Any]:
+    def _normalize_priority_keys(
+        raw: Optional[Dict[Any, Any]],
+    ) -> Dict[int, Any]:
         """Coerce override priority keys to ints (accepts 'Priority_0', '0')."""
         out: Dict[int, Any] = {}
         for key, value in (raw or {}).items():
@@ -2734,7 +2745,9 @@ class ScheduleProcessor:
         ra_parent = vis_section.find("PredefinedStarRoiRa")
         dec_parent = vis_section.find("PredefinedStarRoiDec")
         has_ra1 = ra_parent is not None and ra_parent.find("RA1") is not None
-        has_dec1 = dec_parent is not None and dec_parent.find("Dec1") is not None
+        has_dec1 = (
+            dec_parent is not None and dec_parent.find("Dec1") is not None
+        )
         if has_ra1 and has_dec1:
             return False
 
@@ -3445,12 +3458,13 @@ class ScheduleProcessor:
                 )
                 if nirda is not None and sc_integrations > 0:
                     nir_frames = (
-                        sc_integrations
-                        * nirda.other_integration_saved_frames
+                        sc_integrations * nirda.other_integration_saved_frames
                     )
                     nir_unc = (
-                        sc_integrations * nirda.integration_data
-                    ).to(u.byte).value
+                        (sc_integrations * nirda.integration_data)
+                        .to(u.byte)
+                        .value
+                    )
                     bucket["nir_frames"] += int(nir_frames)
                     bucket["nir_data_unc"] += nir_unc
                     bucket["nir_data"] += nir_unc * nirda.compression_ratio
@@ -3508,7 +3522,9 @@ class ScheduleProcessor:
         return text
 
     @staticmethod
-    def _diag_observing_and_gaps(timelines: List[Tuple]) -> Tuple[float, float]:
+    def _diag_observing_and_gaps(
+        timelines: List[Tuple],
+    ) -> Tuple[float, float]:
         """Return (observing_minutes, gap_minutes) for a day's timelines."""
         observing = 0.0
         gaps = 0.0
@@ -3528,7 +3544,9 @@ class ScheduleProcessor:
         """Render the diagnostic text from the per-day buckets."""
         sorted_days = sorted(daily.keys())
         if not sorted_days:
-            return "No observations were available for diagnostic generation.\n"
+            return (
+                "No observations were available for diagnostic generation.\n"
+            )
 
         def pct(part: float, whole: float) -> str:
             return f"{(100.0 * part / whole):.1f}" if whole > 0 else "0.0"
@@ -3565,9 +3583,7 @@ class ScheduleProcessor:
         sum_total = summary["nir_data"] + summary["vis_data"]
         sum_total_unc = summary["nir_data_unc"] + summary["vis_data_unc"]
         sum_span = summary["observing"] + summary["gaps"]
-        lines.append(
-            f"Calendar Summary {sorted_days[0]} : {sorted_days[-1]}"
-        )
+        lines.append(f"Calendar Summary {sorted_days[0]} : {sorted_days[-1]}")
         lines.append(f"Total Observations: {summary['count']}")
         lines.append(f"  - Priority 0 = {summary['priority_counts'][0]}")
         lines.append(f"  - Priority 1 = {summary['priority_counts'][1]}")
@@ -4297,7 +4313,9 @@ class ScheduleProcessor:
             self._print(
                 f"Total sequences analyzed: " f"{summary['total_sequences']}"
             )
-            self._print(f"Total timing issues found: " f"{summary['total_issues']}")
+            self._print(
+                f"Total timing issues found: " f"{summary['total_issues']}"
+            )
             self._print()
 
             if issues["overlaps"]:

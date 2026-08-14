@@ -80,9 +80,7 @@ def _bare_sched(overrides):
 class TestApplyPayloadOverrides:
     def test_existing_tag_overwritten(self):
         seq = _seq(priority=0)
-        sched = _bare_sched(
-            {0: {"AcquireInfCamImages": {"ROI_SizeX": 80}}}
-        )
+        sched = _bare_sched({0: {"AcquireInfCamImages": {"ROI_SizeX": 80}}})
         sched._apply_payload_overrides(seq)
         assert (
             seq.get_payload_parameter("AcquireInfCamImages", "ROI_SizeX")
@@ -96,9 +94,7 @@ class TestApplyPayloadOverrides:
             seq.get_payload_parameter("AcquireInfCamImages", "ROI_StartX")
             is None
         )
-        sched = _bare_sched(
-            {0: {"AcquireInfCamImages": {"ROI_StartX": 1737}}}
-        )
+        sched = _bare_sched({0: {"AcquireInfCamImages": {"ROI_StartX": 1737}}})
         sched._apply_payload_overrides(seq)
         assert (
             seq.get_payload_parameter("AcquireInfCamImages", "ROI_StartX")
@@ -120,9 +116,7 @@ class TestApplyPayloadOverrides:
 
     def test_non_matching_priority_untouched(self):
         seq = _seq(priority=2)
-        sched = _bare_sched(
-            {0: {"AcquireInfCamImages": {"ROI_SizeX": 80}}}
-        )
+        sched = _bare_sched({0: {"AcquireInfCamImages": {"ROI_SizeX": 80}}})
         sched._apply_payload_overrides(seq)
         assert (
             seq.get_payload_parameter("AcquireInfCamImages", "ROI_SizeX")
@@ -131,9 +125,7 @@ class TestApplyPayloadOverrides:
 
     def test_free_time_skipped(self):
         seq = _seq(priority=0, target="Free Time")
-        sched = _bare_sched(
-            {0: {"AcquireInfCamImages": {"ROI_SizeX": 80}}}
-        )
+        sched = _bare_sched({0: {"AcquireInfCamImages": {"ROI_SizeX": 80}}})
         sched._apply_payload_overrides(seq)
         assert (
             seq.get_payload_parameter("AcquireInfCamImages", "ROI_SizeX")
@@ -147,8 +139,13 @@ class TestObservationalParameterOverride:
     def test_boresight_override_stored_nested(self):
         seq = _seq(priority=0)
         sched = _bare_sched(
-            {0: {"Observational_Parameters": {"Boresight": {
-                "PRI_CMD_DIR": 9}}}}
+            {
+                0: {
+                    "Observational_Parameters": {
+                        "Boresight": {"PRI_CMD_DIR": 9}
+                    }
+                }
+            }
         )
         sched._apply_payload_overrides(seq)
         obs = seq.payload_params["Observational_Parameters"]
@@ -163,8 +160,13 @@ class TestObservationalParameterOverride:
 
         seq = _seq(priority=0)
         sched = _bare_sched(
-            {0: {"Observational_Parameters": {"Boresight": {
-                "PRI_CMD_DIR": 7}}}}
+            {
+                0: {
+                    "Observational_Parameters": {
+                        "Boresight": {"PRI_CMD_DIR": 7}
+                    }
+                }
+            }
         )
         sched._apply_payload_overrides(seq)
         cal = ScienceCalendar(metadata={}, visits=[Visit("0001", [seq])])
@@ -174,9 +176,7 @@ class TestObservationalParameterOverride:
         root = ET.parse(str(out)).getroot()
 
         def local(elem, name):
-            return next(
-                (c for c in elem if c.tag.endswith(name)), None
-            )
+            return next((c for c in elem if c.tag.endswith(name)), None)
 
         visit = local(root, "Visit")
         obs_seq = local(visit, "Observation_Sequence")

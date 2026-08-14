@@ -71,7 +71,9 @@ def _make_calendar():
             payload_params={},
         ),
     ]
-    return ScienceCalendar(metadata={}, visits=[Visit(id="v1", sequences=sequences)])
+    return ScienceCalendar(
+        metadata={}, visits=[Visit(id="v1", sequences=sequences)]
+    )
 
 
 def _visibility():
@@ -259,9 +261,7 @@ class TestAgainstTheLibrary:
         for body in ("sun", "moon"):
             assert timeline.angles[("Boresight", body)][
                 index
-            ] == pytest.approx(
-                separations[body].to_value(u.deg), abs=1e-6
-            )
+            ] == pytest.approx(separations[body].to_value(u.deg), abs=1e-6)
 
 
 class TestEulerMatrix:
@@ -402,9 +402,7 @@ class TestPointingPlots:
         assert first == second
 
     def test_a_line_only_ever_draws_its_own_steps(self, visualizer):
-        """No line may include a step belonging to another label.
-
-        """
+        """No line may include a step belonging to another label."""
         import matplotlib.pyplot as plt
 
         from shortschedule.pointing import BODIES
@@ -414,7 +412,11 @@ class TestPointingPlots:
         colors = visualizer._get_pointing_colors(timeline.targets)
         figure, ax = plt.subplots()
         visualizer._draw_pointing_series(
-            ax, timeline, timeline.angles[("Boresight", BODIES[0])], colors, 1.0
+            ax,
+            timeline,
+            timeline.angles[("Boresight", BODIES[0])],
+            colors,
+            1.0,
         )
 
         drawn = sorted(len(line.get_xdata()) for line in ax.lines)
