@@ -2512,7 +2512,7 @@ files = [
 
 [[package]]
 name = "pandoravisibility"
-version = "1.0.0"
+version = "1.2.0"
 description = "A tool for calculating the visibility of targets from Pandora"
 optional = false
 python-versions = ">=3.11,<4.0"
@@ -2533,7 +2533,7 @@ plotting = ["matplotlib (>=3.9,<4.0)"]
 type = "git"
 url = "https://github.com/PandoraMission/pandora-visibility.git"
 reference = "main"
-resolved_reference = "64dce42d8d606106faa5f23cc988d78e8e222262"
+resolved_reference = "39b7c67be5c7a45120320ed9f4f0d1c4f6a26f59"
 
 [[package]]
 name = "parso"
