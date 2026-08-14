@@ -1141,6 +1141,25 @@ class ScheduleProcessor:
         time_grid = start_time + np.arange(total_minutes) * u.min
 
         return total_minutes, start_time, end_time, time_grid
+
+    def _below_minimum_duration(self, duration: TimeDelta) -> bool:
+        """Checks if ``duration`` shorter than ``min_sequence_duration``
+
+        This function handles floating point number errors during
+        subtraction between two `Time` objects.
+
+        Parameters
+        ----------
+        duration : astropy.time.TimeDelta
+            Span to test, typically ``stop - start``.
+
+        Returns
+        -------
+        bool
+            True when the span is too short to deliver.
+        """
+        return round(duration.sec) < round(self.min_sequence_duration.sec)
+
     def _trim_non_visible_tails(
         self, calendar: ScienceCalendar
     ) -> ScienceCalendar:
@@ -1212,7 +1231,7 @@ class ScheduleProcessor:
 
             new_stop = seq.start_time + (last_visible_idx + 1) * u.min
 
-            if (new_stop - seq.start_time) < self.min_sequence_duration:
+            if self._below_minimum_duration(new_stop - seq.start_time):
                 continue  # trimming would make sequence too short
 
             # Check whether the next sequence can absorb the freed
@@ -1725,7 +1744,7 @@ class ScheduleProcessor:
 
                 if new_start == seq.start_time and new_stop == seq.stop_time:
                     continue
-                if (new_stop - new_start) < self.min_sequence_duration:
+                if self._below_minimum_duration(new_stop - new_start):
                     self._print(
                         f"ERROR: {prefix} | MOVED TOO FAR: clamping would "
                         f"leave under "
@@ -1760,9 +1779,9 @@ class ScheduleProcessor:
                 continue
 
             prefix = self._seq_prefix(visit_id, earlier)
-            if (
+            if self._below_minimum_duration(
                 later.start_time - earlier.start_time
-            ) < self.min_sequence_duration:
+            ):
                 self._print(
                     f"ERROR: {prefix} | OVERLAP: overlaps {later.target} by "
                     f"{overlap_sec / 60:.1f} min and cannot be truncated "
@@ -1908,7 +1927,7 @@ class ScheduleProcessor:
                     continue
 
                 new_start = seq.start_time + offset * u.min
-                if (seq.stop_time - new_start) < self.min_sequence_duration:
+                if self._below_minimum_duration(seq.stop_time - new_start):
                     self._print(
                         f"ERROR: {prefix} | START BUFFER: does not open "
                         f"cleanly until {offset} min in ({reasons}), and "
@@ -2061,7 +2080,7 @@ class ScheduleProcessor:
         new_start = seq.start_time + best_start * u.min
         new_stop = seq.start_time + best_end * u.min
 
-        if (new_stop - new_start) < self.min_sequence_duration:
+        if self._below_minimum_duration(new_stop - new_start):
             return None
         if new_start == seq.start_time and new_stop == seq.stop_time:
             return None
@@ -4196,7 +4215,7 @@ class ScheduleProcessor:
         min_dur_min = min_duration.sec / 60.0
         for seq_info in all_sequences:
             dur_min = seq_info["duration_minutes"]
-            if seq_info["sequence"].duration < min_duration:
+            if self._below_minimum_duration(seq_info["sequence"].duration):
                 seq = seq_info["sequence"]
                 message = (
                     f"Seq {seq.id} ({seq.target}) in visit "
