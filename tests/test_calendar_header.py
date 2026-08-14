@@ -239,7 +239,8 @@ class TestSettingsInTheHeader:
 
     def test_priority_0_limb_is_written_when_set(self, tmp_path):
         meta = self._meta(
-            tmp_path, ScheduleProcessor(TLE1, TLE2, priority_0_earthlimb_min=54)
+            tmp_path,
+            ScheduleProcessor(TLE1, TLE2, priority_0_earthlimb_min=54),
         )
 
         assert meta["Priority_0_Earthlimb_Min_Deg"] == "54"
