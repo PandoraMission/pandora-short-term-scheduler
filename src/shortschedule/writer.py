@@ -177,6 +177,11 @@ class XMLWriter:
         if "tle_line2" in metadata:
             meta.set("TLE_Line2", metadata["tle_line2"])
 
+        # The keepouts and tolerances the run applied, so the delivered
+        # calendar records the configuration it was built under.
+        for name, value in (metadata.get("scheduler_settings") or {}).items():
+            meta.set(name, str(value))
+
     def _add_visit(self, root, visit):
         """Add visit element with all observation sequences."""
         visit_elem = ET.SubElement(root, "Visit")

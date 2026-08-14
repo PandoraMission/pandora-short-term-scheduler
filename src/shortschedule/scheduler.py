@@ -91,6 +91,23 @@ NON_NUMERIC_TAGS = frozenset(
 )
 
 
+class _ErrorCountingHandler(logging.Handler):
+    """Counts ERROR records emitted during a processing run.
+
+    The delivered calendar is marked invalid on the strength of this
+    count. Warnings do not contribute: the gap tolerances mean a healthy
+    calendar legitimately contains keepout violations, and reporting them
+    is not the same as the run having failed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.count += 1
+
+
 class ScheduleProcessor:
     """Main class for processing and adjusting science calendars with updated TLE.
 
@@ -598,7 +615,9 @@ class ScheduleProcessor:
         # Generate comprehensive report
         self._finalize_gap_report()
 
-        calendar_status = "VALID"
+        # The validators are run for the report, not for the verdict. Under
+        # the gap tolerances a healthy calendar legitimately contains
+        # keepout violations, and merging can absorb one deliberately.
         validation_counts: Dict[str, int] = {}
 
         target_issues = self.validate_target_names(
@@ -606,28 +625,24 @@ class ScheduleProcessor:
         )
         if target_issues:
             validation_counts["target_name"] = len(target_issues)
-            calendar_status = "INVALID"
 
         vis_issues = self.validate_visibility(
             processed_calendar, report_issues=False
         )
         if vis_issues:
             validation_counts["visibility"] = len(vis_issues)
-            calendar_status = "INVALID"
 
         payload_issues = self.validate_payload_exposures(
             processed_calendar, report_issues=False
         )
         if payload_issues:
             validation_counts["payload_exposure"] = len(payload_issues)
-            calendar_status = "INVALID"
 
         overlap_issues = self.validate_no_overlaps_astropy(
             processed_calendar, report_issues=False
         )
         if overlap_issues:
             validation_counts["overlap"] = len(overlap_issues)
-            calendar_status = "INVALID"
 
         timing_result = self.validate_sequence_timing(
             processed_calendar, report_issues=False
@@ -635,20 +650,22 @@ class ScheduleProcessor:
         timing_total = timing_result["timing_summary"]["total_issues"]
         if timing_total > 0:
             validation_counts["sequence_timing"] = timing_total
-            calendar_status = "INVALID"
 
         roll_issues = self.validate_roll_consistency(
             processed_calendar, report_issues=False
         )
         if roll_issues:
             validation_counts["roll_consistency"] = len(roll_issues)
-            calendar_status = "INVALID"
+
+        error_count = self.run_error_count
+        calendar_status = "INVALID" if error_count else "VALID"
 
         # Print compact validation summary
         if validation_counts:
             self._print(
                 f"\n--- Validation: {calendar_status} "
-                f"({sum(validation_counts.values())} issues) ---"
+                f"({sum(validation_counts.values())} issues, "
+                f"{error_count} error(s)) ---"
             )
             for cat, cnt in validation_counts.items():
                 self._print(f"  {cat}: {cnt}")
@@ -658,7 +675,8 @@ class ScheduleProcessor:
             )
         else:
             self._print(
-                f"\n--- Validation: {calendar_status} " f"(0 issues) ---\n"
+                f"\n--- Validation: {calendar_status} "
+                f"(0 issues, {error_count} error(s)) ---\n"
             )
 
         new_metadata = copy.deepcopy(processed_calendar.metadata)
@@ -675,6 +693,7 @@ class ScheduleProcessor:
                     len(visit.sequences) for visit in processed_calendar.visits
                 ),
                 "calendar_status": calendar_status,
+                "scheduler_settings": self._settings_for_header(),
             }
         )
 
@@ -3775,6 +3794,69 @@ class ScheduleProcessor:
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
+    def _settings_for_header(self) -> Dict[str, str]:
+        """The keepouts and tolerances this run actually applied.
+
+        Read back off the ``Visibility`` instances rather than off the
+        constructor arguments, so a keepout the caller left unset is
+        reported as the value ``pandoravisibility`` supplied rather than
+        as blank.
+
+        Returns
+        -------
+        dict
+            Header attribute name to formatted value. Angles are in
+            degrees and tolerances in minutes.
+        """
+
+        def angle(model, name):
+            value = getattr(model, name, None) if model is not None else None
+            if value is None:
+                return None
+            return f"{float(getattr(value, 'value', value)):g}"
+
+        nominal = self.visibility
+        settings = {
+            "Sun_Min_Deg": angle(nominal, "sun_min"),
+            "Moon_Min_Deg": angle(nominal, "moon_min"),
+            "Earthlimb_Min_Deg": angle(nominal, "earthlimb_min"),
+            "Earthlimb_Day_Min_Deg": angle(nominal, "earthlimb_day_min"),
+            "Earthlimb_Night_Min_Deg": angle(nominal, "earthlimb_night_min"),
+            "ST_Sun_Min_Deg": angle(nominal, "st_sun_min"),
+            "ST_Moon_Min_Deg": angle(nominal, "st_moon_min"),
+            "ST_Earthlimb_Min_Deg": angle(nominal, "st_earthlimb_min"),
+            "Use_Dynamic_Earthlimb": str(
+                bool(getattr(nominal, "use_dynamic_earthlimb", False))
+            ),
+            "Priority_0_Earthlimb_Min_Deg": angle(
+                getattr(self, "priority_0_visibility", None), "earthlimb_min"
+            ),
+            "Earthlimb_Gap_Tolerance_Min": str(self.earthlimb_gap_tolerance),
+            "Earthlimb_Gap_Tolerance_Start_Buffer_Min": str(
+                self.earthlimb_gap_tolerance_start_buffer
+            ),
+            "ST_Gap_Tolerance_Min": str(self.st_gap_tolerance),
+            "ST_Gap_Tolerance_Start_Buffer_Min": str(
+                self.st_gap_tolerance_start_buffer
+            ),
+            "Max_Movement_Min": str(self.max_movement_minutes),
+            "Roll_Step_Deg": f"{float(self.roll_step):g}",
+            "Min_Power_Frac": f"{float(self.min_power_frac):g}",
+        }
+        # A keepout with no value is left out rather than written empty:
+        # Priority_0_Earthlimb_Min_Deg absent means it was not in use.
+        return {k: v for k, v in settings.items() if v is not None}
+
+    @property
+    def run_error_count(self) -> int:
+        """Errors logged during the most recent :meth:`process_calendar`.
+
+        Zero for a processor that has not run, or one whose messages went
+        to the builtin ``print`` because no run logger was configured.
+        """
+        counter = getattr(self, "_error_counter", None)
+        return 0 if counter is None else counter.count
+
     def _print(self, *args, **kwargs) -> None:
         """Route a ``print``-style call through the run logger.
 
@@ -3849,6 +3931,11 @@ class ScheduleProcessor:
         console.setLevel(logging.INFO if verbose else logging.WARNING)
         console.setFormatter(fmt)
         logger.addHandler(console)
+
+        # Counts errors so the delivered calendar can be marked invalid based
+        # on if/what went wrong during the run. Reset once per run.
+        self._error_counter = _ErrorCountingHandler()
+        logger.addHandler(self._error_counter)
 
         # Resolve the log file base path.
         base = (
