@@ -7,12 +7,8 @@ Covers:
 - the star-tracker and Earth-limb start buffers
 """
 
-# Standard library
-from pathlib import Path
-
 # Third-party
 import numpy as np
-import pytest
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time, TimeDelta

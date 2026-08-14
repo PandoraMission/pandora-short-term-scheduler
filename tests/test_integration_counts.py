@@ -5,7 +5,6 @@ import warnings
 import xml.etree.ElementTree as ET
 
 # Third-party
-import numpy as np
 import pytest
 from astropy import units as u
 from astropy.time import Time, TimeDelta

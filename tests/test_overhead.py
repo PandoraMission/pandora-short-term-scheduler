@@ -11,7 +11,6 @@ Tests cover:
 """
 
 # Third-party
-import pytest
 from astropy import units as u
 
 # First-party/Local

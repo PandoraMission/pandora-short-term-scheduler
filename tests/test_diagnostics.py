@@ -14,7 +14,6 @@ Covers:
 import xml.etree.ElementTree as ET
 
 # Third-party
-from astropy import units as u
 from astropy.time import Time, TimeDelta
 
 # First-party/Local

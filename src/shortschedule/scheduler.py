@@ -18,6 +18,12 @@ observation around the time the long-term calendar chose for it rather
 than sliding observations to close gaps.
 """
 
+from .models import ObservationSequence, ScienceCalendar, Visit
+from .nirda import NirdaData
+from .overhead import OverheadTiming
+from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
+from .visda import VisdaData
+
 # Standard library
 import copy
 import logging
@@ -58,12 +64,6 @@ class _NullProgress:
     def close(self) -> None:
         pass
 
-
-from .models import ObservationSequence, ScienceCalendar, Visit
-from .nirda import NirdaData
-from .overhead import OverheadTiming
-from .roll import apply_rolls_to_calendar, find_best_rolls_for_visit
-from .visda import VisdaData
 
 # Characters that are not allowed in target name fields (``Target`` /
 # ``TargetID``) because they break downstream filename and identifier

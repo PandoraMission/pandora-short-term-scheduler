@@ -15,8 +15,6 @@ Tests cover:
 """
 
 # Third-party
-import math
-
 import pytest
 from astropy import units as u
 
