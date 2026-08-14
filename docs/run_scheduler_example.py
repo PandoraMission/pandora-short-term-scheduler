@@ -29,15 +29,10 @@ from shortschedule.visualizer import ScheduleVisualizer
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
 xml_file_path = Path(
-    "N:\\",
-    "Joe Documents",
-    "Work Documents",
-    "Organizations",
-    "NASA - Pandora",
-    "Short Term Scheduler",
-    "2026-08-17_08-24",
+    "Path",
+    "To",
     "Long-term",
-    "Pandora_science_calendar.xml",
+    "Calendar.xml"
 )
 
 # Base name (without extension) used to label the output plots, e.g.
