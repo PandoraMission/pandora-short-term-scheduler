@@ -1,4 +1,4 @@
-## v1.3.0 (2026-xxx)
+## v1.3.0 (2026-08-19)
 - `Calendar_Status` in the delivered XML header now reflects whether the run failed, not whether a validator just marked something as not visible. 
 - Records the configuration the run applied on the XML header, so a delivered calendar says what it was built under instead of leaving it to be reconstructed from a log: the gap tolerances and their start buffers, `Max_Movement_Min`, `Roll_Step_Deg`, `Min_Power_Frac`, and every keepout in degrees including `Priority_0_Earthlimb_Min_Deg` (written only when in use) and `Use_Dynamic_Earthlimb`.
 - Adds `priority_0_earthlimb_min` (default `None`), a stricter boresight Earth-limb keepout applied to priority-0 observations only, so they can be held further off the Earth to dissipate more heat. Every other keepout, star trackers included, is unchanged. `None` leaves the scheduler behaving exactly as before.
@@ -26,22 +26,22 @@
   - Splits each bar in the visibility Gantt: the upper half keeps the priority color, the lower half shows the prescribed roll.
   - Adds a duty-cycle line to the visibility Gantt title: observed minutes against the wall-clock span they cover, so idle time counts against it.
 
-## v1.2.3 (2026-xxx)
+## v1.2.3 (2026-08-19)
 - Adds `st_gap_tolerance_start_buffer` (default 12 min). The star trackers must be visible for that many minutes at the beginning of every observation, measured from its start time, with no gap tolerance applied; without it the spacecraft cannot acquire good pointing. Observations that open with a tracker dropout have their start trimmed forward to the first minute that clears the buffer. Ones that cannot be fixed, because no stretch of the observation clears it or because trimming would drop below the minimum duration, are left alone and reported in the error log.
 - Fixes gap tolerance being judged at the wrong roll. `_is_gap_tolerable` took its star-tracker verdict from `get_all_constraints`, which accepts no roll argument and so always evaluated the trackers at the `Visibility` instance's roll rather than the roll the observation actually flies. The tracker check now goes through `get_star_tracker_breakdown` at the swept roll. A sun/moon/planet keepout failure is now also explicitly never tolerable, rather than falling through the classification.
 - A star-tracker check that cannot be evaluated is now reported to the error log instead of being inferred from whether the boresight was clear. The gap is then treated as intolerable and trimmed away.
 
-## v1.2.2 (2026-xxx)
+## v1.2.2 (2026-08-12)
 
 - Lance noted that our nirda size was not divisible by 1024 which may lead to edge case problems that could be causing nirda crashes.
   - Changes y_size from 250 to 256 and y_start from 962 to 959.
 - Fixes issue where the gnatt plot would break if the calendar was too long
 
-## v1.2.1 (2026-xxx)
+## v1.2.1 (2026-08-12)
 
 - Adds in the ability to use the dynamic Earth limb keepout.
 
-## v1.2.0 (2026-xxx)
+## v1.2.0 (2026-08-12)
 
 - Adds NIRDA and VISDA classes which contain accurate and up to date parameters to perform timing and data volume calculations.
 - Adds overhead class which accounts for pre- and post- overhead timings for both VISDA and NIRDA.
