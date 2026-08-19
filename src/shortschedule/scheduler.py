@@ -2936,13 +2936,10 @@ class ScheduleProcessor:
         if overhead is None:
             overhead = getattr(self, "overhead", None) or OverheadTiming()
 
-        # Detector read time is not represented in the payload; the existing
-        # scheduling math treats a frame as taking exactly the exposure time.
         visda, info = self._build_payload_data(
             sequence,
             override_fields,
             VisdaData,
-            extra_kwargs={"read_time_per_frame_s": 0 * u.s},
         )
         prefix = self._seq_prefix(visit_id, sequence)
         if visda is None:
@@ -3575,7 +3572,6 @@ class ScheduleProcessor:
                     seq,
                     (),
                     VisdaData,
-                    extra_kwargs={"read_time_per_frame_s": 0 * u.s},
                 )
                 num_total_frames = to_int(
                     seq.get_payload_parameter(

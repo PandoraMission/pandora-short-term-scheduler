@@ -55,13 +55,10 @@ def _payload_from_config(data_obj, extra_tags=None):
 def _visda_from_kwargs(exposure_us, frames_per_coadd):
     """Build a VisdaData for the test's VDA parameters.
 
-    read_time_per_frame_s is forced to zero so a frame takes exactly the
-    exposure time, matching the scheduler's frame-count convention.
     """
     return VisdaData(
         exposure_time_s=exposure_us * u.us,
         frames_per_coadd=frames_per_coadd,
-        read_time_per_frame_s=0 * u.s,
     )
 
 

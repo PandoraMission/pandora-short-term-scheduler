@@ -38,7 +38,7 @@ def _visda_overhead(pre=0 * u.s, post=0 * u.s):
 # frame_bytes = 32 * 4 = 128 byte
 # coadd_bytes = 128 * 5 = 640 byte
 #
-# exposure_time_s=0.1 s, read_time_per_frame_s=0 s
+# exposure_time_s=0.1 s
 # single_frame_time = 0.1 s
 # ---------------------------------------------------------------------------
 
@@ -51,7 +51,6 @@ _SIMPLE = dict(
     compression_ratio=0.5,
     vissci_bytes_per_pixel=4 * u.byte,
     visimg_bytes_per_pixel=2 * u.byte,
-    read_time_per_frame_s=0.0 * u.s,
     additional_overhead_time=0 * u.s,
     dropped_frames=0,
 )
@@ -64,7 +63,6 @@ _COADD = _SIMPLE["frames_per_coadd"]
 _VISSCI_BPP = _SIMPLE["vissci_bytes_per_pixel"].to_value(u.byte)
 _VISIMG_BPP = _SIMPLE["visimg_bytes_per_pixel"].to_value(u.byte)
 _EXPOSURE = _SIMPLE["exposure_time_s"].to_value(u.s)
-_READ_TIME = _SIMPLE["read_time_per_frame_s"].to_value(u.s)
 _COMP = _SIMPLE["compression_ratio"]
 
 # Derived quantities (plain floats in SI units) computed straight from the
@@ -72,7 +70,7 @@ _COMP = _SIMPLE["compression_ratio"]
 _PIXELS = _ROI_DIM**2 * _NUM_ROIS
 _FRAME_BYTES = _PIXELS * _VISSCI_BPP
 _COADD_BYTES = _FRAME_BYTES * _COADD
-_SFT = _EXPOSURE + _READ_TIME
+_SFT = _EXPOSURE
 
 
 def _make(**overrides):
@@ -190,22 +188,9 @@ class TestSingleFrameTime:
     """Tests for the single_frame_time derived attribute."""
 
     def test_value(self):
-        """single_frame_time should equal exposure_time_s + read_time_per_frame_s."""
+        """single_frame_time should equal exposure_time_s."""
         vd = _make()
         assert abs(vd.single_frame_time.to(u.s).value - _SFT) < 1e-15
-
-    def test_read_time_is_added(self):
-        """A non-zero read time should lengthen the frame time."""
-        vd_no_read = _make(read_time_per_frame_s=0.0 * u.s)
-        vd_read = _make(read_time_per_frame_s=0.05 * u.s)
-        assert (
-            abs(
-                vd_read.single_frame_time.to(u.s).value
-                - vd_no_read.single_frame_time.to(u.s).value
-                - 0.05
-            )
-            < 1e-12
-        )
 
     def test_units_are_seconds(self):
         """single_frame_time should be convertible to seconds."""
@@ -337,7 +322,6 @@ class TestSolveIntegrations:
         """
         vd = _make(
             exposure_time_s=0.2 * u.s,
-            read_time_per_frame_s=0.0 * u.s,
             frames_per_coadd=5,
         )
         overhead = _visda_overhead(pre=260 * u.s, post=102 * u.s)
@@ -357,7 +341,7 @@ class TestSolveIntegrations:
 
     def test_zero_frame_time_gives_zero_frames(self):
         """Zero single_frame_time must not divide by zero; it yields zero frames."""
-        vd = _make(exposure_time_s=0.0 * u.s, read_time_per_frame_s=0.0 * u.s)
+        vd = _make(exposure_time_s=0.0 * u.s)
         assert vd.single_frame_time.to(u.s).value == 0
         frames, _, _ = vd.solve_integrations(100.0 * u.s, _visda_overhead())
         assert frames == 0

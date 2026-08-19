@@ -12,7 +12,7 @@ require:
 Notes
 -----
 VISDA reads out one or more square ROIs and coadds a fixed number of
-frames on-board. Each frame takes ``exposure_time_s + read_time_per_frame_s``
+frames on-board. Each frame takes ``exposure_time_s``
 to acquire, and ``frames_per_coadd`` consecutive frames are combined into a
 single coadd before downlink.
 """
@@ -79,9 +79,6 @@ class VisdaData:
         Raw storage cost per pixel in science mode.
     visimg_bytes_per_pixel : Quantity[byte]
         Raw storage cost per pixel in imaging mode.
-    read_time_per_frame_s : Quantity[second]
-        Detector read time per frame. Effectively negligible compared to
-        the exposure time.
     additional_overhead_time : Quantity[second]
         Extra fixed overhead beyond ``pre_overhead_time`` and
         ``post_overhead_time`` subtracted before scheduling frames.
@@ -136,9 +133,6 @@ class VisdaData:
     compression_ratio: float = 0.25
     vissci_bytes_per_pixel: Quantity = 4 * u.byte
     visimg_bytes_per_pixel: Quantity = 2 * u.byte
-    read_time_per_frame_s: Quantity = (
-        1.0e-6 * u.s
-    )  # This is not correct but this parameter is effectively 0 compared to the exposure time.
     additional_overhead_time: Quantity = 0 * u.s
     dropped_frames: int = 1  # TODO: As a buffer we drop one VISDA frame
 
@@ -186,7 +180,6 @@ class VisdaData:
                 0,
                 (
                     self.exposure_time_s.to(u.s)
-                    + self.read_time_per_frame_s.to(u.s)
                 ).value,
             )
             * u.s
