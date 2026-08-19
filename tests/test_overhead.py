@@ -11,7 +11,6 @@ Tests cover:
 """
 
 # Third-party
-import pytest
 from astropy import units as u
 
 # First-party/Local
@@ -64,12 +63,16 @@ class TestOverheadTimingDefaults:
     def test_nirda_pre_overhead_value(self):
         """NIRDA pre-overhead should match the modelled command sequence."""
         oh = OverheadTiming()
-        assert abs(oh.nirda_pre_overhead_time.to(u.s).value - _NIRDA_PRE) < 1e-12
+        assert (
+            abs(oh.nirda_pre_overhead_time.to(u.s).value - _NIRDA_PRE) < 1e-12
+        )
 
     def test_visda_pre_overhead_value(self):
         """VISDA pre-overhead should match the modelled command sequence."""
         oh = OverheadTiming()
-        assert abs(oh.visda_pre_overhead_time.to(u.s).value - _VISDA_PRE) < 1e-12
+        assert (
+            abs(oh.visda_pre_overhead_time.to(u.s).value - _VISDA_PRE) < 1e-12
+        )
 
     def test_post_overhead_value(self):
         """Post-overheads should match the modelled command sequence."""
@@ -138,7 +141,9 @@ class TestOverheadOverrides:
         oh = OverheadTiming(nirda_pre_overhead_time=5.0 * u.s)
         assert oh.nirda_pre_overhead_time.to(u.s).value == 5.0
         # The others should still be derived.
-        assert abs(oh.visda_pre_overhead_time.to(u.s).value - _VISDA_PRE) < 1e-12
+        assert (
+            abs(oh.visda_pre_overhead_time.to(u.s).value - _VISDA_PRE) < 1e-12
+        )
         assert abs(oh.nirda_post_overhead_time.to(u.s).value - _POST) < 1e-12
         assert abs(oh.visda_post_overhead_time.to(u.s).value - _POST) < 1e-12
 

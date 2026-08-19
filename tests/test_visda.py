@@ -13,7 +13,6 @@ Tests cover:
 """
 
 # Third-party
-import pytest
 from astropy import units as u
 
 # First-party/Local
@@ -28,6 +27,7 @@ def _visda_overhead(pre=0 * u.s, post=0 * u.s):
         visda_post_overhead_time=post,
     )
 
+
 # ---------------------------------------------------------------------------
 # Shared test fixture — small, round-number parameters for easy hand calculation
 #
@@ -38,7 +38,7 @@ def _visda_overhead(pre=0 * u.s, post=0 * u.s):
 # frame_bytes = 32 * 4 = 128 byte
 # coadd_bytes = 128 * 5 = 640 byte
 #
-# exposure_time_s=0.1 s, read_time_per_frame_s=0 s
+# exposure_time_s=0.1 s
 # single_frame_time = 0.1 s
 # ---------------------------------------------------------------------------
 
@@ -51,28 +51,26 @@ _SIMPLE = dict(
     compression_ratio=0.5,
     vissci_bytes_per_pixel=4 * u.byte,
     visimg_bytes_per_pixel=2 * u.byte,
-    read_time_per_frame_s=0.0 * u.s,
     additional_overhead_time=0 * u.s,
     dropped_frames=0,
 )
 
 # Individual fixture fields, pulled out so the derived constants and the
 # assertions below all track _SIMPLE automatically when it is edited.
-_ROI_DIM = _SIMPLE['roi_dimension']
-_NUM_ROIS = _SIMPLE['num_rois']
-_COADD = _SIMPLE['frames_per_coadd']
-_VISSCI_BPP = _SIMPLE['vissci_bytes_per_pixel'].to_value(u.byte)
-_VISIMG_BPP = _SIMPLE['visimg_bytes_per_pixel'].to_value(u.byte)
-_EXPOSURE = _SIMPLE['exposure_time_s'].to_value(u.s)
-_READ_TIME = _SIMPLE['read_time_per_frame_s'].to_value(u.s)
-_COMP = _SIMPLE['compression_ratio']
+_ROI_DIM = _SIMPLE["roi_dimension"]
+_NUM_ROIS = _SIMPLE["num_rois"]
+_COADD = _SIMPLE["frames_per_coadd"]
+_VISSCI_BPP = _SIMPLE["vissci_bytes_per_pixel"].to_value(u.byte)
+_VISIMG_BPP = _SIMPLE["visimg_bytes_per_pixel"].to_value(u.byte)
+_EXPOSURE = _SIMPLE["exposure_time_s"].to_value(u.s)
+_COMP = _SIMPLE["compression_ratio"]
 
 # Derived quantities (plain floats in SI units) computed straight from the
 # fixture, mirroring VisdaData._update_derived so the maths lives in one place.
 _PIXELS = _ROI_DIM**2 * _NUM_ROIS
 _FRAME_BYTES = _PIXELS * _VISSCI_BPP
 _COADD_BYTES = _FRAME_BYTES * _COADD
-_SFT = _EXPOSURE + _READ_TIME
+_SFT = _EXPOSURE
 
 
 def _make(**overrides):
@@ -169,9 +167,13 @@ class TestFrameBytes:
         """Doubling vissci_bytes_per_pixel should double frame_bytes."""
         vd_4 = _make(vissci_bytes_per_pixel=4 * u.byte)
         vd_8 = _make(vissci_bytes_per_pixel=8 * u.byte)
-        assert abs(
-            vd_8.frame_bytes.to(u.byte).value - 2 * vd_4.frame_bytes.to(u.byte).value
-        ) < 1e-10
+        assert (
+            abs(
+                vd_8.frame_bytes.to(u.byte).value
+                - 2 * vd_4.frame_bytes.to(u.byte).value
+            )
+            < 1e-10
+        )
 
     def test_zero_roi_gives_zero_frame_bytes(self):
         """A zero ROI dimension should give zero frame bytes."""
@@ -186,19 +188,9 @@ class TestSingleFrameTime:
     """Tests for the single_frame_time derived attribute."""
 
     def test_value(self):
-        """single_frame_time should equal exposure_time_s + read_time_per_frame_s."""
+        """single_frame_time should equal exposure_time_s."""
         vd = _make()
         assert abs(vd.single_frame_time.to(u.s).value - _SFT) < 1e-15
-
-    def test_read_time_is_added(self):
-        """A non-zero read time should lengthen the frame time."""
-        vd_no_read = _make(read_time_per_frame_s=0.0 * u.s)
-        vd_read = _make(read_time_per_frame_s=0.05 * u.s)
-        assert abs(
-            vd_read.single_frame_time.to(u.s).value
-            - vd_no_read.single_frame_time.to(u.s).value
-            - 0.05
-        ) < 1e-12
 
     def test_units_are_seconds(self):
         """single_frame_time should be convertible to seconds."""
@@ -220,7 +212,9 @@ class TestDroppedIntegrationTime:
     def test_dropped_integration_time_value(self):
         """dropped_integration_time should equal dropped_frames * single_frame_time."""
         vd = _make(dropped_frames=3)
-        assert abs(vd.dropped_integration_time.to(u.s).value - 3 * _SFT) < 1e-12
+        assert (
+            abs(vd.dropped_integration_time.to(u.s).value - 3 * _SFT) < 1e-12
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +238,9 @@ class TestSolveIntegrations:
     def test_zero_duration_yields_zero_frames(self):
         """A zero-length window should produce no frames."""
         vd = _make()
-        frames, data, data_c = vd.solve_integrations(0.0 * u.s, _visda_overhead())
+        frames, data, data_c = vd.solve_integrations(
+            0.0 * u.s, _visda_overhead()
+        )
         assert frames == 0
         assert data.to(u.byte).value == 0
         assert data_c.to(u.byte).value == 0
@@ -288,7 +284,9 @@ class TestSolveIntegrations:
         vd_with_oh = _make(additional_overhead_time=_SFT * 10 * u.s)
         duration = _make().single_frame_time * 20
         n_no, _, _ = vd_no_oh.solve_integrations(duration, _visda_overhead())
-        n_with, _, _ = vd_with_oh.solve_integrations(duration, _visda_overhead())
+        n_with, _, _ = vd_with_oh.solve_integrations(
+            duration, _visda_overhead()
+        )
         assert n_with < n_no
 
     def test_data_scales_with_frames(self):
@@ -307,7 +305,9 @@ class TestSolveIntegrations:
         _, data, data_c = vd.solve_integrations(
             vd.single_frame_time * 20, _visda_overhead()
         )
-        assert abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-6
+        assert (
+            abs(data_c.to(u.byte).value - 0.5 * data.to(u.byte).value) < 1e-6
+        )
 
     def test_subsecond_noise_does_not_drop_a_coadd(self):
         """A duration a sub-microsecond below an exact frame boundary must
@@ -322,7 +322,6 @@ class TestSolveIntegrations:
         """
         vd = _make(
             exposure_time_s=0.2 * u.s,
-            read_time_per_frame_s=0.0 * u.s,
             frames_per_coadd=5,
         )
         overhead = _visda_overhead(pre=260 * u.s, post=102 * u.s)
@@ -342,7 +341,7 @@ class TestSolveIntegrations:
 
     def test_zero_frame_time_gives_zero_frames(self):
         """Zero single_frame_time must not divide by zero; it yields zero frames."""
-        vd = _make(exposure_time_s=0.0 * u.s, read_time_per_frame_s=0.0 * u.s)
+        vd = _make(exposure_time_s=0.0 * u.s)
         assert vd.single_frame_time.to(u.s).value == 0
         frames, _, _ = vd.solve_integrations(100.0 * u.s, _visda_overhead())
         assert frames == 0
@@ -395,9 +394,10 @@ class TestSolveDuration:
         pre, post = 30.0 * u.s, 10.0 * u.s
         dur_no_oh, _, _ = vd.solve_duration(3, _visda_overhead())
         dur_with_oh, _, _ = vd.solve_duration(3, _visda_overhead(pre, post))
-        assert abs(
-            dur_with_oh.to(u.s).value - dur_no_oh.to(u.s).value - 40.0
-        ) < 1e-12
+        assert (
+            abs(dur_with_oh.to(u.s).value - dur_no_oh.to(u.s).value - 40.0)
+            < 1e-12
+        )
 
     def test_data_is_pure_bytes(self):
         """data should be a plain byte Quantity, not byte*second."""
@@ -418,7 +418,9 @@ class TestSolveDuration:
         """data_compressed should equal data * compression_ratio."""
         vd = _make(compression_ratio=0.25)
         _, data, data_c = vd.solve_duration(8, _visda_overhead())
-        assert abs(data_c.to(u.byte).value - 0.25 * data.to(u.byte).value) < 1e-6
+        assert (
+            abs(data_c.to(u.byte).value - 0.25 * data.to(u.byte).value) < 1e-6
+        )
 
     def test_additional_overhead_added_to_duration(self):
         """solve_duration should add additional_overhead_time to the total."""
@@ -458,8 +460,12 @@ class TestSolveRoundtrip:
             duration, _, _ = vd.solve_duration(n, _visda_overhead())
             # Tiny relative guard against floating-point loss when re-dividing.
             duration = duration + vd.single_frame_time * 1e-6
-            recovered, _, _ = vd.solve_integrations(duration, _visda_overhead())
-            assert recovered == n, f"Roundtrip failed for n={n}: recovered {recovered}"
+            recovered, _, _ = vd.solve_integrations(
+                duration, _visda_overhead()
+            )
+            assert (
+                recovered == n
+            ), f"Roundtrip failed for n={n}: recovered {recovered}"
 
     def test_roundtrip_with_overhead(self):
         """Roundtrip should hold when consistent overhead is used in both calls."""
@@ -468,10 +474,12 @@ class TestSolveRoundtrip:
         for n in (_COADD, 2 * _COADD):
             duration, _, _ = vd.solve_duration(n, _visda_overhead(pre, post))
             duration = duration + vd.single_frame_time * 1e-6
-            recovered, _, _ = vd.solve_integrations(duration, _visda_overhead(pre, post))
-            assert recovered == n, (
-                f"Roundtrip with overhead failed for n={n}: recovered {recovered}"
+            recovered, _, _ = vd.solve_integrations(
+                duration, _visda_overhead(pre, post)
             )
+            assert (
+                recovered == n
+            ), f"Roundtrip with overhead failed for n={n}: recovered {recovered}"
 
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ require:
 Notes
 -----
 VISDA reads out one or more square ROIs and coadds a fixed number of
-frames on-board. Each frame takes ``exposure_time_s + read_time_per_frame_s``
+frames on-board. Each frame takes ``exposure_time_s``
 to acquire, and ``frames_per_coadd`` consecutive frames are combined into a
 single coadd before downlink.
 """
@@ -27,6 +27,7 @@ from astropy import units as u
 from astropy.units import Quantity
 
 from typing import Any, TYPE_CHECKING
+
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
@@ -78,9 +79,6 @@ class VisdaData:
         Raw storage cost per pixel in science mode.
     visimg_bytes_per_pixel : Quantity[byte]
         Raw storage cost per pixel in imaging mode.
-    read_time_per_frame_s : Quantity[second]
-        Detector read time per frame. Effectively negligible compared to
-        the exposure time.
     additional_overhead_time : Quantity[second]
         Extra fixed overhead beyond ``pre_overhead_time`` and
         ``post_overhead_time`` subtracted before scheduling frames.
@@ -122,9 +120,7 @@ class VisdaData:
         "roi_dimension": ("StarRoiDimension", _xml_to_int, _int_to_xml),
         "num_rois": ("MaxNumStarRois", _xml_to_int, _int_to_xml),
     }
-    REQUIRED_CONFIG_FIELDS = frozenset(
-        ("exposure_time_s", "frames_per_coadd")
-    )
+    REQUIRED_CONFIG_FIELDS = frozenset(("exposure_time_s", "frames_per_coadd"))
 
     # VISDA observation configurations
     frames_per_coadd: int = 5
@@ -137,7 +133,6 @@ class VisdaData:
     compression_ratio: float = 0.25
     vissci_bytes_per_pixel: Quantity = 4 * u.byte
     visimg_bytes_per_pixel: Quantity = 2 * u.byte
-    read_time_per_frame_s: Quantity = 1.0e-6 * u.s  # This is not correct but this parameter is effectively 0 compared to the exposure time.
     additional_overhead_time: Quantity = 0 * u.s
     dropped_frames: int = 1  # TODO: As a buffer we drop one VISDA frame
 
@@ -172,27 +167,30 @@ class VisdaData:
         else:
             bytes_per_pixel = self.visimg_bytes_per_pixel
 
-        self.frame_bytes = max(
-            0,
-            (self.pixels_per_frame * bytes_per_pixel).to(u.byte).value
-        ) * u.byte
+        self.frame_bytes = (
+            max(0, (self.pixels_per_frame * bytes_per_pixel).to(u.byte).value)
+            * u.byte
+        )
         self.coadd_bytes = self.frame_bytes * self.frames_per_coadd
         if self.coadd_bytes == 0.0 * u.s:
             self._warn("VISDA: Data size of one coadd was found to be 0.")
 
-        self.single_frame_time = max(
-            0,
-            (self.exposure_time_s.to(u.s) + self.read_time_per_frame_s.to(u.s)).value,
-        ) * u.s
+        self.single_frame_time = (
+            max(
+                0,
+                (self.exposure_time_s.to(u.s)).value,
+            )
+            * u.s
+        )
         if self.single_frame_time == 0.0 * u.s:
             self._warn("VISDA: Single frame time found to be 0.")
 
-        self.dropped_integration_time = self.dropped_frames * self.single_frame_time
+        self.dropped_integration_time = (
+            self.dropped_frames * self.single_frame_time
+        )
 
     def solve_integrations(
-        self,
-        duration: Quantity,
-        overhead: OverheadTiming = None
+        self, duration: Quantity, overhead: OverheadTiming = None
     ):
         """Compute the number of frames that fit within a duration.
 
@@ -221,6 +219,7 @@ class VisdaData:
         if overhead is None:
             # Use default overheads
             from .overhead import OverheadTiming
+
             overhead = OverheadTiming()
 
         buffered_time = (
@@ -246,7 +245,9 @@ class VisdaData:
             frames = max(
                 0,
                 math.floor(
-                    (buffered_time / self.single_frame_time).to(u.dimensionless_unscaled).value
+                    (buffered_time / self.single_frame_time)
+                    .to(u.dimensionless_unscaled)
+                    .value
                 ),
             )
 
@@ -262,9 +263,7 @@ class VisdaData:
         return (frames, data, data * self.compression_ratio)
 
     def solve_duration(
-        self,
-        integrations: int,
-        overhead: OverheadTiming = None
+        self, integrations: int, overhead: OverheadTiming = None
     ):
         """Compute the total duration required to acquire a given number of frames.
 
@@ -290,6 +289,7 @@ class VisdaData:
         if overhead is None:
             # Use default overheads
             from .overhead import OverheadTiming
+
             overhead = OverheadTiming()
 
         integrations = max(0, integrations)
@@ -310,7 +310,7 @@ class VisdaData:
             duration = integrations * self.single_frame_time + overhead_time
 
         return (duration, data, data * self.compression_ratio)
-    
+
     def get_config(self) -> dict:
         """Return the current payload-config field values.
 

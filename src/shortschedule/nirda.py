@@ -30,6 +30,7 @@ from astropy import units as u
 from astropy.units import Quantity
 
 from typing import Any, TYPE_CHECKING
+
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
@@ -106,7 +107,7 @@ class NirdaData:
         Effective on-board compression factor applied to raw data.
         This is an empirical parameter.
     global_reset_method : str
-        Per-integration global-reset overhead model. 
+        Per-integration global-reset overhead model.
         - ``'off'`` (no outside roi reset; no overhead)
         - ``'global'`` (outside roi are quickly resetl; a small fixed overhead)
         - ``'line_by_line'`` (``global_reset_lbl_rows`` rows at ``global_reset_lbl_time_per_row`` each).
@@ -191,9 +192,11 @@ class NirdaData:
     roi_y_buffer_pixels: int = 2
     read_time_per_pixel: Quantity = 1.0e-5 * u.s
     bytes_per_pixel: Quantity = 2 * u.byte
-    dropped_integrations: int = 1  # TODO: As a buffer we are dropping one NIRDA integration.
+    dropped_integrations: int = (
+        1  # TODO: As a buffer we are dropping one NIRDA integration.
+    )
     compression_ratio: float = 0.8
-    global_reset_method: str = 'off'
+    global_reset_method: str = "off"
     global_reset_lbl_rows: int = 256
     global_reset_lbl_time_per_row: Quantity = 10.0e-6 * u.s
     additional_overhead_time: Quantity = 0 * u.s
@@ -232,7 +235,7 @@ class NirdaData:
             self.drop_frames_1
             + (self.groups - 1) * self.drop_frames_2
             + self.drop_frames_3
-            + self.groups * self.read_frames
+            + self.groups * self.read_frames,
         )
 
         # Buffer pixels are clocked out with the ROI (so they cost frame time)
@@ -246,9 +249,15 @@ class NirdaData:
 
         self.saved_pixels_per_frame = max(0, self.roi_x_size * self.roi_y_size)
 
-        self.single_frame_time = max(
-            0, (self.pixels_per_frame * self.read_time_per_pixel).to(u.s).value
-        ) * u.s
+        self.single_frame_time = (
+            max(
+                0,
+                (self.pixels_per_frame * self.read_time_per_pixel)
+                .to(u.s)
+                .value,
+            )
+            * u.s
+        )
 
         # Assume reset frames take the same as regular frames.
         self.reset_frame_time = self.single_frame_time
@@ -257,15 +266,19 @@ class NirdaData:
         # There is additional per-integration overhead if a global reset is used.
         self.global_reset_method = self.global_reset_method.lower().strip()
         global_reset_overhead = 0.0 * u.s
-        if self.global_reset_method not in ('off', 'global', 'line_by_line'):
-            raise ValueError(f"NIRDA: Unknown global reset method requested: {self.global_reset_method}")
-        elif self.global_reset_method == 'global':
+        if self.global_reset_method not in ("off", "global", "line_by_line"):
+            raise ValueError(
+                f"NIRDA: Unknown global reset method requested: {self.global_reset_method}"
+            )
+        elif self.global_reset_method == "global":
             # Global reset requires a "negligible compared to frame time" overhead.
             # This value is not real but just something small.
             global_reset_overhead = 1.0e-6 * u.s
-        elif self.global_reset_method == 'line_by_line':
+        elif self.global_reset_method == "line_by_line":
             # Line by line method requires 10us per line.
-            global_reset_overhead = self.global_reset_lbl_time_per_row * self.global_reset_lbl_rows
+            global_reset_overhead = (
+                self.global_reset_lbl_time_per_row * self.global_reset_lbl_rows
+            )
 
         # Common integration time in seconds (part shared by 1st and subsequent
         # integrations). Kept as a plain float here and converted to a Quantity
@@ -273,22 +286,28 @@ class NirdaData:
         common_integration_time = max(
             0,
             self.single_frame_time.to(u.s).value * common_frames
-            + global_reset_overhead.to(u.s).value
+            + global_reset_overhead.to(u.s).value,
         )
 
-        self.first_integration_time = max(
-            0,
-            common_integration_time
-            + self.reset_frame_time.to(u.s).value * self.reset_frames_1,
-        ) * u.s
+        self.first_integration_time = (
+            max(
+                0,
+                common_integration_time
+                + self.reset_frame_time.to(u.s).value * self.reset_frames_1,
+            )
+            * u.s
+        )
         if self.first_integration_time == 0 * u.s:
             self._warn("NIRDA: First integration time found to be 0.")
 
-        self.other_integration_time = max(
-            0,
-            common_integration_time
-            + self.reset_frame_time.to(u.s).value * self.reset_frames_2,
-        ) * u.s
+        self.other_integration_time = (
+            max(
+                0,
+                common_integration_time
+                + self.reset_frame_time.to(u.s).value * self.reset_frames_2,
+            )
+            * u.s
+        )
         if self.other_integration_time == 0 * u.s:
             self._warn("NIRDA: Other integration time found to be 0.")
 
@@ -296,25 +315,35 @@ class NirdaData:
         # integration time.
         self.dropped_integration_time = self.other_integration_time
 
-        bytes_per_frame = max(
-            0,
-            (self.bytes_per_pixel * self.saved_pixels_per_frame).to(u.byte).value
-        ) * u.byte
+        bytes_per_frame = (
+            max(
+                0,
+                (self.bytes_per_pixel * self.saved_pixels_per_frame)
+                .to(u.byte)
+                .value,
+            )
+            * u.byte
+        )
 
         if self.average_groups:
             self.first_integration_saved_frames = self.groups
             self.other_integration_saved_frames = self.groups
             self.integration_data = bytes_per_frame * self.groups
         else:
-            self.first_integration_saved_frames = self.groups * self.read_frames
-            self.other_integration_saved_frames = self.groups * self.read_frames
-            self.integration_data = bytes_per_frame * self.groups * self.read_frames
+            self.first_integration_saved_frames = (
+                self.groups * self.read_frames
+            )
+            self.other_integration_saved_frames = (
+                self.groups * self.read_frames
+            )
+            self.integration_data = (
+                bytes_per_frame * self.groups * self.read_frames
+            )
 
-        self.integration_data = max(
-            0,
-            self.integration_data.to(u.byte).value
-        ) * u.byte
-        
+        self.integration_data = (
+            max(0, self.integration_data.to(u.byte).value) * u.byte
+        )
+
         if self.integration_data == 0 * u.byte:
             self._warn("NIRDA: Data size per integration was found to be 0.")
 
@@ -332,26 +361,30 @@ class NirdaData:
         """
         # reset_frame_time is derived (equal to single_frame_time) during
         # __post_init__, so it holds the actual frame duration here.
-        
+
         # TODO: Open Question! Do we add the global reset time to this?
 
         MIN_RESET1 = 2
         if self.reset_frame_time.to(u.s).value == 0.0:
             # Have at least 2 reset1
-            self._warn(f"NIRDA Reset frame time is approx. 0. Using default ``reset1={MIN_RESET1}.``")
+            self._warn(
+                f"NIRDA Reset frame time is approx. 0. Using default ``reset1={MIN_RESET1}.``"
+            )
             self.reset_frames_1 = MIN_RESET1
         else:
             self.reset_frames_1 = max(
                 MIN_RESET1,
-                math.ceil((vitl_settling_time / self.reset_frame_time).decompose().value),
+                math.ceil(
+                    (vitl_settling_time / self.reset_frame_time)
+                    .decompose()
+                    .value
+                ),
             )
 
         self._update_derived()
 
     def solve_integrations(
-        self,
-        duration: Quantity,
-        overhead: OverheadTiming = None
+        self, duration: Quantity, overhead: OverheadTiming = None
     ):
         """Compute the number of integrations that fit within a duration.
 
@@ -376,6 +409,7 @@ class NirdaData:
         if overhead is None:
             # Use default overheads
             from .overhead import OverheadTiming
+
             overhead = OverheadTiming()
 
         buffered_time = (
@@ -404,9 +438,7 @@ class NirdaData:
         return (integrations, data, data * self.compression_ratio)
 
     def solve_duration(
-        self,
-        integrations: int,
-        overhead: OverheadTiming = None
+        self, integrations: int, overhead: OverheadTiming = None
     ):
         """Compute the total duration required to acquire a given number of integrations.
 
@@ -434,13 +466,18 @@ class NirdaData:
         as-is rather than changed to compensate for drops.
         """
         integrations = max(0, integrations)
-        
+
         if overhead is None:
             # Use default overheads
             from .overhead import OverheadTiming
+
             overhead = OverheadTiming()
-        
-        overhead_time = overhead.nirda_pre_overhead_time + overhead.nirda_post_overhead_time + self.additional_overhead_time
+
+        overhead_time = (
+            overhead.nirda_pre_overhead_time
+            + overhead.nirda_post_overhead_time
+            + self.additional_overhead_time
+        )
         data = integrations * self.integration_data
 
         if integrations == 0:

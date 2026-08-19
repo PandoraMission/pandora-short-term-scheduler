@@ -1,19 +1,14 @@
-"""Tests for gap-filling logic and roll-aware visibility in the scheduler.
+"""Tests for the trimming passes and roll-aware visibility.
 
 Covers:
 - _find_false_blocks helper
-- _fill_gaps method
-- _fix_visibility integration with mock visibility
-- Roll-aware gap filling (roll kwarg threading)
-- Gap report structure verification
+- trimming non-visible tails, heads, and mid-observation dark stretches
+- the gap tolerances, judged at the roll the observation will fly
+- the star-tracker and Earth-limb start buffers
 """
-
-# Standard library
-from pathlib import Path
 
 # Third-party
 import numpy as np
-import pytest
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.time import Time, TimeDelta
@@ -104,39 +99,6 @@ class DummyVisibilityPattern:
         return result
 
 
-class DummyVisibilityRollSensitive:
-    """Visibility mock — True only when the correct roll is passed.
-
-    Parameters
-    ----------
-    good_roll_deg : float
-        The roll angle (degrees) for which visibility is all-True.
-        Any other roll (or ``None``) gives all-False.
-    tolerance : float
-        Matching tolerance in degrees.
-    """
-
-    def __init__(self, l1, l2, good_roll_deg=90.0, tolerance=1.0, **kwargs):
-        self._good_roll = good_roll_deg
-        self._tol = tolerance
-
-    def get_visibility(self, coord, times, roll=None):
-        try:
-            n = len(times)
-        except Exception:
-            n = 1
-        if roll is not None:
-            val = roll.to(u.deg).value
-            if abs(val - self._good_roll) <= self._tol:
-                return np.ones(n, dtype=bool)
-        return np.zeros(n, dtype=bool)
-
-
-# ================================================================
-# Tests: _find_false_blocks
-# ================================================================
-
-
 class TestFindFalseBlocks:
     """Unit tests for the _find_false_blocks helper."""
 
@@ -201,284 +163,12 @@ class TestFindFalseBlocks:
         assert result == []
 
 
-# ================================================================
-# Tests: _fill_gaps
-# ================================================================
-
-
-class TestFillGaps:
-    """Unit tests for ScheduleProcessor._fill_gaps."""
-
-    def _make_processor(self):
-        """Create a bare ScheduleProcessor without full Visibility."""
-        proc = ScheduleProcessor.__new__(ScheduleProcessor)
-        proc.min_sequence_duration = TimeDelta(5 * 60 * u.s)
-        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
-        proc.earthlimb_gap_tolerance = 0
-        proc.st_gap_tolerance = 0
-        return proc
-
-    def test_gap_shifts_start_backward(self):
-        proc = self._make_processor()
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        original_stop = seq.stop_time
-
-        filled = proc._fill_gaps(seq, gap_length=5)
-
-        assert filled.start_time == seq.start_time - 5 * u.min
-        assert filled.stop_time == original_stop
-
-    def test_gap_zero_is_noop(self):
-        proc = self._make_processor()
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        filled = proc._fill_gaps(seq, gap_length=0)
-        assert filled.start_time == seq.start_time
-
-    def test_payload_params_deep_copied(self):
-        proc = self._make_processor()
-        params = {"key": {"nested": "value"}}
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        seq.payload_params = params
-
-        filled = proc._fill_gaps(seq, gap_length=3)
-
-        # Mutating original should not affect filled copy
-        params["key"]["nested"] = "changed"
-        assert filled.payload_params["key"]["nested"] == "value"
-
-    def test_blind_fill_extends_into_non_visible(self):
-        """_fill_gaps is blind — extends regardless of visibility."""
-        proc = self._make_processor()
-        seq = _make_seq("s1", "T", start_min=10, duration_min=20)
-        filled = proc._fill_gaps(seq, gap_length=5)
-
-        # Should extend the full 5 minutes blindly
-        assert filled.start_time == seq.start_time - 5 * u.min
-
-
-# ================================================================
-# Tests: _fix_visibility with mock visibility
-# ================================================================
-
-
-class TestFixVisibility:
-    """Integration tests for _fix_visibility using pattern-based mocks."""
-
-    def _make_processor_with_pattern(self, pattern, monkeypatch):
-        """Set up a ScheduleProcessor whose visibility is pattern-driven."""
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        return proc
-
-    def test_single_gap_previous_visible(self, monkeypatch):
-        """Previous target visible during gap → extend prev, shrink current."""
-        # Sequence A: minutes 0-9 (visible)
-        # Gap: minutes 10-14 (NOT visible for A's target in main eval,
-        #       but VISIBLE for A's target in gap-fill check)
-        # Sequence B: minutes 15-24 (visible)
-        #
-        # The main visibility array has False at 10-14.
-        # When _fix_visibility queries A's target during gap, we want True.
-        pattern = np.ones(25, dtype=bool)
-        pattern[10:15] = False  # gap in main visibility
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=15)
-        cal = _make_calendar([seqA, seqB])
-
-        # Use all-true dummy so gap-fill queries for prev target return True
-        dummy_all_true = DummyVisibilityAllTrue("L1", "L2")
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy_all_true,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        # Manually set the visibility array with the gap
-        all_minutes_bool = pattern.copy()
-
-        result = proc._fix_visibility(cal, all_minutes_bool)
-
-        # Sequence A should have been extended
-        seqA_out = result.visits[0].sequences[0]
-        assert seqA_out.stop_time > seqA.stop_time
-
-    def test_single_gap_previous_not_visible(self, monkeypatch):
-        """Previous target NOT visible during gap → gap remains."""
-        pattern = np.ones(25, dtype=bool)
-        pattern[10:15] = False
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=15)
-        cal = _make_calendar([seqA, seqB])
-
-        # Visibility returns False for everything during gap check
-        dummy_all_false_gap = DummyVisibilityPattern(
-            "L1", "L2", pattern=pattern
-        )
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy_all_false_gap,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        result = proc._fix_visibility(cal, pattern)
-
-        # Sequence A should NOT have been extended
-        seqA_out = result.visits[0].sequences[0]
-        assert seqA_out.stop_time == seqA.stop_time
-
-    def test_all_false_visibility(self, monkeypatch):
-        """All minutes non-visible → no extensions, sequences shrunk."""
-        n = 20
-        pattern = np.zeros(n, dtype=bool)
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=10)
-        cal = _make_calendar([seqA, seqB])
-
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        proc._fix_visibility(cal, pattern)
-
-        # Gap report should record remaining gaps
-        assert proc.gap_report["processing_summary"]["gaps_remaining"] >= 0
-
-    def test_gap_report_counts(self, monkeypatch):
-        """Verify gap report counts after gap processing."""
-        pattern = np.ones(30, dtype=bool)
-        pattern[10:15] = False
-        pattern[20:25] = False
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=10)
-        seqC = _make_seq("sC", "TargetA", start_min=20, duration_min=10)
-        cal = _make_calendar([seqA, seqB, seqC])
-
-        dummy = DummyVisibilityAllTrue("L1", "L2")
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        proc._fix_visibility(cal, pattern)
-
-        summary = proc.gap_report["processing_summary"]
-        assert summary["gaps_processed"] == 2
-
-
-# ================================================================
-# Tests: Roll-aware gap filling
-# ================================================================
-
-
-class TestRollAwareGapFilling:
-    """Verify roll kwarg is threaded through gap-filling logic."""
-
-    def test_gap_fill_uses_stored_roll(self, monkeypatch):
-        """_fix_visibility passes the stored roll to get_visibility."""
-        pattern = np.ones(20, dtype=bool)
-        pattern[8:12] = False
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=10)
-        cal = _make_calendar([seqA, seqB])
-
-        # Track whether roll was passed
-        received_rolls = []
-
-        class TrackingVisibility:
-            def __init__(self, l1, l2, **kw):
-                pass
-
-            def get_visibility(self, coord, times, roll=None):
-                received_rolls.append(roll)
-                try:
-                    n = len(times)
-                except Exception:
-                    n = 1
-                return np.ones(n, dtype=bool)
-
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            TrackingVisibility,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-
-        # Enable roll sweep (normally set by passing st_* params)
-        proc._roll_sweep_enabled = True
-
-        # Pre-populate computed rolls
-        proc._computed_target_rolls = {
-            "v1": {"TargetA": 42.0, "TargetB": 99.0}
-        }
-
-        proc._fix_visibility(cal, pattern)
-
-        # At least one call should have passed roll=42*u.deg
-        # (for TargetA, the previous target during the gap)
-        roll_values = [
-            r.to(u.deg).value for r in received_rolls if r is not None
-        ]
-        assert 42.0 in roll_values
-
-    def test_end_to_end_roll_sensitive(self, monkeypatch, tmp_path):
-        """Full process_calendar with roll-sensitive visibility."""
-        import shortschedule
-
-        sample = (
-            Path(shortschedule.__file__).parent
-            / "data"
-            / "Pandora_science_calendar_20251018_tsb-futz.xml"
-        )
-
-        from shortschedule.parser import parse_science_calendar
-
-        cal = parse_science_calendar(sample)
-        if not cal.visits:
-            pytest.skip("Sample calendar has no visits")
-
-        # Use all-true visibility so pipeline completes normally
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            DummyVisibilityAllTrue,
-        )
-        first_seq = cal.visits[0].sequences[0]
-        sched = ScheduleProcessor("LINE1", "LINE2")
-        processed = sched.process_calendar(
-            cal,
-            window_start=first_seq.start_time.isot,
-            window_duration_days=1,
-            log_path=tmp_path / "run",
-            verbose=False,
-        )
-
-        # All sequences should have roll assigned
-        for visit in processed.visits:
-            for seq in visit.sequences:
-                assert seq.roll is not None
-
-
-# ================================================================
-# Tests: _trim_non_visible_tails
-# ================================================================
-
-
 class TestTrimNonVisibleTails:
     """Unit tests for ScheduleProcessor._trim_non_visible_tails."""
 
     def _make_processor(self, visibility_cls):
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
         proc._roll_sweep_enabled = False
         proc._computed_target_rolls = {}
         proc.visibility = visibility_cls
@@ -633,252 +323,12 @@ class TestTrimNonVisibleTails:
         assert gap_sec < 1, f"Gap of {gap_sec:.0f}s created"
 
 
-# ================================================================
-# Tests: _trim_non_visible_heads
-# ================================================================
-
-
-class TestTrimNonVisibleHeads:
-    """Unit tests for ScheduleProcessor._trim_non_visible_heads."""
-
-    def _make_processor(self, visibility_cls):
-        proc = ScheduleProcessor.__new__(ScheduleProcessor)
-        proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
-        proc.visibility = visibility_cls
-        proc.earthlimb_gap_tolerance = 0
-        proc.st_gap_tolerance = 0
-        proc.gap_report = {
-            "visibility_gaps": [],
-            "processing_summary": {},
-        }
-        return proc
-
-    def test_no_head_no_change(self):
-        """All-visible sequence is untouched."""
-        dummy = DummyVisibilityAllTrue("L1", "L2")
-        proc = self._make_processor(dummy)
-
-        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
-        cal = _make_calendar([seq])
-        result = proc._trim_non_visible_heads(cal)
-
-        out = result.visits[0].sequences[0]
-        assert out.start_time == seq.start_time
-
-    def test_head_trimmed(self):
-        """Non-visible head is trimmed to first visible minute."""
-        # Minutes 0-4 non-visible, 5-19 visible
-        pattern = np.ones(30, dtype=bool)
-        pattern[0:5] = False
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
-        proc = self._make_processor(dummy)
-
-        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
-        cal = _make_calendar([seq])
-        result = proc._trim_non_visible_heads(cal)
-
-        out = result.visits[0].sequences[0]
-        expected_start = T0 + 5 * u.min
-        assert abs((out.start_time - expected_start).sec) < 1
-        # stop_time should be unchanged
-        assert out.stop_time == seq.stop_time
-
-    def test_prev_sequence_extended_forward(self):
-        """After trimming head, prev seq extends forward if visible."""
-        # Seq A: minutes 0-19, RA=10 → all visible
-        # Seq B: minutes 20-39, RA=50 → head at 20-24 non-visible
-        pattern_b = np.ones(40, dtype=bool)
-        pattern_b[20:25] = False
-
-        class _PerTargetVis:
-            def __init__(self, *a, **kw):
-                pass
-
-            def get_visibility(self, coord, times, roll=None):
-                n = len(times)
-                if abs(coord.ra.deg - 50.0) < 1.0:
-                    result = np.ones(n, dtype=bool)
-                    for i, t in enumerate(times):
-                        idx = int(np.rint((t - T0).sec / 60.0))
-                        if 0 <= idx < len(pattern_b):
-                            result[i] = pattern_b[idx]
-                    return result
-                # Target A is all-visible
-                return np.ones(n, dtype=bool)
-
-        proc = self._make_processor(_PerTargetVis("L1", "L2"))
-
-        seqA = _make_seq(
-            "sA", "TargetA", start_min=0, duration_min=20, ra=10.0
-        )
-        seqB = _make_seq(
-            "sB", "TargetB", start_min=20, duration_min=20, ra=50.0
-        )
-        cal = _make_calendar([seqA, seqB])
-        result = proc._trim_non_visible_heads(cal)
-
-        outA = result.visits[0].sequences[0]
-        # Seq A should extend forward to cover the gap
-        assert outA.stop_time > seqA.stop_time
-
-    def test_skip_if_trimming_too_short(self):
-        """Sequence not trimmed if result would be < min_sequence_duration."""
-        # 10-minute seq, minutes 0-7 non-visible (only minutes 8-9 visible)
-        # Trimming would leave 2 minutes < 8 min minimum
-        pattern = np.ones(20, dtype=bool)
-        pattern[0:8] = False
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
-        proc = self._make_processor(dummy)
-
-        seq = _make_seq("s1", "T", start_min=0, duration_min=10)
-        cal = _make_calendar([seq])
-        result = proc._trim_non_visible_heads(cal)
-
-        out = result.visits[0].sequences[0]
-        # Should remain unchanged
-        assert out.start_time == seq.start_time
-
-    def test_entirely_non_visible_skipped(self):
-        """Entirely non-visible sequence is not modified."""
-        pattern = np.zeros(20, dtype=bool)
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
-        proc = self._make_processor(dummy)
-
-        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
-        cal = _make_calendar([seq])
-        result = proc._trim_non_visible_heads(cal)
-
-        out = result.visits[0].sequences[0]
-        assert out.start_time == seq.start_time
-
-    def test_contiguity_preserved_when_prev_not_visible(self):
-        """Head trim + blind prev extension maintains contiguity."""
-        # Seq A: minutes 0-19, RA=10
-        # Seq B: minutes 20-39, RA=50, head at 20-24 non-visible
-        # Prev target (A) also NOT visible in gap → blind extend
-        pattern_b = np.ones(40, dtype=bool)
-        pattern_b[20:25] = False
-
-        class _NeitherVisibleInGap:
-            def __init__(self, *a, **kw):
-                pass
-
-            def get_visibility(self, coord, times, roll=None):
-                n = len(times)
-                if abs(coord.ra.deg - 50.0) < 1.0:
-                    result = np.ones(n, dtype=bool)
-                    for i, t in enumerate(times):
-                        idx = int(np.rint((t - T0).sec / 60.0))
-                        if 0 <= idx < len(pattern_b):
-                            result[i] = pattern_b[idx]
-                    return result
-                # Prev target also NOT visible at 20-24
-                result = np.ones(n, dtype=bool)
-                for i, t in enumerate(times):
-                    idx = int(np.rint((t - T0).sec / 60.0))
-                    if 20 <= idx < 25:
-                        result[i] = False
-                return result
-
-        proc = self._make_processor(_NeitherVisibleInGap("L1", "L2"))
-        seqA = _make_seq(
-            "sA", "TargetA", start_min=0, duration_min=20, ra=10.0
-        )
-        seqB = _make_seq(
-            "sB", "TargetB", start_min=20, duration_min=20, ra=50.0
-        )
-        cal = _make_calendar([seqA, seqB])
-        result = proc._trim_non_visible_heads(cal)
-
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
-        # No gap: A.stop must equal B.start
-        gap_sec = abs((outB.start_time - outA.stop_time).sec)
-        assert gap_sec < 1, f"Gap of {gap_sec:.0f}s created"
-        # B's head should be trimmed
-        assert outB.start_time > seqB.start_time
-
-
-# ================================================================
-# Tests: _fix_visibility does not create gaps
-# ================================================================
-
-
-class TestFixVisibilityNoGaps:
-    """Verify _fix_visibility never introduces inter-sequence gaps."""
-
-    def test_no_shrink_when_prev_not_visible(self, monkeypatch):
-        """When prev target is NOT visible in gap, current must not shrink."""
-        # Sequence A: minutes 0-14
-        # Sequence B: minutes 15-34 (minutes 15-19 are non-visible)
-        # Previous target NOT visible in gap either → no extend.
-        # Bug (before fix): B would still shrink → gap from 15 to 20.
-        pattern = np.ones(35, dtype=bool)
-        pattern[15:20] = False  # gap in main visibility
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=15)
-        seqB = _make_seq("sB", "TargetB", start_min=15, duration_min=20)
-        cal = _make_calendar([seqA, seqB])
-
-        # Visibility returns False for everything (prev not visible)
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=pattern)
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        result = proc._fix_visibility(cal, pattern)
-
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
-        gap_sec = (outB.start_time - outA.stop_time).sec
-        assert abs(gap_sec) < 1, f"Gap of {gap_sec:.0f}s between sequences"
-
-    def test_partial_visibility_no_gap(self, monkeypatch):
-        """Partial prev visibility: shrink matches extend, no gap."""
-        # Sequence A: minutes 0-9
-        # Sequence B: minutes 10-29 (minutes 10-14 non-visible)
-        # Previous target visible at 10-12 only (not 13-14)
-        pattern = np.ones(30, dtype=bool)
-        pattern[10:15] = False
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=20)
-        cal = _make_calendar([seqA, seqB])
-
-        # Previous target visible only at 10-12
-        partial_pattern = np.ones(30, dtype=bool)
-        partial_pattern[13:15] = False
-
-        dummy = DummyVisibilityPattern("L1", "L2", pattern=partial_pattern)
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            lambda l1, l2, **kw: dummy,
-        )
-        proc = ScheduleProcessor("L1", "L2")
-        result = proc._fix_visibility(cal, pattern)
-
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
-        gap_sec = (outB.start_time - outA.stop_time).sec
-        assert abs(gap_sec) < 1, f"Gap of {gap_sec:.0f}s between sequences"
-
-
-# ================================================================
-# Tests: _trim_to_longest_visible_block
-# ================================================================
-
-
 class TestTrimToLongestVisibleBlock:
     """Unit tests for ScheduleProcessor._trim_to_longest_visible_block."""
 
     def _make_processor(self, visibility_cls):
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
         proc._roll_sweep_enabled = False
         proc._computed_target_rolls = {}
         proc.visibility = visibility_cls
@@ -889,6 +339,43 @@ class TestTrimToLongestVisibleBlock:
             "processing_summary": {},
         }
         return proc
+
+    def test_dark_head_trimmed(self):
+        """A dark head is trimmed away.
+
+        This pass is the only thing that trims a non-visible head now that
+        the dedicated head pass is gone, because the span it selects has
+        its leading dark minutes stripped.
+        """
+        pattern = np.ones(40, dtype=bool)
+        pattern[0:6] = False
+
+        class _HeadDarkVis:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_visibility(self, coord, times, roll=None):
+                indices = np.rint((times - T0).sec / 60.0).astype(int)
+                return np.array(
+                    [
+                        bool(pattern[i]) if 0 <= i < len(pattern) else True
+                        for i in np.atleast_1d(indices)
+                    ],
+                    dtype=bool,
+                )
+
+            def get_all_constraints(self, coord, time):
+                return {"moon": True, "sun": True, "earthlimb": False}
+
+        proc = self._make_processor(_HeadDarkVis("L1", "L2"))
+
+        seq = _make_seq("s1", "T", start_min=0, duration_min=30)
+        cal = _make_calendar([seq])
+        result = proc._trim_to_longest_visible_block(cal)
+
+        out = result.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 6 * u.min)).sec) < 1
+        assert abs((out.stop_time - (T0 + 30 * u.min)).sec) < 1
 
     def test_all_visible_no_change(self):
         """All-visible sequence is untouched."""
@@ -1165,6 +652,14 @@ class TestTrimToLongestVisibleBlock:
                     "earthlimb": True,
                 }
 
+            def get_star_tracker_breakdown(
+                self, coord, time, roll=None, pre=None
+            ):
+                # The dark minutes are exactly the tracker failures.
+                idx = int(np.rint((time - T0).sec / 60.0))
+                ok = pattern[idx] if 0 <= idx < len(pattern) else True
+                return {"passed": {"combined": bool(ok)}}
+
         proc = self._make_processor(_STFailVis("L1", "L2"))
         proc.st_gap_tolerance = 2
 
@@ -1223,7 +718,7 @@ class TestTrimToLongestVisibleBlock:
 
 
 # ================================================================
-# Tests: tolerance at sequence heads and tails
+# Tests: tolerance at sequence tails
 # ================================================================
 
 
@@ -1233,7 +728,6 @@ class TestToleranceAtHeadsAndTails:
     def _make_processor(self, visibility_cls):
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc.max_sequence_duration = TimeDelta(90 * 60 * u.s)
         proc._roll_sweep_enabled = False
         proc._computed_target_rolls = {}
         proc.visibility = visibility_cls
@@ -1320,444 +814,437 @@ class TestToleranceAtHeadsAndTails:
         expected_stop = T0 + 15 * u.min
         assert abs((out.stop_time - expected_stop).sec) < 1
 
-    def test_head_within_tolerance_not_shrunk(self, monkeypatch):
-        """Leading non-visible minutes within tolerance → no shrink."""
-        # Seq A: 0-9, Seq B: 10-29 (minutes 10-11 non-visible)
-        # Gap of 2 min at head of B, earthlimb failure
-        pattern = np.ones(30, dtype=bool)
-        pattern[10:12] = False
 
-        class _ELVis:
-            def __init__(self, l1, l2, **kw):
-                pass
+class _STBreakdownVis:
+    """Visibility mock exposing a star-tracker breakdown from a mask.
 
-            def get_visibility(self, coord, times, roll=None):
-                n = len(times)
-                result = np.ones(n, dtype=bool)
-                for i, t in enumerate(times):
-                    idx = int(np.rint((t - T0).sec / 60.0))
-                    if 0 <= idx < len(pattern):
-                        result[i] = pattern[idx]
-                return result
-
-            def get_all_constraints(self, coord, time):
-                return {
-                    "moon": True,
-                    "sun": True,
-                    "earthlimb": False,
-                }
-
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            _ELVis,
-        )
-        proc = ScheduleProcessor(
-            "L1",
-            "L2",
-            earthlimb_gap_tolerance=2,
-        )
-
-        seqA = _make_seq("sA", "TargetA", start_min=0, duration_min=10)
-        seqB = _make_seq("sB", "TargetB", start_min=10, duration_min=20)
-        cal = _make_calendar([seqA, seqB])
-        result = proc._fix_visibility(cal, pattern)
-
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
-        # A should NOT be extended (gap is tolerable)
-        assert outA.stop_time == seqA.stop_time
-        # B should NOT be shrunk (gap is tolerable)
-        assert outB.start_time == seqB.start_time
-
-
-# ================================================================
-# TestForceGapFill — force_gap_fill skips visibility corrections
-# ================================================================
-
-
-class TestForceGapFill:
-    """When force_gap_fill=True, _fix_visibility, _trim_non_visible_tails,
-    and _trim_to_longest_visible_block are all skipped.  Gaps filled
-    by _fill_gaps remain even if minutes are non-visible."""
-
-    def _make_processor(self, monkeypatch, pattern):
-        """Create a processor with force_gap_fill=True and a partial-
-        visibility pattern."""
-
-        class _PartialVis:
-            def __init__(self, l1, l2, **kw):
-                self._pattern = pattern
-
-            def get_visibility(self, coord, times, roll=None):
-                n = len(times)
-                result = np.ones(n, dtype=bool)
-                for i, t in enumerate(times):
-                    idx = int(np.rint((t - T0).sec / 60.0))
-                    if 0 <= idx < len(self._pattern):
-                        result[i] = self._pattern[idx]
-                return result
-
-            def get_all_constraints(self, coord, time):
-                return {"earthlimb": True, "sun": True}
-
-            def get_separations(self, coord, time):
-                return {"earthlimb": 90.0 * u.deg}
-
-        monkeypatch.setattr(
-            "shortschedule.scheduler.Visibility",
-            _PartialVis,
-        )
-        proc = ScheduleProcessor("L1", "L2", force_gap_fill=True)
-        proc.earthlimb_gap_tolerance = 0
-        proc.st_gap_tolerance = 0
-        return proc
-
-    def test_non_visible_tails_preserved(self, monkeypatch):
-        """Tails that would normally be trimmed are kept."""
-        # Last 5 minutes non-visible
-        pattern = np.ones(30, dtype=bool)
-        pattern[25:30] = False
-        proc = self._make_processor(monkeypatch, pattern)
-
-        seq = _make_seq("s1", "T1", start_min=0, duration_min=30)
-        cal = _make_calendar([seq])
-        proc._trim_non_visible_tails(cal)
-
-        # Without force_gap_fill the tail would be trimmed; with it
-        # _process_all_sequences skips the call.  We test the flag
-        # directly:
-        assert proc.force_gap_fill is True
-
-    def test_process_all_sequences_no_gap(self, monkeypatch):
-        """Two sequences with a gap — gap is filled and NOT reopened."""
-        # Seq A: mins 0-19 (all visible)
-        # Gap: mins 20-24 (non-visible)
-        # Seq B: mins 25-44 (all visible)
-        pattern = np.ones(45, dtype=bool)
-        pattern[20:25] = False
-        proc = self._make_processor(monkeypatch, pattern)
-
-        seqA = _make_seq("sA", "TA", start_min=0, duration_min=20)
-        seqB = _make_seq("sB", "TB", start_min=25, duration_min=20)
-        cal = _make_calendar([seqA, seqB])
-
-        result = proc._process_all_sequences(cal)
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
-
-        # _fill_gaps extends seqB backward to fill the 5-min gap,
-        # and force_gap_fill prevents the visibility pass from
-        # undoing it → no gap between A and B.
-        gap_sec = (outB.start_time - outA.stop_time).sec
-        assert abs(gap_sec) < 1, f"Expected no gap but found {gap_sec:.1f}s"
-
-    def test_mid_sequence_dark_preserved(self, monkeypatch):
-        """Dark minutes in the middle of a sequence are NOT trimmed."""
-        # 30-min sequence; mins 12-14 non-visible
-        pattern = np.ones(30, dtype=bool)
-        pattern[12:15] = False
-        proc = self._make_processor(monkeypatch, pattern)
-
-        seq = _make_seq("s1", "T1", start_min=0, duration_min=30)
-        cal = _make_calendar([seq])
-        result = proc._process_all_sequences(cal)
-
-        out = result.visits[0].sequences[0]
-        dur_min = out.duration.sec / 60.0
-        # Duration should be unchanged (30 min) — no trimming
-        assert abs(dur_min - 30.0) < 1
-
-
-# ================================================================
-# Smart force-fill rules
-# ================================================================
-
-
-class TestForceGapFillRules:
-    """Tests for constraint-aware gap-filling rules:
-    1. Never extend below earthlimb_hard_floor (5 deg).
-    2. Prefer star-tracker violations over earthlimb violations.
-    3. Prefer extending the previous sequence forward (gaps at end).
+    st_mask is indexed in minutes since T0. ``roll_masks`` maps a rounded
+    roll in degrees to an alternative mask, so a test can show the verdict
+    actually depends on the roll it was asked about.
     """
 
-    @staticmethod
-    def _smart_vis_factory(
-        *,
-        prev_el_angles=None,
-        next_el_angles=None,
-        prev_constraints=None,
-        next_constraints=None,
-    ):
-        """Build a mock Visibility class that returns per-minute data.
+    _st_constraint_active = True
 
-        Parameters are dicts mapping minute-offset (from T0) to values.
-        Unspecified minutes default to fully visible / 90 deg earthlimb.
-        """
-        prev_el = prev_el_angles or {}
-        next_el = next_el_angles or {}
-        prev_con = prev_constraints or {}
-        next_con = next_constraints or {}
+    def __init__(self, st_mask, roll_masks=None):
+        self.st_mask = np.asarray(st_mask, dtype=bool)
+        self.roll_masks = roll_masks or {}
+        self.rolls_seen = []
 
-        class _SmartVis:
-            _st_constraint_active = False
+    def get_visibility(self, coord, times, roll=None):
+        return np.ones(len(times), dtype=bool)
 
-            def __init__(self, l1, l2, **kw):
-                pass
+    def get_all_constraints(self, coord, time):
+        return {"moon": True, "sun": True, "earthlimb": True}
 
-            def get_visibility(self, coord, times, roll=None):
-                n = len(times)
-                result = np.ones(n, dtype=bool)
-                # Use ra to distinguish prev (ra=10) vs next (ra=30)
-                is_prev = abs(coord.ra.deg - 10.0) < 1.0
-                el_map = prev_el if is_prev else next_el
-                for i, t in enumerate(times):
-                    m = int(np.rint((t - T0).sec / 60.0))
-                    if m in el_map:
-                        # Non-visible when earthlimb map specifies
-                        # a value (the caller wants control)
-                        result[i] = False
-                return result
+    def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):
+        roll_deg = None if roll is None else float(roll.to(u.deg).value)
+        self.rolls_seen.append(roll_deg)
+        mask = self.st_mask
+        if roll_deg is not None:
+            mask = self.roll_masks.get(round(roll_deg), mask)
 
-            def get_separations(self, coord, time):
-                is_prev = abs(coord.ra.deg - 10.0) < 1.0
-                el_map = prev_el if is_prev else next_el
-                m = int(np.rint((time - T0).sec / 60.0))
-                angle = el_map.get(m, 90.0)
-                return {"earthlimb": angle * u.deg}
+        def _lookup(index):
+            return bool(mask[index]) if 0 <= index < len(mask) else True
 
-            def get_all_constraints(self, coord, time):
-                is_prev = abs(coord.ra.deg - 10.0) < 1.0
-                con_map = prev_con if is_prev else next_con
-                m = int(np.rint((time - T0).sec / 60.0))
-                return con_map.get(
-                    m,
-                    {"earthlimb": True, "sun": True},
-                )
+        if time.isscalar:
+            index = int(np.rint((time - T0).sec / 60.0))
+            return {"passed": {"combined": _lookup(index)}}
+        indices = np.rint((time - T0).sec / 60.0).astype(int)
+        return {
+            "passed": {
+                "combined": np.array([_lookup(i) for i in indices], dtype=bool)
+            }
+        }
 
-        return _SmartVis
 
-    def _make_processor(self, monkeypatch, vis_cls, floor=5.0):
-        monkeypatch.setattr("shortschedule.scheduler.Visibility", vis_cls)
-        proc = ScheduleProcessor(
-            "L1",
-            "L2",
-            force_gap_fill=True,
-            earthlimb_hard_floor=floor,
-        )
-        proc.earthlimb_gap_tolerance = 0
-        proc.st_gap_tolerance = 0
+class TestSTStartBuffer:
+    """The opening minutes of an observation must be star-tracker visible."""
+
+    def _make_processor(self, visibility, buffer_minutes=12):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.visibility = visibility
+        proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
+        proc._roll_sweep_enabled = False
+        proc._computed_target_rolls = {}
+        proc.st_gap_tolerance_start_buffer = buffer_minutes
+        # These tests are about the star-tracker buffer specifically, so
+        # the Earth-limb one is left off.
+        proc.earthlimb_gap_tolerance_start_buffer = 0
         return proc
 
-    # ---- Rule 3: prefer extending prev forward ----
+    def test_clear_start_left_alone(self):
+        """A start that already clears the buffer is untouched."""
+        proc = self._make_processor(_STBreakdownVis(np.ones(60, dtype=bool)))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
 
-    def test_prefer_extending_prev_forward(self, monkeypatch):
-        """When both targets are equally good, prev takes the gap."""
-        # 5-min gap, both targets non-visible but above floor,
-        # both have ST-only failures → prev should take all 5 min.
-        gap_mins = {m: 20.0 for m in range(20, 25)}  # earthlimb 20 deg
-        cons = {
-            m: {"earthlimb": True, "star_tracker": False}
-            for m in range(20, 25)
-        }
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles=gap_mins,
-            next_el_angles=gap_mins,
-            prev_constraints=cons,
-            next_constraints=cons,
-        )
-        proc = self._make_processor(monkeypatch, vis_cls)
+        proc._enforce_start_buffers(cal)
 
-        seqA = _make_seq(
-            "sA", "TA", start_min=0, duration_min=20, ra=10, dec=20
-        )
-        seqB = _make_seq(
-            "sB", "TB", start_min=25, duration_min=20, ra=30, dec=40
-        )
-        cal = _make_calendar([seqA, seqB])
-        result = proc._force_fill_gaps(cal)
+        assert cal.visits[0].sequences[0].start_time == T0
 
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
+    def test_dark_start_trimmed_forward(self):
+        """A tracker dropout at the start moves start_time forward."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:5] = False
+        proc = self._make_processor(_STBreakdownVis(mask))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
 
-        # Prev extended forward by 5 min
-        assert abs(outA.stop_time - (T0 + 25 * u.min)) < TimeDelta(
-            2, format="sec"
-        )
-        # Next NOT extended backward (prev took it all)
-        assert abs(outB.start_time - (T0 + 25 * u.min)) < TimeDelta(
-            2, format="sec"
-        )
+        proc._enforce_start_buffers(cal)
 
-    # ---- Rule 2: earthlimb hard floor ----
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 5 * u.min)).sec) < 1
+        # Only the start moves; the stop is left where it was.
+        assert abs((out.stop_time - (T0 + 40 * u.min)).sec) < 1
 
-    def test_earthlimb_hard_floor_leaves_gap(self, monkeypatch):
-        """Minutes where both targets have earthlimb < floor stay unfilled."""
-        # 5-min gap, both targets have earthlimb = 3 deg (< 5 floor)
-        gap_mins = {m: 3.0 for m in range(20, 25)}
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles=gap_mins,
-            next_el_angles=gap_mins,
-        )
-        proc = self._make_processor(monkeypatch, vis_cls)
+    def test_dropout_inside_buffer_pushes_past_it(self):
+        """A dropout inside the buffer moves past the dropout, not past 0."""
+        mask = np.ones(60, dtype=bool)
+        mask[3:6] = False  # minute 0 alone looks fine; the buffer does not
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=12)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
 
-        seqA = _make_seq(
-            "sA", "TA", start_min=0, duration_min=20, ra=10, dec=20
-        )
-        seqB = _make_seq(
-            "sB", "TB", start_min=25, duration_min=20, ra=30, dec=40
-        )
-        cal = _make_calendar([seqA, seqB])
-        result = proc._force_fill_gaps(cal)
+        proc._enforce_start_buffers(cal)
 
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 6 * u.min)).sec) < 1
 
-        # Neither sequence extended — gap remains
-        assert abs(outA.stop_time - (T0 + 20 * u.min)) < TimeDelta(
-            2, format="sec"
-        )
-        assert abs(outB.start_time - (T0 + 25 * u.min)) < TimeDelta(
-            2, format="sec"
-        )
+    def test_no_clear_run_logs_error_and_keeps_sequence(self, capsys):
+        """No qualifying run anywhere → error logged, sequence untouched."""
+        proc = self._make_processor(_STBreakdownVis(np.zeros(60, dtype=bool)))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
 
-    def test_floor_partial_fill(self, monkeypatch):
-        """Prev extends until earthlimb drops below floor; next fills
-        backward from the other end until its floor."""
-        # 6-min gap (min 20-25).
-        # Prev: earthlimb ok for min 20-22 (10 deg), floor at 23-25 (3 deg)
-        # Next: earthlimb ok for min 23-25 (10 deg), floor at 20-22 (3 deg)
-        prev_el = {20: 10.0, 21: 10.0, 22: 10.0, 23: 3.0, 24: 3.0, 25: 3.0}
-        next_el = {20: 3.0, 21: 3.0, 22: 3.0, 23: 10.0, 24: 10.0, 25: 10.0}
-        cons_ok = {
-            m: {"earthlimb": True, "star_tracker": False}
-            for m in range(20, 26)
-        }
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles=prev_el,
-            next_el_angles=next_el,
-            prev_constraints=cons_ok,
-            next_constraints=cons_ok,
-        )
-        proc = self._make_processor(monkeypatch, vis_cls)
+        proc._enforce_start_buffers(cal)
 
-        seqA = _make_seq(
-            "sA", "TA", start_min=0, duration_min=20, ra=10, dec=20
-        )
-        seqB = _make_seq(
-            "sB", "TB", start_min=26, duration_min=20, ra=30, dec=40
-        )
-        cal = _make_calendar([seqA, seqB])
-        result = proc._force_fill_gaps(cal)
+        out = cal.visits[0].sequences[0]
+        assert out.start_time == T0
+        assert out.stop_time == T0 + 40 * u.min
+        assert "START BUFFER" in capsys.readouterr().out
 
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
+    def test_trim_below_minimum_duration_is_refused(self, capsys):
+        """Trimming that would leave under min_sequence_duration is refused."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:14] = False
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=5)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=20)
+        cal = _make_calendar([seq])
 
-        # Prev takes min 20-22 (3 min forward)
-        assert abs(outA.stop_time - (T0 + 23 * u.min)) < TimeDelta(
-            2, format="sec"
-        )
-        # Next takes min 23-25 (3 min backward)
-        assert abs(outB.start_time - (T0 + 23 * u.min)) < TimeDelta(
-            2, format="sec"
-        )
+        proc._enforce_start_buffers(cal)
 
-    # ---- Rule 1: prefer star-tracker gaps over earthlimb gaps ----
+        # Would have to start 14 min in, leaving 6 min < the 8 min minimum.
+        assert cal.visits[0].sequences[0].start_time == T0
+        assert "START BUFFER" in capsys.readouterr().out
 
-    def test_prefer_st_over_earthlimb(self, monkeypatch):
-        """Prev stops when it has earthlimb failure and next only has ST
-        failure (which is preferred)."""
-        # 6-min gap (min 20-25).
-        # Min 20-21: prev has ST-only failure (earthlimb ok) → prev extends
-        # Min 22-25: prev has earthlimb failure but next only has ST failure
-        #   → prev stops, next takes these minutes
-        prev_el = {
-            20: 15.0,
-            21: 15.0,  # above floor, ST-only
-            22: 12.0,
-            23: 12.0,
-            24: 12.0,
-            25: 12.0,  # EL fail
-        }
-        next_el = {
-            20: 15.0,
-            21: 15.0,
-            22: 15.0,
-            23: 15.0,
-            24: 15.0,
-            25: 15.0,
-        }
-        prev_cons = {
-            20: {"earthlimb": True, "star_tracker": False},
-            21: {"earthlimb": True, "star_tracker": False},
-            22: {"earthlimb": False, "star_tracker": True},
-            23: {"earthlimb": False, "star_tracker": True},
-            24: {"earthlimb": False, "star_tracker": True},
-            25: {"earthlimb": False, "star_tracker": True},
-        }
-        next_cons = {
-            m: {"earthlimb": True, "star_tracker": False}
-            for m in range(20, 26)
-        }
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles=prev_el,
-            next_el_angles=next_el,
-            prev_constraints=prev_cons,
-            next_constraints=next_cons,
-        )
-        proc = self._make_processor(monkeypatch, vis_cls)
+    def test_buffer_longer_than_observation_must_be_clear_throughout(self):
+        """A buffer past the stop time means the whole observation is clear."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:2] = False
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=30)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=12)
+        cal = _make_calendar([seq])
 
-        seqA = _make_seq(
-            "sA", "TA", start_min=0, duration_min=20, ra=10, dec=20
-        )
-        seqB = _make_seq(
-            "sB", "TB", start_min=26, duration_min=20, ra=30, dec=40
-        )
-        cal = _make_calendar([seqA, seqB])
-        result = proc._force_fill_gaps(cal)
+        proc._enforce_start_buffers(cal)
 
-        outA = result.visits[0].sequences[0]
-        outB = result.visits[0].sequences[1]
+        # The buffer outruns the 12 min observation, so the requirement is
+        # "clear to the stop"; trimming the two dark minutes achieves that.
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 2 * u.min)).sec) < 1
 
-        # Prev takes only min 20-21 (2 min); stops at 22 where
-        # prev=EL_FAIL and next=ST_ONLY (better)
-        assert abs(outA.stop_time - (T0 + 22 * u.min)) < TimeDelta(
-            2, format="sec"
+    def test_dropout_after_the_buffer_is_left_to_the_gap_tolerance(self):
+        """Dropouts beyond the buffer are not this pass's concern."""
+        mask = np.ones(60, dtype=bool)
+        mask[20:24] = False
+        proc = self._make_processor(_STBreakdownVis(mask), buffer_minutes=12)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_disabled_by_zero_buffer(self):
+        """A zero buffer skips the check entirely."""
+        proc = self._make_processor(
+            _STBreakdownVis(np.zeros(60, dtype=bool)), buffer_minutes=0
         )
-        # Next extends backward from 26 to 22
-        assert abs(outB.start_time - (T0 + 22 * u.min)) < TimeDelta(
-            2, format="sec"
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_skipped_when_star_trackers_inactive(self):
+        """No star-tracker constraints configured: nothing to enforce."""
+        vis = _STBreakdownVis(np.zeros(60, dtype=bool))
+        vis._st_constraint_active = False
+        proc = self._make_processor(vis)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+        assert vis.rolls_seen == []
+
+    def test_uses_the_swept_roll(self):
+        """The observation's swept roll is what the trackers are checked at."""
+        vis = _STBreakdownVis(
+            np.ones(60, dtype=bool),
+            roll_masks={137: np.zeros(60, dtype=bool)},
+        )
+        proc = self._make_processor(vis)
+        proc._roll_sweep_enabled = True
+        proc._computed_target_rolls = {"v1": {"T": 137.0}}
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert vis.rolls_seen == [137.0]
+        # At roll 137 the trackers never pass, so nothing can be trimmed.
+        assert cal.visits[0].sequences[0].start_time == T0
+
+
+class _EarthlimbPatternVis:
+    """Boresight Earth-limb clearance from a minute-indexed mask.
+
+    Star trackers are always clear, so these tests isolate the Earth-limb
+    start buffer.
+    """
+
+    _st_constraint_active = False
+
+    def __init__(self, clear_mask):
+        self.clear_mask = np.asarray(clear_mask, dtype=bool)
+
+    def _lookup(self, times):
+        indices = np.rint((times - T0).sec / 60.0).astype(int)
+        return np.array(
+            [
+                (
+                    bool(self.clear_mask[i])
+                    if 0 <= i < len(self.clear_mask)
+                    else True
+                )
+                for i in np.atleast_1d(indices)
+            ],
+            dtype=bool,
         )
 
-    # ---- _classify_gap_minute unit tests ----
+    def get_visibility(self, coord, times, roll=None):
+        return self._lookup(times)
 
-    def test_classify_floor(self, monkeypatch):
-        """Earthlimb below hard floor → _GAP_FLOOR."""
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles={5: 3.0},
+    def get_constraint(self, coord, body, time, pre=None):
+        assert body == "earthlimb"
+        return self._lookup(time)
+
+
+class TestEarthlimbStartBuffer:
+    """The boresight must be clear of the Earth over the opening minutes."""
+
+    def _make_processor(self, visibility, buffer_minutes=12):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.visibility = visibility
+        proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
+        proc._roll_sweep_enabled = False
+        proc._computed_target_rolls = {}
+        proc.st_gap_tolerance_start_buffer = 0
+        proc.earthlimb_gap_tolerance_start_buffer = buffer_minutes
+        return proc
+
+    def test_clear_start_left_alone(self):
+        proc = self._make_processor(
+            _EarthlimbPatternVis(np.ones(60, dtype=bool))
         )
-        proc = self._make_processor(monkeypatch, vis_cls)
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_start_inside_the_earth_limb_is_trimmed_forward(self):
+        """An observation opening with the boresight in the Earth moves."""
+        mask = np.ones(60, dtype=bool)
+        mask[0:7] = False
+        proc = self._make_processor(_EarthlimbPatternVis(mask))
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 7 * u.min)).sec) < 1
+        assert abs((out.stop_time - (T0 + 40 * u.min)).sec) < 1
+
+    def test_dip_inside_the_buffer_pushes_past_it(self):
+        """A dip the gap tolerance would accept still moves the start."""
+        mask = np.ones(60, dtype=bool)
+        mask[4:9] = False
+        proc = self._make_processor(
+            _EarthlimbPatternVis(mask), buffer_minutes=12
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 9 * u.min)).sec) < 1
+
+    def test_dip_after_the_buffer_is_left_alone(self):
+        """Beyond the buffer the gap tolerance takes over again."""
+        mask = np.ones(60, dtype=bool)
+        mask[20:24] = False
+        proc = self._make_processor(
+            _EarthlimbPatternVis(mask), buffer_minutes=12
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_never_clear_logs_error_and_keeps_sequence(self, capsys):
+        proc = self._make_processor(
+            _EarthlimbPatternVis(np.zeros(60, dtype=bool))
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+        assert "START BUFFER" in capsys.readouterr().out
+
+    def test_disabled_by_zero_buffer(self):
+        proc = self._make_processor(
+            _EarthlimbPatternVis(np.zeros(60, dtype=bool)), buffer_minutes=0
+        )
+        seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        assert cal.visits[0].sequences[0].start_time == T0
+
+    def test_both_buffers_are_satisfied_together(self):
+        """Clearing one constraint must not land the start inside the other.
+
+        The trackers are dark over 0-5 and the boresight over 8-12, so
+        neither requirement alone gives the right answer: satisfying the
+        trackers would start at 6, which puts the Earth-limb violation
+        straight back inside the buffer.
+        """
+        tracker_ok = np.ones(60, dtype=bool)
+        tracker_ok[0:6] = False
+        limb_clear = np.ones(60, dtype=bool)
+        limb_clear[8:13] = False
+
+        class _BothVis(_EarthlimbPatternVis):
+            _st_constraint_active = True
+
+            def get_star_tracker_breakdown(
+                self, coord, time, roll=None, pre=None
+            ):
+                indices = np.rint((time - T0).sec / 60.0).astype(int)
+                return {
+                    "passed": {
+                        "combined": np.array(
+                            [
+                                (
+                                    bool(tracker_ok[i])
+                                    if 0 <= i < len(tracker_ok)
+                                    else True
+                                )
+                                for i in np.atleast_1d(indices)
+                            ],
+                            dtype=bool,
+                        )
+                    }
+                }
+
+        proc = self._make_processor(_BothVis(limb_clear), buffer_minutes=12)
+        proc.st_gap_tolerance_start_buffer = 12
+        seq = _make_seq("s1", "T", start_min=0, duration_min=50)
+        cal = _make_calendar([seq])
+
+        proc._enforce_start_buffers(cal)
+
+        out = cal.visits[0].sequences[0]
+        assert abs((out.start_time - (T0 + 13 * u.min)).sec) < 1
+
+
+class TestGapToleranceUsesObservationRoll:
+    """``_is_gap_tolerable`` must judge the trackers at the flown roll."""
+
+    def _make_processor(self, visibility):
+        proc = ScheduleProcessor.__new__(ScheduleProcessor)
+        proc.visibility = visibility
+        proc.earthlimb_gap_tolerance = 0
+        proc.st_gap_tolerance = 2
+        return proc
+
+    def test_roll_is_forwarded_to_the_tracker_check(self):
+        """The roll handed in reaches get_star_tracker_breakdown."""
+        vis = _STBreakdownVis(np.zeros(4, dtype=bool))
+        proc = self._make_processor(vis)
         coord = SkyCoord(10, 20, frame="icrs", unit="deg")
-        result = proc._classify_gap_minute(coord, T0 + 5 * u.min)
-        assert result == proc._GAP_FLOOR
 
-    def test_classify_st_only(self, monkeypatch):
-        """Only star-tracker failure → _GAP_ST_ONLY."""
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles={5: 20.0},
-            prev_constraints={5: {"earthlimb": True, "star_tracker": False}},
+        tolerable = proc._is_gap_tolerable(
+            coord, _make_time_grid(4), 0, 2, roll=137.0
         )
-        proc = self._make_processor(monkeypatch, vis_cls)
-        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
-        result = proc._classify_gap_minute(coord, T0 + 5 * u.min)
-        assert result == proc._GAP_ST_ONLY
 
-    def test_classify_el_fail(self, monkeypatch):
-        """Earthlimb constraint fails (but above floor) → _GAP_EL_FAIL."""
-        vis_cls = self._smart_vis_factory(
-            prev_el_angles={5: 10.0},
-            prev_constraints={5: {"earthlimb": False, "star_tracker": True}},
-        )
-        proc = self._make_processor(monkeypatch, vis_cls)
+        assert tolerable is True
+        assert vis.rolls_seen == [137.0]
+
+    def test_trackers_clear_at_this_roll_needs_no_tolerance(self):
+        """Boresight and trackers both clear → the gap is not ridden out."""
+        vis = _STBreakdownVis(np.ones(4, dtype=bool))
+        proc = self._make_processor(vis)
         coord = SkyCoord(10, 20, frame="icrs", unit="deg")
-        result = proc._classify_gap_minute(coord, T0 + 5 * u.min)
-        assert result == proc._GAP_EL_FAIL
+
+        result = proc._is_gap_tolerable(
+            coord, _make_time_grid(4), 0, 2, roll=137.0
+        )
+
+        assert result is False
+
+    def test_sun_or_moon_failure_is_never_tolerable(self):
+        """Only earth-limb and star-tracker failures have tolerances."""
+
+        class _SunFailVis(_STBreakdownVis):
+            def get_all_constraints(self, coord, time):
+                return {"moon": True, "sun": False, "earthlimb": True}
+
+        proc = self._make_processor(_SunFailVis(np.zeros(4, dtype=bool)))
+        proc.earthlimb_gap_tolerance = 30
+        proc.st_gap_tolerance = 30
+        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
+
+        result = proc._is_gap_tolerable(coord, _make_time_grid(4), 0, 2)
+
+        assert result is False
+
+    def test_unevaluable_tracker_check_is_reported_not_guessed(self, capsys):
+        """A tracker check that blows up is logged and the gap is trimmed."""
+
+        class _BrokenVis(_STBreakdownVis):
+            def get_star_tracker_breakdown(
+                self, coord, time, roll=None, pre=None
+            ):
+                raise RuntimeError("ephemeris unavailable")
+
+        proc = self._make_processor(_BrokenVis(np.zeros(4, dtype=bool)))
+        coord = SkyCoord(10, 20, frame="icrs", unit="deg")
+
+        result = proc._is_gap_tolerable(coord, _make_time_grid(4), 0, 2)
+
+        # Keeping dark minutes on the strength of a verdict we never got
+        # would be the unsafe guess, so the gap is treated as intolerable.
+        assert result is False
+        assert "star-tracker check failed" in capsys.readouterr().out
