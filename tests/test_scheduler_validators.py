@@ -106,3 +106,49 @@ def test_validate_sequence_timing_flags_short_sequence():
         "short_sequences"
     ], "Expected short_sequences to be non-empty"
     assert issues["short_sequences"][0]["sequence_id"] == "short"
+
+
+def test_short_sequence_logged_as_error(tmp_path):
+    """A short observation reaches the error log and invalidates the run.
+    """
+    start = Time("2025-01-01T00:00:00", scale="utc")
+    sequences = [
+        ObservationSequence(
+            id="ok",
+            target="S",
+            priority=1,
+            start_time=start,
+            stop_time=start + TimeDelta(20 * 60, format="sec"),
+            ra=0.0,
+            dec=0.0,
+            payload_params={},
+        ),
+        ObservationSequence(
+            id="short",
+            target="S",
+            priority=1,
+            start_time=start + TimeDelta(20 * 60, format="sec"),
+            stop_time=start + TimeDelta(23 * 60, format="sec"),
+            ra=0.0,
+            dec=0.0,
+            payload_params={},
+        ),
+    ]
+    cal = ScienceCalendar(
+        metadata={}, visits=[Visit(id="v1", sequences=sequences)]
+    )
+    
+    sched = ScheduleProcessor.__new__(ScheduleProcessor)
+    sched.min_sequence_duration = TimeDelta(8 * 60, format="sec")
+    sched._setup_run_logging(cal, verbose=False, log_path=tmp_path / "run.log")
+
+    assert sched.run_error_count == 0
+    sched.validate_sequence_timing(cal, report_issues=False)
+
+    # Exactly one error: the 20-min observation must not be flagged.
+    assert sched.run_error_count == 1
+
+    errors_log = tmp_path / "run.errors.log"
+    assert errors_log.exists(), "short observation must reach .errors.log"
+    text = errors_log.read_text(encoding="utf-8")
+    assert "short" in text and "< minimum" in text
