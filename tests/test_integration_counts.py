@@ -53,9 +53,7 @@ def _payload_from_config(data_obj, extra_tags=None):
 
 
 def _visda_from_kwargs(exposure_us, frames_per_coadd):
-    """Build a VisdaData for the test's VDA parameters.
-
-    """
+    """Build a VisdaData for the test's VDA parameters."""
     return VisdaData(
         exposure_time_s=exposure_us * u.us,
         frames_per_coadd=frames_per_coadd,

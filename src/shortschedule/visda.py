@@ -178,9 +178,7 @@ class VisdaData:
         self.single_frame_time = (
             max(
                 0,
-                (
-                    self.exposure_time_s.to(u.s)
-                ).value,
+                (self.exposure_time_s.to(u.s)).value,
             )
             * u.s
         )

@@ -28,12 +28,7 @@ from shortschedule.visualizer import ScheduleVisualizer
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
-xml_file_path = Path(
-    "Path",
-    "To",
-    "Long-term",
-    "Calendar.xml"
-)
+xml_file_path = Path("Path", "To", "Long-term", "Calendar.xml")
 
 # Base name (without extension) used to label the output plots, e.g.
 # "Pandora_science_calendar".
