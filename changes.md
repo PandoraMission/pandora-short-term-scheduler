@@ -1,3 +1,12 @@
+## v1.4.0 (2026-08-XX)
+- Picks up the `pandoravisibility` v1.3.0 defaults, which are Pandora's flight keepouts rather than a loose starting point.
+  - Fixes the roll sweep switching itself off. `_roll_sweep_enabled` was derived from the constructor arguments, so a scheduler that inherited the library's star-tracker keepouts applied them while never sweeping for a roll that could satisfy them. It now reads `Visibility._st_constraint_active`, falling back to the arguments only for a duck-typed visibility object that has no such attribute.
+  - Fixes `priority_0_earthlimb_min` no longer being a flat angle. The day/night pair was removed from the priority-0 keyword dict with `pop`, which only means "do not pass it", so `Visibility` fell back to its own defaults. Those are real angles since v1.3.0 and would have set the threshold instead of the flat angle the caller asked for. They are now sent as an explicit `None`.
+- `validate_visibility` asks for its constraint breakdown at the roll the observation will actually fly. `get_all_constraints` gained a `roll` argument in `pandoravisibility` v1.3.0; without it the `star_tracker` verdict described the model's own attitude and could contradict the visibility result it was reporting on.
+  - The per-tracker rows come from `get_star_tracker_breakdown`, which shares its geometry with that verdict, rather than being rebuilt from `get_star_tracker_angles`. The old path also measured the Earth limb from the geodetic horizon instead of the geocentric one the keepout is tested against.
+  - The reported Earth-limb threshold reads the observer geometry from `Visibility._precompute` rather than rebuilding it.
+  - The `side` label reports the Earth illumination angle while the dynamic wedge is in use. It was inferred by matching the effective threshold against `earthlimb_day_min`, which a continuous wedge never equals, so every step read as "night".
+
 ## v1.3.0 (2026-08-19)
 - `Calendar_Status` in the delivered XML header now reflects whether the run failed, not whether a validator just marked something as not visible. 
 - Records the configuration the run applied on the XML header, so a delivered calendar says what it was built under instead of leaving it to be reconstructed from a log: the gap tolerances and their start buffers, `Max_Movement_Min`, `Roll_Step_Deg`, `Min_Power_Frac`, and every keepout in degrees including `Priority_0_Earthlimb_Min_Deg` (written only when in use) and `Use_Dynamic_Earthlimb`.

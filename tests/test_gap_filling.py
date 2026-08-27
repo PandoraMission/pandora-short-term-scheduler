@@ -364,7 +364,7 @@ class TestTrimToLongestVisibleBlock:
                     dtype=bool,
                 )
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {"moon": True, "sun": True, "earthlimb": False}
 
         proc = self._make_processor(_HeadDarkVis("L1", "L2"))
@@ -567,7 +567,7 @@ class TestTrimToLongestVisibleBlock:
                         result[i] = pattern[idx]
                 return result
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {
                     "moon": True,
                     "sun": True,
@@ -605,7 +605,7 @@ class TestTrimToLongestVisibleBlock:
                         result[i] = pattern[idx]
                 return result
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {
                     "moon": True,
                     "sun": True,
@@ -644,7 +644,7 @@ class TestTrimToLongestVisibleBlock:
                         result[i] = pattern[idx]
                 return result
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 # Boresight constraints pass; ST fails
                 return {
                     "moon": True,
@@ -695,7 +695,7 @@ class TestTrimToLongestVisibleBlock:
                         result[i] = pattern[idx]
                 return result
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {
                     "moon": True,
                     "sun": True,
@@ -758,7 +758,7 @@ class TestToleranceAtHeadsAndTails:
                         result[i] = pattern[idx]
                 return result
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {
                     "moon": True,
                     "sun": True,
@@ -795,7 +795,7 @@ class TestToleranceAtHeadsAndTails:
                         result[i] = pattern[idx]
                 return result
 
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {
                     "moon": True,
                     "sun": True,
@@ -833,7 +833,7 @@ class _STBreakdownVis:
     def get_visibility(self, coord, times, roll=None):
         return np.ones(len(times), dtype=bool)
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         return {"moon": True, "sun": True, "earthlimb": True}
 
     def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):
@@ -1218,7 +1218,7 @@ class TestGapToleranceUsesObservationRoll:
         """Only earth-limb and star-tracker failures have tolerances."""
 
         class _SunFailVis(_STBreakdownVis):
-            def get_all_constraints(self, coord, time):
+            def get_all_constraints(self, coord, time, roll=None):
                 return {"moon": True, "sun": False, "earthlimb": True}
 
         proc = self._make_processor(_SunFailVis(np.zeros(4, dtype=bool)))

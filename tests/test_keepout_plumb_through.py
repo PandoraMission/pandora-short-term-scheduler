@@ -60,6 +60,47 @@ def test_explicit_keepout_is_applied_verbatim(keepout):
     assert applied.to_value("deg") == pytest.approx(37.5)
 
 
+def test_unset_dynamic_earthlimb_matches_the_library_default():
+    """``use_dynamic_earthlimb`` defers to the library like every keepout.
+
+    It is a bool, so it survives the "drop the Nones" filter that leaves
+    the rest to ``pandoravisibility``. Defaulting it to ``False`` here
+    pinned the wedge off for every caller that never mentioned it, right
+    past the library turning it on.
+    """
+    library = Visibility(TLE1, TLE2)
+    scheduler = ScheduleProcessor(TLE1, TLE2).visibility
+
+    assert scheduler.use_dynamic_earthlimb == library.use_dynamic_earthlimb
+
+
+@pytest.mark.parametrize("wedge", [True, False])
+def test_explicit_dynamic_earthlimb_is_applied_verbatim(wedge):
+    """Passing it reaches Visibility unchanged, either way."""
+    scheduler = ScheduleProcessor(
+        TLE1, TLE2, use_dynamic_earthlimb=wedge
+    ).visibility
+
+    assert scheduler.use_dynamic_earthlimb is wedge
+
+
+def test_priority_0_limb_is_not_overridden_by_library_day_night():
+    """The priority-0 limb stays the flat angle the caller asked for.
+
+    The day/night pair has to be sent as an explicit ``None``. Dropping
+    the keys instead lets Visibility fall back to its own defaults, which
+    are real angles since v1.3.0, and those would then decide the
+    threshold rather than ``priority_0_earthlimb_min``.
+    """
+    processor = ScheduleProcessor(TLE1, TLE2, priority_0_earthlimb_min=54)
+    strict = processor.priority_0_visibility
+
+    assert strict.use_dynamic_earthlimb is False
+    assert strict.earthlimb_day_min is None
+    assert strict.earthlimb_night_min is None
+    assert strict.earthlimb_min.to_value("deg") == pytest.approx(54.0)
+
+
 @pytest.mark.parametrize(
     "star_tracker_limits",
     [

@@ -135,7 +135,7 @@ class _VisHalfFalse:
         vis[: n // 2] = False
         return vis
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         return {
             "moon": True,
             "sun": False,
@@ -154,7 +154,7 @@ class _VisAllFalse:
             n = 1
         return np.zeros(n, dtype=bool)
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         return {
             "moon": False,
             "sun": False,
@@ -179,12 +179,63 @@ class _VisRollFails:
         vis[:2] = False  # first 2 minutes fail
         return vis
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         return {
             "moon": True,
             "sun": True,
             "earthlimb": True,
             "star_tracker": True,
+        }
+
+
+class _VisRecordsRoll:
+    """Records the roll every constraint query is asked for."""
+
+    _st_constraint_active = True
+    earthlimb_day_min = None
+    earthlimb_night_min = None
+
+    def __init__(self):
+        self.constraint_rolls = []
+        self.breakdown_rolls = []
+
+    def get_visibility(self, coord, times, roll=None):
+        try:
+            n = len(times)
+        except Exception:
+            n = 1
+        vis = np.ones(n, dtype=bool)
+        vis[:2] = False
+        return vis
+
+    def get_all_constraints(self, coord, time, roll=None):
+        self.constraint_rolls.append(
+            None if roll is None else float(roll.to(u.deg).value)
+        )
+        return {
+            "moon": True,
+            "sun": True,
+            "earthlimb": True,
+            "star_tracker": False,
+        }
+
+    def get_separations(self, coord, time):
+        return {"moon": 60 * u.deg, "sun": 100 * u.deg, "earthlimb": 5 * u.deg}
+
+    def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):
+        self.breakdown_rolls.append(
+            None if roll is None else float(roll.to(u.deg).value)
+        )
+        return {
+            "passed": {
+                "ST1 sun": False,
+                "ST2 sun": True,
+                "ST1": False,
+                "ST2": True,
+                "combined": False,
+            },
+            "separations": {"ST1 sun": 12.5, "ST2 sun": 61.0},
+            "limits": {"ST1 sun": 44 * u.deg, "ST2 sun": 44 * u.deg},
         }
 
 
@@ -276,6 +327,49 @@ class TestValidateVisibility:
         assert "170.0" in iss["constraint_summary"]
         assert iss["constraint_failures"].get("star_tracker_at_roll") is False
         assert "star_tracker" in iss["message"]
+
+    def test_diagnostics_are_asked_for_the_flown_roll(self):
+        """Both constraint queries use the roll the observation will fly.
+
+        The star tracker keepouts depend on roll. Asked without one they
+        describe the model's own attitude, so the reported failure can
+        contradict the visibility result it is meant to explain.
+        """
+        model = _VisRecordsRoll()
+        sched = _bare_sched(
+            visibility=model,
+            _roll_sweep_enabled=True,
+            _computed_target_rolls={"v1": {"StarA": 137.0}},
+        )
+        cal = _cal([_seq("s1", "StarA", 0, 20)])
+        issues = sched.validate_visibility(cal, report_issues=False)
+
+        assert len(issues) == 1
+        assert model.constraint_rolls == [137.0]
+        assert model.breakdown_rolls == [137.0]
+
+    def test_tracker_rows_come_from_the_breakdown(self):
+        """Per-tracker detail shares the geometry of the verdict above it."""
+        model = _VisRecordsRoll()
+        sched = _bare_sched(
+            visibility=model,
+            _roll_sweep_enabled=True,
+            _computed_target_rolls={"v1": {"StarA": 137.0}},
+        )
+        cal = _cal([_seq("s1", "StarA", 0, 20)])
+        details = sched.validate_visibility(cal, report_issues=False)[0][
+            "constraint_details"
+        ]
+
+        assert details["st1_sun"] == {
+            "passes": False,
+            "required_deg": 44.0,
+            "actual_deg": 12.5,
+        }
+        assert details["st2_sun"]["passes"] is True
+        # The rollup rows are not detail rows.
+        for rollup in ("st1", "st2", "combined"):
+            assert rollup not in details
 
     def test_roll_none_when_sweep_disabled(self):
         sched = _bare_sched(visibility=_VisHalfFalse())
