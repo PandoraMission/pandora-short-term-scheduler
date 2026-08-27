@@ -351,7 +351,7 @@ class _DarkGapVis:
             dtype=bool,
         )
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         # Boresight is clear; the trackers are what drop out.
         return {"moon": True, "sun": True, "earthlimb": True}
 

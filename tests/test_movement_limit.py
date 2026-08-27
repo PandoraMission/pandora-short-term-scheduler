@@ -75,7 +75,7 @@ class _PatternVis:
             dtype=bool,
         )
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         return {"moon": True, "sun": True, "earthlimb": self._lit(time)}
 
     def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):

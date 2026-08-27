@@ -20,7 +20,6 @@ import xml.etree.ElementTree as ET
 
 # Third-party
 import numpy as np
-import pytest
 from astropy import units as u
 from astropy.time import Time
 from pandoravisibility import Visibility
@@ -46,7 +45,7 @@ class _AllVisible:
     def get_visibility(self, coord, times, roll=None):
         return np.ones(np.atleast_1d(times).size, dtype=bool)
 
-    def get_all_constraints(self, coord, time):
+    def get_all_constraints(self, coord, time, roll=None):
         return {"moon": True, "sun": True, "earthlimb": True}
 
     def get_separations(self, coord, time):
@@ -230,7 +229,10 @@ class TestSettingsInTheHeader:
         library_moon = Visibility(TLE1, TLE2).moon_min.to_value(u.deg)
 
         assert meta["Moon_Min_Deg"] == f"{library_moon:g}"
-        assert float(meta["Moon_Min_Deg"]) == pytest.approx(25.0)
+        # A real angle reached the header, not a blank or a None smuggled
+        # through as text. The value itself is deliberately not restated:
+        # pinning it here is the drift this test exists to catch.
+        assert float(meta["Moon_Min_Deg"]) > 0
 
     def test_priority_0_limb_is_absent_when_unused(self, tmp_path):
         meta = self._meta(tmp_path, ScheduleProcessor(TLE1, TLE2))

@@ -44,8 +44,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # Third-party
 import numpy as np
 from astropy import units as u
-from astropy.coordinates import GCRS, SkyCoord
-from astropy.coordinates import get_body
+from astropy.coordinates import SkyCoord
 from astropy.time import Time, TimeDelta
 from pandoravisibility import Visibility
 
@@ -174,7 +173,7 @@ class ScheduleProcessor:
         earthlimb_gap_tolerance_start_buffer: int = 7.5,
         st_gap_tolerance: int = 0,
         st_gap_tolerance_start_buffer: int = 7.5,
-        use_dynamic_earthlimb: bool = False,
+        use_dynamic_earthlimb: Optional[bool] = None,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -322,9 +321,13 @@ class ScheduleProcessor:
             tolerance is applied inside this buffer. Sequences that open
             dark are trimmed forward to the first minute that clears it;
             set to 0 to disable the check.
-        use_dynamic_earthlimb : bool, default=true
-            If True, then uses the dynamic DPC boresight Earth limb.
-            This is the wedge shape keepout based on the Earth illumination.
+        use_dynamic_earthlimb : bool, optional
+            If True, uses the dynamic DPC boresight Earth limb, the wedge
+            shaped keepout based on the Earth illumination angle.  Like
+            every keepout above it defaults to ``None``, deferring to
+            ``pandoravisibility``, which, currently, defaults to
+            switching the wedge on. Passing ``False`` selects the
+            flat or day/night limb instead.
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -361,8 +364,12 @@ class ScheduleProcessor:
         self.priority_0_visibility = None
         if priority_0_earthlimb_min is not None:
             _pri0_kw = dict(_kw)
-            _pri0_kw.pop("earthlimb_day_min", None)
-            _pri0_kw.pop("earthlimb_night_min", None)
+            # Explicit None, not a pop: dropping the key lets Visibility
+            # fall back to its own day/night defaults, which since v1.3.0
+            # are real angles rather than None. Those would then override
+            # the flat priority_0_earthlimb_min the caller asked for.
+            _pri0_kw["earthlimb_day_min"] = None
+            _pri0_kw["earthlimb_night_min"] = None
             _pri0_kw["use_dynamic_earthlimb"] = False
             _pri0_kw["earthlimb_min"] = self._to_deg(priority_0_earthlimb_min)
             self.priority_0_visibility = Visibility(
@@ -387,20 +394,30 @@ class ScheduleProcessor:
         self.min_power_frac = min_power_frac
         # Roll sweep is only meaningful when star-tracker constraints are
         # active (those constraints depend on roll; boresight constraints do
-        # not). A limit of zero disables that keepout in pandoravisibility,
-        # so "an argument was passed" is a different question from "a
-        # constraint is active": st_sun_min=0 used to switch the sweep on
-        # for constraints that were never applied.
+        # not). Ask the visibility model rather than the arguments handed to
+        # this constructor: a limit of zero disables that keepout, and an
+        # unset one leaves pandoravisibility's default in place, which since
+        # v1.3.0 is an active keepout rather than nothing. Reading the
+        # arguments meant a default ScheduleProcessor applied tracker
+        # keepouts while never sweeping for a roll to satisfy them.
         # tests/test_keepout_plumb_through.py pins this to
         # Visibility._st_constraint_active so the two cannot drift apart.
-        self._roll_sweep_enabled: bool = any(
-            limit is not None and limit > 0
-            for limit in (
-                st_sun_min,
-                st_moon_min,
-                st_earthlimb_min,
-                st1_earthlimb_min,
-                st2_earthlimb_min,
+        # A duck-typed visibility object without the attribute falls back to
+        # the arguments, which is all such an object can be asked about.
+        self._roll_sweep_enabled: bool = bool(
+            getattr(
+                self.visibility,
+                "_st_constraint_active",
+                any(
+                    limit is not None and limit > 0
+                    for limit in (
+                        st_sun_min,
+                        st_moon_min,
+                        st_earthlimb_min,
+                        st1_earthlimb_min,
+                        st2_earthlimb_min,
+                    )
+                ),
             )
         )
 
@@ -1470,12 +1487,14 @@ class ScheduleProcessor:
     ) -> bool:
         """Whether the star-tracker keepout fails at ``time`` for this roll.
 
-        ``get_all_constraints`` cannot answer this. It takes no ``roll``
-        argument, so its ``star_tracker`` verdict is always evaluated at the
-        ``Visibility`` instance's own roll rather than the roll the
-        observation will actually fly, which is exactly the roll the sweep
-        chose to keep the trackers clear. ``get_star_tracker_breakdown``
-        does accept a roll, so it is used instead.
+        ``get_star_tracker_breakdown`` is used rather than the
+        ``star_tracker`` entry of ``get_all_constraints`` so the verdict is
+        evaluated at the roll the observation will actually fly, which is
+        the roll the sweep chose to keep the trackers clear.  Since
+        pandoravisibility v1.3.0 ``get_all_constraints`` also takes a
+        ``roll``, so the two could be folded into one call, but the
+        duck-typed visibility objects the scheduler accepts split the
+        tracker verdict out this way and nothing is gained by merging.
 
         A failure to evaluate the trackers is reported and answered "not a
         tracker failure", which leaves the caller treating the gap as
@@ -1515,7 +1534,9 @@ class ScheduleProcessor:
         identify which boresight constraint(s) failed, checks the star
         tracker separately at *roll* (see :meth:`_star_tracker_failed`),
         then compares the gap length against the matching tolerance
-        (``earthlimb_gap_tolerance`` or ``st_gap_tolerance``).
+        (``earthlimb_gap_tolerance`` or ``st_gap_tolerance``). Only the
+        boresight verdicts are read from the first call; the tracker one
+        depends on roll and is taken from the second.
 
         If both tolerances are zero (the default), every gap is
         intolerable and this returns False immediately.
@@ -3161,11 +3182,20 @@ class ScheduleProcessor:
                         else None
                     )
                     constraint_details = {}
+                    # The star tracker keepouts depend on roll, so every
+                    # verdict below is asked for the roll this observation
+                    # will actually fly. Left unset they would describe the
+                    # model's own attitude, and could contradict the
+                    # visibility result they are meant to explain.
+                    roll_quantity = (
+                        None if roll_used is None else roll_used * u.deg
+                    )
                     try:
                         fail_time = times[non_vis_indices[0]]
                         constraint_failures = model.get_all_constraints(
                             target_coord,
                             fail_time,
+                            roll=roll_quantity,
                         )
                         # Capture actual separations and limits
                         try:
@@ -3195,35 +3225,14 @@ class ScheduleProcessor:
                                     # time using the same geometry
                                     # as the constraint check.
                                     try:
-                                        obs_loc = (
-                                            vis_obj._get_observer_location(
-                                                fail_time
-                                            )
-                                        )
-                                        obs_gcrs = obs_loc.get_gcrs(
-                                            obstime=fail_time
-                                        )
-                                        obs_xyz = obs_gcrs.cartesian.xyz.to(
-                                            u.m
-                                        ).value
-                                        zenith_u = obs_xyz / np.linalg.norm(
-                                            obs_xyz
-                                        )
-                                        tgt_gcrs = target_coord.transform_to(
-                                            GCRS(obstime=fail_time)
-                                        )
-                                        tgt_u = tgt_gcrs.cartesian.xyz.value
-                                        tgt_u = tgt_u / np.linalg.norm(tgt_u)
-                                        sun_body = get_body(
-                                            "sun",
-                                            time=fail_time,
-                                            location=obs_loc,
-                                        )
-                                        sun_u = sun_body.cartesian.xyz.value
-                                        sun_u = sun_u / np.linalg.norm(sun_u)
-                                        obs_dist = np.linalg.norm(obs_xyz)
-                                        la_rad = np.arccos(
-                                            6371000.0 / obs_dist
+                                        # Read the geometry from the model
+                                        # rather than rebuilding it here.
+                                        pre = vis_obj._precompute(fail_time)
+                                        zenith_u = pre["zenith_unit"]
+                                        la_rad = pre["limb_angle_rad"]
+                                        sun_u = pre["body_units"]["sun"]
+                                        tgt_u = vis_obj._target_unit(
+                                            target_coord, fail_time
                                         )
                                         eff_deg = float(
                                             vis_obj._effective_earthlimb_min_deg(
@@ -3233,20 +3242,34 @@ class ScheduleProcessor:
                                                 limb_angle_rad=la_rad,
                                             )
                                         )
-                                        is_day = bool(
-                                            eff_deg
-                                            == (
-                                                vis_obj.earthlimb_day_min.to(
-                                                    u.deg
-                                                ).value
-                                                if vis_obj.earthlimb_day_min
-                                                is not None
-                                                else vis_obj.earthlimb_min.to(
-                                                    u.deg
-                                                ).value
+                                        # Say which branch produced it.
+                                        if getattr(
+                                            vis_obj,
+                                            "use_dynamic_earthlimb",
+                                            False,
+                                        ):
+                                            illum = float(
+                                                vis_obj._daynight_illumination_angle(
+                                                    tgt_u,
+                                                    zenith_u,
+                                                    sun_u,
+                                                    limb_angle_rad=la_rad,
+                                                )
                                             )
-                                        )
-                                        side = "day" if is_day else "night"
+                                            side = f"illum {illum:.1f} deg"
+                                        else:
+                                            side = (
+                                                "day"
+                                                if bool(
+                                                    vis_obj._daynight_is_sunlit(
+                                                        tgt_u,
+                                                        zenith_u,
+                                                        sun_u,
+                                                        limb_angle_rad=la_rad,
+                                                    )
+                                                )
+                                                else "night"
+                                            )
                                         limit_deg = eff_deg
                                         constraint_details[body] = {
                                             "passes": bool(
@@ -3295,35 +3318,38 @@ class ScheduleProcessor:
                                                 actual.to(u.deg).value
                                             ),
                                         }
-                            # Star tracker details
-                            if vis_obj._st_constraint_active:
-                                for tracker in [1, 2]:
-                                    try:
-                                        angles = (
-                                            vis_obj.get_star_tracker_angles(
-                                                target_coord,
-                                                fail_time,
-                                                tracker,
-                                            )
+                            # Star tracker details.
+                            if getattr(
+                                vis_obj, "_st_constraint_active", False
+                            ):
+                                try:
+                                    breakdown = (
+                                        vis_obj.get_star_tracker_breakdown(
+                                            target_coord,
+                                            fail_time,
+                                            roll=roll_quantity,
                                         )
-                                        checks = vis_obj._st_checks_for(
-                                            tracker
-                                        )
-                                        for name, limit, key in checks:
-                                            actual_val = angles[key]
-                                            ok = bool(actual_val >= limit)
-                                            label = f"st{tracker}_{name}"
-                                            constraint_details[label] = {
-                                                "passes": ok,
-                                                "required_deg": float(
-                                                    limit.to(u.deg).value
-                                                ),
-                                                "actual_deg": float(
-                                                    actual_val.to(u.deg).value
-                                                ),
-                                            }
-                                    except Exception:
-                                        pass
+                                    )
+                                    for row, passes in breakdown[
+                                        "passed"
+                                    ].items():
+                                        if row in ("ST1", "ST2", "combined"):
+                                            continue
+                                        tracker, name = row.split(" ", 1)
+                                        label = f"{tracker.lower()}_{name}"
+                                        constraint_details[label] = {
+                                            "passes": bool(passes),
+                                            "required_deg": float(
+                                                breakdown["limits"][row]
+                                                .to(u.deg)
+                                                .value
+                                            ),
+                                            "actual_deg": float(
+                                                breakdown["separations"][row]
+                                            ),
+                                        }
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                         failed = [
