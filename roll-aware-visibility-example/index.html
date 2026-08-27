@@ -1469,13 +1469,13 @@ Successfully parsed 10 visits with 313 total sequences
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell">
-<div class="jp-Cell jp-CodeCell jp-Notebook-cell" id="cell-id=2a83027c">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs">
+<div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=2a83027c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
 <div class="jp-InputArea jp-Cell-inputArea">
-<div class="jp-InputPrompt jp-InputArea-prompt">In [7]:</div><div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
+<div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div><div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="CodeMirror cm-s-jupyter">
 <div class="zeroclipboard-container">
 <clipboard-copy ,="" aria-label="Copy to Clipboard" for="cell-7">
@@ -1489,14 +1489,16 @@ Successfully parsed 10 visits with 313 total sequences
 </clipboard-copy>
 </div>
 <div class="highlight-ipynb hl-python"><pre><span></span><span class="c1"># --- Scheduler WITHOUT roll awareness (old behaviour) ---</span>
-<span class="c1"># Setting all st_* params to None disables the star-tracker constraints</span>
-<span class="c1"># and therefore the roll sweep (since get_visibility ignores roll).</span>
+<span class="c1"># Zero disables a star-tracker keepout, and with none of them active the</span>
+<span class="c1"># roll sweep does not run either (get_visibility then ignores roll).</span>
+<span class="c1"># None would NOT do this: an unset keepout defers to pandoravisibility,</span>
+<span class="c1"># which supplies real star-tracker angles as of v1.3.0.</span>
 
 <span class="n">scheduler_no_st</span> <span class="o">=</span> <span class="n">ScheduleProcessor</span><span class="p">(</span>
     <span class="n">tle1</span><span class="p">,</span> <span class="n">tle2</span><span class="p">,</span>
-    <span class="n">st_earthlimb_min</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-    <span class="n">st_sun_min</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-    <span class="n">st_moon_min</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+    <span class="n">st_earthlimb_min</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">st_sun_min</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">st_moon_min</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
 <span class="p">)</span>
 
 <span class="n">window_start</span> <span class="o">=</span> <span class="n">Time</span><span class="p">(</span><span class="s2">"2026-02-05T00:00:00Z"</span><span class="p">)</span>
@@ -1512,14 +1514,16 @@ Successfully parsed 10 visits with 313 total sequences
 <span class="n">scheduler_no_st</span><span class="o">.</span><span class="n">print_gap_summary</span><span class="p">()</span>
 </pre></div>
 <div class="clipboard-copy-txt" id="cell-7"># --- Scheduler WITHOUT roll awareness (old behaviour) ---
-# Setting all st_* params to None disables the star-tracker constraints
-# and therefore the roll sweep (since get_visibility ignores roll).
+# Zero disables a star-tracker keepout, and with none of them active the
+# roll sweep does not run either (get_visibility then ignores roll).
+# None would NOT do this: an unset keepout defers to pandoravisibility,
+# which supplies real star-tracker angles as of v1.3.0.
 
 scheduler_no_st = ScheduleProcessor(
     tle1, tle2,
-    st_earthlimb_min=None,
-    st_sun_min=None,
-    st_moon_min=None,
+    st_earthlimb_min=0.0,
+    st_sun_min=0.0,
+    st_moon_min=0.0,
 )
 
 window_start = Time("2026-02-05T00:00:00Z")
@@ -1533,43 +1537,6 @@ cal_no_st = scheduler_no_st.process_calendar(
 print("=== Without Star-Tracker Constraints ===")
 scheduler_no_st.print_timing_summary(cal_no_st)
 scheduler_no_st.print_gap_summary()</div>
-</div>
-</div>
-</div>
-</div>
-<div class="jp-Cell-outputWrapper">
-<div class="jp-Collapser jp-OutputCollapser jp-Cell-outputCollapser">
-</div>
-<div class="jp-OutputArea jp-Cell-outputArea">
-<div class="jp-OutputArea-child">
-<div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
-<div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>Warning: Some target names contain spaces.
-Warning: Some sequence timings are invalid.
-=== Without Star-Tracker Constraints ===
-✗ Found 1 timing issues:
-  - 1 sequences too short
-
-============================================================
-VISIBILITY GAP ANALYSIS SUMMARY
-============================================================
-
-ORIGINAL CALENDAR:
-  Total Sequences: 136
-  Total Duration: 70.8 hours
-  Duty Cycle: 97.9%
-
-PROCESSED CALENDAR:
-  Total Sequences: 136
-  Total Duration: 72.2 hours
-  Duty Cycle: 100.0%
-
-IMPROVEMENTS:
-  Duration Gained: 1.5 hours
-  Duty Cycle Improved: 2.1%
-  Sequences Modified: 0
-  Gaps Filled: 36/36
-</pre>
 </div>
 </div>
 </div>
