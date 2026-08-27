@@ -1,3 +1,7 @@
+## v1.3.1 (2026-08-19)
+
+- Fixed an issue when an observation is below the minimum observing time then it was not triggering an error.
+
 ## v1.3.0 (2026-08-19)
 - `Calendar_Status` in the delivered XML header now reflects whether the run failed, not whether a validator just marked something as not visible. 
 - Records the configuration the run applied on the XML header, so a delivered calendar says what it was built under instead of leaving it to be reconstructed from a log: the gap tolerances and their start buffers, `Max_Movement_Min`, `Roll_Step_Deg`, `Min_Power_Frac`, and every keepout in degrees including `Priority_0_Earthlimb_Min_Deg` (written only when in use) and `Use_Dynamic_Earthlimb`.
