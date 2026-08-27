@@ -1,4 +1,4 @@
-## v1.4.0 (2026-08-XX)
+## v1.4.0 (2026-08-27)
 - Picks up the `pandoravisibility` v1.3.0 defaults, which are Pandora's flight keepouts rather than a loose starting point.
   - Fixes the roll sweep switching itself off. `_roll_sweep_enabled` was derived from the constructor arguments, so a scheduler that inherited the library's star-tracker keepouts applied them while never sweeping for a roll that could satisfy them. It now reads `Visibility._st_constraint_active`, falling back to the arguments only for a duck-typed visibility object that has no such attribute.
   - Note for callers: `None` no longer means "switch this keepout off". It means "defer to `pandoravisibility`", which now supplies a real angle for every keepout including the star-tracker ones. Pass `0` to disable one. `docs/roll-aware-visibility-example.ipynb` built its no-star-tracker comparison arm with `st_sun_min=None` and friends, which now gives that arm the full tracker keepouts, so it passes zeros instead.
@@ -7,6 +7,9 @@
   - The per-tracker rows come from `get_star_tracker_breakdown`, which shares its geometry with that verdict, rather than being rebuilt from `get_star_tracker_angles`. The old path also measured the Earth limb from the geodetic horizon instead of the geocentric one the keepout is tested against.
   - The reported Earth-limb threshold reads the observer geometry from `Visibility._precompute` rather than rebuilding it.
   - The `side` label reports the Earth illumination angle while the dynamic wedge is in use. It was inferred by matching the effective threshold against `earthlimb_day_min`, which a continuous wedge never equals, so every step read as "night".
+
+## v1.3.1 (2026-08-19)
+- Fixed an issue when an observation is below the minimum observing time then it was not triggering an error.
 
 ## v1.3.0 (2026-08-19)
 - `Calendar_Status` in the delivered XML header now reflects whether the run failed, not whether a validator just marked something as not visible. 

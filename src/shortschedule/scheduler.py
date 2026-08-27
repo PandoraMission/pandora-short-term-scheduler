@@ -4434,6 +4434,10 @@ class ScheduleProcessor:
                     f"Extend stop_time to at least "
                     f"{(seq.start_time + min_duration).isot}."
                 )
+                # Observations that are too short need to be flagged as an
+                # error. They will not be deleted by the scheduler, but 
+                # likely need to be deleted before being passed to the MOC.
+                self._print(f"ERROR: {message}")
                 short_issue = {
                     "sequence_id": seq.id,
                     "target": seq.target,
