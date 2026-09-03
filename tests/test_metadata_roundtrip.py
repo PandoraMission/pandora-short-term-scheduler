@@ -1,5 +1,6 @@
 # Standard library
 import xml.etree.ElementTree as ET
+from importlib.metadata import version as importlib_version
 from pathlib import Path
 
 # Third-party
@@ -82,6 +83,12 @@ def test_processed_calendar_metadata_written(monkeypatch, tmp_path):
     assert "short_term_scheduler_version" in attrs
     assert attrs["short_term_scheduler_version"] == shortschedule.get_version()
 
+    # As must the pandora-visibility version the run was built against.
+    assert "pandora_visibility_version" in attrs
+    assert attrs["pandora_visibility_version"] == importlib_version(
+        "pandoravisibility"
+    )
+
 
 def test_version_written_with_default_metadata(tmp_path):
     """The version is stamped even for a calendar with no source metadata."""
@@ -112,3 +119,6 @@ def test_version_written_with_default_metadata(tmp_path):
     meta = next(c for c in root if c.tag.endswith("Meta"))
     attrs = {k.lower(): v for k, v in meta.attrib.items()}
     assert attrs["short_term_scheduler_version"] == shortschedule.get_version()
+    assert attrs["pandora_visibility_version"] == importlib_version(
+        "pandoravisibility"
+    )

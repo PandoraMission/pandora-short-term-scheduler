@@ -1,3 +1,6 @@
+## v1.4.1 (2026-09-03)
+- The delivered calendar header now records the `pandoravisibility` version the run was built against (`Pandora_Visibility_Version`), alongside the existing `Short_Term_Scheduler_Version`, since that package's keepouts drive every visibility decision in the calendar.
+
 ## v1.4.0 (2026-08-27)
 - Picks up the `pandoravisibility` v1.3.0 defaults, which are Pandora's flight keepouts rather than a loose starting point.
   - Fixes the roll sweep switching itself off. `_roll_sweep_enabled` was derived from the constructor arguments, so a scheduler that inherited the library's star-tracker keepouts applied them while never sweeping for a roll that could satisfy them. It now reads `Visibility._st_constraint_active`, falling back to the arguments only for a duck-typed visibility object that has no such attribute.

@@ -9,6 +9,8 @@ The writer preserves payload XML elements and copies them into the
 # Standard library
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 
 
 class XMLWriter:
@@ -155,6 +157,16 @@ class XMLWriter:
                 version = None
         if version:
             meta.set("Short_Term_Scheduler_Version", str(version))
+
+        # Include pandora-visibility version alongside it
+        vis_version = metadata.get("pandora_visibility_version")
+        if not vis_version:
+            try:
+                vis_version = package_version("pandoravisibility")
+            except PackageNotFoundError:
+                vis_version = None
+        if vis_version:
+            meta.set("Pandora_Visibility_Version", str(vis_version))
 
         # Standard metadata fields mapping
         meta_mapping = {
