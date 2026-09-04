@@ -109,8 +109,7 @@ def test_validate_sequence_timing_flags_short_sequence():
 
 
 def test_short_sequence_logged_as_error(tmp_path):
-    """A short observation reaches the error log and invalidates the run.
-    """
+    """A short observation reaches the error log and invalidates the run."""
     start = Time("2025-01-01T00:00:00", scale="utc")
     sequences = [
         ObservationSequence(
@@ -137,7 +136,7 @@ def test_short_sequence_logged_as_error(tmp_path):
     cal = ScienceCalendar(
         metadata={}, visits=[Visit(id="v1", sequences=sequences)]
     )
-    
+
     sched = ScheduleProcessor.__new__(ScheduleProcessor)
     sched.min_sequence_duration = TimeDelta(8 * 60, format="sec")
     sched._setup_run_logging(cal, verbose=False, log_path=tmp_path / "run.log")
