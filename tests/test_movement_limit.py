@@ -14,7 +14,7 @@ from astropy.time import Time, TimeDelta
 # First-party/Local
 from shortschedule.models import ObservationSequence, ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor
-from tests.doubles import BestRollFromVisibility
+from tests.doubles import answers_visibility
 
 T0 = Time("2026-01-01T00:00:00", scale="utc")
 
@@ -48,7 +48,7 @@ def _timing(calendar):
     }
 
 
-class _PatternVis(BestRollFromVisibility):
+class _PatternVis:
     """Visibility driven by a boolean array indexed in minutes from T0.
 
     Dark minutes are modelled as an Earth-limb failure with the star
@@ -66,6 +66,7 @@ class _PatternVis(BestRollFromVisibility):
             else False
         )
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         indices = np.rint((times - T0).sec / 60.0).astype(int)
         return np.array(
@@ -83,7 +84,7 @@ class _PatternVis(BestRollFromVisibility):
         return {"passed": {"combined": True}}
 
     def get_constraint(self, coord, body, times):
-        return self.get_visibility(coord, times)
+        return self.get_visibility(coord, times)["visible"]
 
 
 def _processor(visibility=None, limit=45, earthlimb_gap_tolerance=0):

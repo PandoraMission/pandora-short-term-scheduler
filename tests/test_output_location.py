@@ -19,7 +19,7 @@ from shortschedule.models import ScienceCalendar
 from shortschedule.parser import parse_science_calendar
 from shortschedule.scheduler import ScheduleProcessor
 from shortschedule.writer import XMLWriter
-from tests.doubles import BestRollFromVisibility
+from tests.doubles import answers_visibility
 
 SAMPLE = (
     Path(shortschedule.__file__).parent
@@ -98,9 +98,10 @@ def test_logs_and_diagnostics_land_beside_the_source(calendar_in, monkeypatch):
     assert not list(Path.cwd().iterdir()), "wrote into the working directory"
 
 
-class _AlwaysVisible(BestRollFromVisibility):
+class _AlwaysVisible:
     """Minimal visibility stand-in so the run does no ephemeris work."""
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             return np.ones(len(times), dtype=bool)

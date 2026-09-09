@@ -136,8 +136,10 @@ XMLWriter().write_calendar(processed, output_path='processed.xml')
 Notes for contributors
 ----------------------
 - Time handling: use `astropy.time.Time` and `TimeDelta` for all time arithmetic and return `Time` objects.
-- Visibility: `pandoravisibility.Visibility` is used for visibility arrays; tests that exercise visibility must
-  mock `Visibility.get_visibility(...)` to return deterministic boolean numpy arrays.
+- Visibility: `pandoravisibility.Visibility` (v2.0.0 or later) answers every visibility question. Its
+  `get_visibility` returns a dict whose `visible` entry is the boolean array, and runs the roll search when
+  given `optimize_roll=True`. Tests that exercise visibility script that array on a double and wrap it with
+  `tests/doubles.answers_visibility`, which builds the dict and accepts the roll-search options.
 - Metadata: the scheduler attaches processing metadata (TLE lines, `processed_datetime`, `gap_report`, and
   `calendar_status`) to the processed `ScienceCalendar`. If you change metadata keys, update
   `src/shortschedule/writer.py` and the metadata round-trip tests.
@@ -150,7 +152,8 @@ formatting. Consider adding a local pre-commit hook to run Black and isort.
 Further development and testing
 -------------------------------
 - Unit tests live in `tests/`. Add tests for new behavior and keep them deterministic (no network or time
-  variability). Use `monkeypatch` to stub `pandoravisibility.Visibility.get_visibility` in tests.
+  variability). Hand `ScheduleProcessor` a visibility double (see `tests/doubles.py`) rather than the real
+  `Visibility` unless the test is about the library's own geometry.
 - If you add a new public API or change critical interfaces (scheduler, models, writer, parser), add tests that
   exercise those changes and update the README or docs as needed.
 

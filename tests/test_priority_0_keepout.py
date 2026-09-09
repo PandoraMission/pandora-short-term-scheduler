@@ -131,9 +131,13 @@ class TestModelConstruction:
         coord = SkyCoord(15.0, -20.0, frame="icrs", unit="deg")
         times = T0 + np.arange(200) * u.min
 
-        nominal = np.asarray(scheduler.visibility.get_visibility(coord, times))
+        nominal = np.asarray(
+            scheduler.visibility.get_visibility(coord, times)["visible"]
+        )
         strict = np.asarray(
-            scheduler.priority_0_visibility.get_visibility(coord, times)
+            scheduler.priority_0_visibility.get_visibility(coord, times)[
+                "visible"
+            ]
         )
 
         assert strict.sum() < nominal.sum()
@@ -284,7 +288,7 @@ class TestEveryPassAgrees:
                     model.get_visibility(
                         SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg"),
                         seq.start_time + np.arange(n_mins) * u.min,
-                    )
+                    )["visible"]
                 )
             )
             assert visible.all(), (

@@ -2171,7 +2171,7 @@ class ScheduleVisualizer:
                 else:
                     # If we can't find a roll then just get the visibility without it.
                     vis = model.get_visibility(coord, times)
-                rows.append((visit.id, seq, np.asarray(vis), roll))
+                rows.append((visit.id, seq, np.asarray(vis["visible"]), roll))
 
         if not rows:
             ax.text(

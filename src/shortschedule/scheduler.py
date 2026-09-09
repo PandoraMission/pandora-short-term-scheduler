@@ -117,8 +117,10 @@ class ScheduleProcessor:
     - get_gap_report()
         Return a structured report summarizing visibility gaps and actions taken.
 
-    The class expects `Visibility(tle1, tle2)` to offer `get_visibility(coord, times)`
-    returning a boolean array of the same length as `times`.
+    The class expects `Visibility(tle1, tle2)` to offer
+    `get_visibility(coord, times, roll=...)` returning the `pandoravisibility`
+    v2.0.0 dict, whose `visible` entry is a boolean array of the same length
+    as `times`, and to run the roll search when given `optimize_roll=True`.
     """
 
     @staticmethod
@@ -969,7 +971,7 @@ class ScheduleProcessor:
                     target_coord,
                     times,
                     **({} if roll is None else {"roll": roll * u.deg}),
-                )
+                )["visible"]
             )
         )
         dark = np.flatnonzero(~visible)
@@ -2281,7 +2283,9 @@ class ScheduleProcessor:
         """
         model = self._visibility_for_priority(seq.priority)
         roll = None if seq.roll is None else seq.roll * u.deg
-        return np.asarray(model.get_visibility(target_coord, times, roll=roll))
+        return np.asarray(
+            model.get_visibility(target_coord, times, roll=roll)["visible"]
+        )
 
     def _find_nonvisible_gaps(
         self,
@@ -4412,7 +4416,7 @@ class ScheduleProcessor:
 
         vis = self._visibility_for_priority(
             target_seq.priority
-        ).get_visibility(target_coord, times)
+        ).get_visibility(target_coord, times)["visible"]
 
         self._print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):

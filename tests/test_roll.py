@@ -38,7 +38,7 @@ def _minutes(times):
 
 
 class _RecordingVisibility:
-    """A get_best_roll that records its calls.
+    """A get_visibility that records the roll searches asked of it.
 
     Answers ``roll_deg`` (a number, or a function of the call count) and
     marks visible whatever ``visible`` says of the times, everything by
@@ -50,8 +50,9 @@ class _RecordingVisibility:
         self.roll_deg = roll_deg
         self.visible = visible
 
-    def get_best_roll(self, coord, times, roll_step=None,
-                      min_power_frac=None, weights=None):
+    def get_visibility(self, coord, times, roll=None, *, optimize_roll=False,
+                       roll_step=None, min_power_frac=None, weights=None):
+        assert optimize_roll and roll is None, "the visit rule searches"
         self.calls.append(dict(coord=coord, times=times, roll_step=roll_step,
                                min_power_frac=min_power_frac,
                                weights=weights))
@@ -60,7 +61,8 @@ class _RecordingVisibility:
         roll = (self.roll_deg(len(self.calls)) if callable(self.roll_deg)
                 else self.roll_deg)
         return {
-            "roll_deg": roll,
+            # Echoed per timestep, as pandoravisibility v2.0.0 does.
+            "roll_deg": np.full(len(times), float(roll)),
             "n_visible": int(visible.sum()),
             "visible": visible,
             "boresight_visible": visible,

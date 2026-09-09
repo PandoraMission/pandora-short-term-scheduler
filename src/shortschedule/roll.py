@@ -2,9 +2,9 @@
 
 Every observation of a target within a visit flies the same roll; other
 targets in that visit, and the same target in other visits, are solved on
-their own. The search itself is ``pandoravisibility.Visibility.get_best_roll``.
-This module only decides which minutes to score, how much each counts, and
-which keepout model applies.
+their own. The search itself is ``pandoravisibility.Visibility.get_visibility``
+with ``optimize_roll=True``. This module only decides which minutes to score,
+how much each counts, and which keepout model applies.
 """
 
 # Standard library
@@ -38,7 +38,7 @@ def get_best_roll_per_visit(
     visit : Visit
         Its sequences get ``roll`` set in place, in degrees.
     visibility : pandoravisibility.Visibility
-        Model whose ``get_best_roll`` runs the search.
+        Model whose ``get_visibility(optimize_roll=True)`` runs the search.
     roll_step : float, optional
         Sweep resolution in degrees.
     min_power_frac : float, optional
@@ -55,10 +55,11 @@ def get_best_roll_per_visit(
     Returns
     -------
     dict
-        Target name to the ``get_best_roll`` result, with ``scheduled``
-        (which scored minutes were scheduled) and ``n_scheduled_visible``
-        added. Zero scheduled minutes visible means no roll can observe the
-        target and the fallback attitude was written.
+        Target name to the ``get_visibility`` result, with ``roll_deg``
+        reduced to the one roll held, and ``scheduled`` (which scored
+        minutes were scheduled) and ``n_scheduled_visible`` added. Zero
+        scheduled minutes visible means no roll can observe the target and
+        the fallback attitude was written.
     """
     by_target: Dict[str, list] = {}
     for seq in visit.sequences:
@@ -90,13 +91,17 @@ def get_best_roll_per_visit(
         coord = SkyCoord(
             sequences[0].ra, sequences[0].dec, unit="deg", frame="icrs"
         )
-        result = model.get_best_roll(
+        result = model.get_visibility(
             coord,
             times,
+            optimize_roll=True,
             roll_step=roll_step * u.deg,
             min_power_frac=min_power_frac,
             weights=weights,
         )
+        # The search holds one roll over every scored minute and echoes it
+        # per timestep; the visit rule wants that one number.
+        result["roll_deg"] = float(np.atleast_1d(result["roll_deg"])[0])
         result["scheduled"] = scheduled
         result["n_scheduled_visible"] = int(
             np.asarray(result["visible"])[scheduled].sum()

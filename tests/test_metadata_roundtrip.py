@@ -11,13 +11,14 @@ import shortschedule
 from shortschedule.parser import parse_science_calendar
 from shortschedule.scheduler import ScheduleProcessor
 from shortschedule.writer import XMLWriter
-from tests.doubles import BestRollFromVisibility
+from tests.doubles import answers_visibility
 
 
-class DummyVisibilityAllTrue(BestRollFromVisibility):
+class DummyVisibilityAllTrue:
     def __init__(self, l1, l2, **kwargs):
         pass
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             length = len(times)

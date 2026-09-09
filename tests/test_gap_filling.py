@@ -16,6 +16,7 @@ from astropy.time import Time, TimeDelta
 # First-party/Local
 from shortschedule.models import ObservationSequence, ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor, _find_false_blocks
+from tests.doubles import answers_visibility
 
 # ================================================================
 # Helpers
@@ -62,6 +63,7 @@ class DummyVisibilityAllTrue:
     def __init__(self, l1, l2, **kwargs):
         pass
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -85,6 +87,7 @@ class DummyVisibilityPattern:
             pattern if pattern is not None else np.array([], dtype=bool)
         )
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -218,6 +221,7 @@ class TestTrimNonVisibleTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 if abs(coord.ra.deg - 10.0) < 1.0:
@@ -287,6 +291,7 @@ class TestTrimNonVisibleTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 if abs(coord.ra.deg - 10.0) < 1.0:
@@ -350,6 +355,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 indices = np.rint((times - T0).sec / 60.0).astype(int)
                 return np.array(
@@ -472,6 +478,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -514,6 +521,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -554,6 +562,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -592,6 +601,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -631,6 +641,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -682,6 +693,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -743,6 +755,7 @@ class TestToleranceAtHeadsAndTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -780,6 +793,7 @@ class TestToleranceAtHeadsAndTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -824,6 +838,7 @@ class _STBreakdownVis:
         self.roll_masks = roll_masks or {}
         self.rolls_seen = []
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         return np.ones(len(times), dtype=bool)
 
@@ -1025,6 +1040,7 @@ class _EarthlimbPatternVis:
             dtype=bool,
         )
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         return self._lookup(times)
 

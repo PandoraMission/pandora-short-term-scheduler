@@ -26,6 +26,7 @@ from shortschedule.models import (
 )
 from shortschedule.overhead import OverheadTiming
 from shortschedule.scheduler import ScheduleProcessor
+from tests.doubles import answers_visibility
 
 # ================================================================
 # Helpers
@@ -109,6 +110,7 @@ def _make_vda_element(exposure_us, num_frames=None, frames_per_coadd=None):
 class _VisAllTrue:
     """Always visible."""
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -124,6 +126,7 @@ class _VisHalfFalse:
     ``get_all_constraints``.
     """
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -145,6 +148,7 @@ class _VisHalfFalse:
 class _VisAllFalse:
     """Never visible."""
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -168,6 +172,7 @@ class _VisRollFails:
     yet get_visibility (called with a roll) returns partially False.
     """
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -197,6 +202,7 @@ class _VisRecordsRoll:
         self.constraint_rolls = []
         self.breakdown_rolls = []
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
