@@ -74,9 +74,7 @@ def get_best_roll_per_visit(
         for seq in sequences:
             n_minutes = max(1, int(np.rint(seq.duration.sec / 60.0)))
             local = np.arange(-margin, n_minutes + margin)
-            offsets.append(
-                (seq.start_time - origin).to_value(u.min) + local
-            )
+            offsets.append((seq.start_time - origin).to_value(u.min) + local)
             scheduled.append((local >= 0) & (local < n_minutes))
         offsets = np.concatenate(offsets)
         scheduled = np.concatenate(scheduled)

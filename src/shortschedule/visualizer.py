@@ -2341,7 +2341,11 @@ class ScheduleVisualizer:
             handles=legend_items,
             loc="upper right",
             fontsize=16,
-            title="upper half: priority\nlower half: roll" if plot_rolls else None,
+            title=(
+                "upper half: priority\nlower half: roll"
+                if plot_rolls
+                else None
+            ),
             title_fontsize=16,
         )
 
@@ -3077,12 +3081,17 @@ class ScheduleVisualizer:
                 None
                 if getattr(visibility, name, None) is None
                 else float(
-                    getattr(getattr(visibility, name), "value",
-                            getattr(visibility, name))
+                    getattr(
+                        getattr(visibility, name),
+                        "value",
+                        getattr(visibility, name),
+                    )
                 )
             )
             for name in (
-                "earthlimb_min", "earthlimb_day_min", "earthlimb_night_min"
+                "earthlimb_min",
+                "earthlimb_day_min",
+                "earthlimb_night_min",
             )
         }
         strict = getattr(
@@ -3120,35 +3129,43 @@ class ScheduleVisualizer:
             lines = []
             if axis == "Boresight":
                 if getattr(visibility, "use_dynamic_earthlimb", False):
-                    lines.append((
-                        Visibility._dynamic_earthlimb_min_deg(illumination)
-                        + radius,
-                        illumination,
-                        "--",
-                        "DPC wedge: 110 / 82 / 75 deg from the Earth center",
-                    ))
+                    lines.append(
+                        (
+                            Visibility._dynamic_earthlimb_min_deg(illumination)
+                            + radius,
+                            illumination,
+                            "--",
+                            "DPC wedge: 110 / 82 / 75 deg from the Earth center",
+                        )
+                    )
                 elif limb["earthlimb_min"] is not None:
                     day = limb["earthlimb_day_min"] or limb["earthlimb_min"]
                     night = (
                         limb["earthlimb_night_min"] or limb["earthlimb_min"]
                     )
-                    lines.append((
-                        np.where(illumination < 90.0, day, night) + radius,
-                        illumination,
-                        "--",
-                        f"Earth limb: {day:.0f} deg day, {night:.0f} deg "
-                        "night above the limb"
-                        if day != night
-                        else f"Earth limb: {day:.0f} deg above the limb",
-                    ))
+                    lines.append(
+                        (
+                            np.where(illumination < 90.0, day, night) + radius,
+                            illumination,
+                            "--",
+                            (
+                                f"Earth limb: {day:.0f} deg day, {night:.0f} deg "
+                                "night above the limb"
+                                if day != night
+                                else f"Earth limb: {day:.0f} deg above the limb"
+                            ),
+                        )
+                    )
                 if strict is not None:
                     strict_deg = float(getattr(strict, "value", strict))
-                    lines.append((
-                        np.full_like(illumination, strict_deg + radius),
-                        illumination,
-                        ":",
-                        f"priority 0: {strict_deg:.0f} deg above the limb",
-                    ))
+                    lines.append(
+                        (
+                            np.full_like(illumination, strict_deg + radius),
+                            illumination,
+                            ":",
+                            f"priority 0: {strict_deg:.0f} deg above the limb",
+                        )
+                    )
             elif hasattr(visibility, "_st_earthlimb_min_for"):
                 tracker_limit = visibility._st_earthlimb_min_for(
                     1 if axis == "ST1" else 2
@@ -3157,17 +3174,24 @@ class ScheduleVisualizer:
                     getattr(tracker_limit, "value", tracker_limit)
                 )
                 if tracker_deg > 0:
-                    lines.append((
-                        np.full_like(illumination, tracker_deg + radius),
-                        illumination,
-                        "--",
-                        f"star tracker Earth limb: {tracker_deg:.0f} deg "
-                        "above the limb",
-                    ))
+                    lines.append(
+                        (
+                            np.full_like(illumination, tracker_deg + radius),
+                            illumination,
+                            "--",
+                            f"star tracker Earth limb: {tracker_deg:.0f} deg "
+                            "above the limb",
+                        )
+                    )
             for x, y, style, label in lines:
                 ax.plot(
-                    x, y, color="crimson", linestyle=style, linewidth=1.4,
-                    zorder=5, label=label,
+                    x,
+                    y,
+                    color="crimson",
+                    linestyle=style,
+                    linewidth=1.4,
+                    zorder=5,
+                    label=label,
                 )
             if lines:
                 ax.legend(loc="lower right", fontsize=7)

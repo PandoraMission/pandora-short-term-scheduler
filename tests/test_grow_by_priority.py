@@ -21,7 +21,9 @@ from tests.test_movement_limit import (
 
 
 def _seq(sid, target, start_min, duration_min, priority):
-    seq = _make_seq(sid, target, start_min=start_min, duration_min=duration_min)
+    seq = _make_seq(
+        sid, target, start_min=start_min, duration_min=duration_min
+    )
     seq.priority = priority
     return seq
 
@@ -94,9 +96,12 @@ def test_equal_priority_neighbor_is_a_hard_bound(capsys):
         proc, [_seq("s1", "A", 0, 20, 1), _seq("s2", "B", 20, 40, 1)]
     )
     assert (_minute(first.stop_time), _minute(second.start_time)) == (20, 20)
-    assert proc.gap_report["processing_summary"][
-        "minutes_taken_from_lower_priority"
-    ] == 0
+    assert (
+        proc.gap_report["processing_summary"][
+            "minutes_taken_from_lower_priority"
+        ]
+        == 0
+    )
     assert "GROWTH" not in capsys.readouterr().out
 
 

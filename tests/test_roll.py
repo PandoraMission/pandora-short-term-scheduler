@@ -18,8 +18,9 @@ from shortschedule.roll import get_best_roll_per_visit
 T0 = Time("2026-07-16T00:00:00", scale="utc")
 
 
-def _make_seq(sid, target, start_min, duration_min, ra=10.0, dec=20.0,
-              priority=1):
+def _make_seq(
+    sid, target, start_min, duration_min, ra=10.0, dec=20.0, priority=1
+):
     start = T0 + start_min * u.min
     return ObservationSequence(
         id=sid,
@@ -50,16 +51,37 @@ class _RecordingVisibility:
         self.roll_deg = roll_deg
         self.visible = visible
 
-    def get_visibility(self, coord, times, roll=None, *, optimize_roll=False,
-                       roll_step=None, min_power_frac=None, weights=None):
+    def get_visibility(
+        self,
+        coord,
+        times,
+        roll=None,
+        *,
+        optimize_roll=False,
+        roll_step=None,
+        min_power_frac=None,
+        weights=None
+    ):
         assert optimize_roll and roll is None, "the visit rule searches"
-        self.calls.append(dict(coord=coord, times=times, roll_step=roll_step,
-                               min_power_frac=min_power_frac,
-                               weights=weights))
-        visible = (np.ones(len(times), dtype=bool) if self.visible is None
-                   else self.visible(times))
-        roll = (self.roll_deg(len(self.calls)) if callable(self.roll_deg)
-                else self.roll_deg)
+        self.calls.append(
+            dict(
+                coord=coord,
+                times=times,
+                roll_step=roll_step,
+                min_power_frac=min_power_frac,
+                weights=weights,
+            )
+        )
+        visible = (
+            np.ones(len(times), dtype=bool)
+            if self.visible is None
+            else self.visible(times)
+        )
+        roll = (
+            self.roll_deg(len(self.calls))
+            if callable(self.roll_deg)
+            else self.roll_deg
+        )
         return {
             # Echoed per timestep, as pandoravisibility v2.0.0 does.
             "roll_deg": np.full(len(times), float(roll)),
@@ -73,8 +95,9 @@ class _RecordingVisibility:
 
 def test_same_target_in_a_visit_shares_one_roll():
     vis = _RecordingVisibility(roll_deg=30.0)
-    visit = Visit("v1", [_make_seq("s1", "A", 0, 10),
-                         _make_seq("s2", "A", 100, 10)])
+    visit = Visit(
+        "v1", [_make_seq("s1", "A", 0, 10), _make_seq("s2", "A", 100, 10)]
+    )
     result = get_best_roll_per_visit(visit, vis)
     assert len(vis.calls) == 1
     assert set(result) == {"A"}
@@ -83,9 +106,14 @@ def test_same_target_in_a_visit_shares_one_roll():
 
 def test_targets_in_a_visit_are_solved_independently():
     vis = _RecordingVisibility(roll_deg=lambda n: 10.0 * n)
-    visit = Visit("v1", [_make_seq("s1", "A", 0, 10, ra=10.0),
-                         _make_seq("s2", "B", 20, 10, ra=50.0),
-                         _make_seq("s3", "A", 40, 10, ra=10.0)])
+    visit = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, ra=10.0),
+            _make_seq("s2", "B", 20, 10, ra=50.0),
+            _make_seq("s3", "A", 40, 10, ra=10.0),
+        ],
+    )
     get_best_roll_per_visit(visit, vis)
     assert len(vis.calls) == 2
     assert [call["coord"].ra.deg for call in vis.calls] == [10.0, 50.0]
@@ -104,8 +132,9 @@ def test_same_target_in_another_visit_gets_its_own_roll():
 
 def test_scored_minutes_are_scheduled_plus_margin():
     vis = _RecordingVisibility()
-    visit = Visit("v1", [_make_seq("s1", "A", 0, 10),
-                         _make_seq("s2", "A", 60, 10)])
+    visit = Visit(
+        "v1", [_make_seq("s1", "A", 0, 10), _make_seq("s2", "A", 60, 10)]
+    )
     result = get_best_roll_per_visit(visit, vis, growth_margin_minutes=5)
     call = vis.calls[0]
     expected = np.concatenate([np.arange(-5, 15), np.arange(55, 75)])
@@ -116,8 +145,7 @@ def test_scored_minutes_are_scheduled_plus_margin():
         np.concatenate([np.arange(0, 10), np.arange(60, 70)]),
     )
     # 20 margin minutes, so a scheduled minute outweighs all of them.
-    np.testing.assert_array_equal(call["weights"],
-                                  np.where(scheduled, 21, 1))
+    np.testing.assert_array_equal(call["weights"], np.where(scheduled, 21, 1))
 
 
 def test_without_margin_every_minute_weighs_one():
@@ -153,13 +181,23 @@ def test_n_scheduled_visible_counts_scheduled_minutes_only():
 
 def test_priority_0_model_only_when_every_observation_is_priority_0():
     nominal, strict = _RecordingVisibility(), _RecordingVisibility()
-    all_zero = Visit("v1", [_make_seq("s1", "A", 0, 10, priority=0),
-                            _make_seq("s2", "A", 60, 10, priority=0)])
+    all_zero = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, priority=0),
+            _make_seq("s2", "A", 60, 10, priority=0),
+        ],
+    )
     get_best_roll_per_visit(all_zero, nominal, priority_0_visibility=strict)
     assert (len(nominal.calls), len(strict.calls)) == (0, 1)
 
     nominal, strict = _RecordingVisibility(), _RecordingVisibility()
-    mixed = Visit("v1", [_make_seq("s1", "A", 0, 10, priority=0),
-                         _make_seq("s2", "A", 60, 10, priority=1)])
+    mixed = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, priority=0),
+            _make_seq("s2", "A", 60, 10, priority=1),
+        ],
+    )
     get_best_roll_per_visit(mixed, nominal, priority_0_visibility=strict)
     assert (len(nominal.calls), len(strict.calls)) == (1, 0)

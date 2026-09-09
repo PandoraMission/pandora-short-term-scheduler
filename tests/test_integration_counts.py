@@ -1369,16 +1369,22 @@ def test_unchanged_integration_counts_are_not_logged(capsys):
     """A count recomputed to the value already on the observation is not
     a change, so the second pass over a calendar writes nothing."""
     sched = _sched()
-    vda = _make_vda_seq(duration_sec=1800, exposure_us=1_000_000, frames_per_coadd=1)
+    vda = _make_vda_seq(
+        duration_sec=1800, exposure_us=1_000_000, frames_per_coadd=1
+    )
     nirda = _make_nirda_seq(duration_sec=1800)
     sched._update_VDA_integrations(vda, vda.duration, overhead=_overhead())
-    sched._update_NIRDA_integrations(nirda, nirda.duration, overhead=_overhead())
+    sched._update_NIRDA_integrations(
+        nirda, nirda.duration, overhead=_overhead()
+    )
     first = capsys.readouterr().out
     assert "NumTotalFramesRequested '0' ->" in first
     assert "SC_Integrations '0' ->" in first
 
     sched._update_VDA_integrations(vda, vda.duration, overhead=_overhead())
-    sched._update_NIRDA_integrations(nirda, nirda.duration, overhead=_overhead())
+    sched._update_NIRDA_integrations(
+        nirda, nirda.duration, overhead=_overhead()
+    )
     second = capsys.readouterr().out
     assert "NumTotalFramesRequested" not in second
     assert "SC_Integrations" not in second

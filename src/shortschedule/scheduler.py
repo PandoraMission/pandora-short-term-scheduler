@@ -1744,7 +1744,9 @@ class ScheduleProcessor:
                 and neighbor_original is not None
                 and int(neighbor.priority or 0) < int(seq.priority or 0)
             )
-            reach = neighbor.stop_time if direction < 0 else neighbor.start_time
+            reach = (
+                neighbor.stop_time if direction < 0 else neighbor.start_time
+            )
             if takeable:
                 n_neighbor = int(np.rint(neighbor.duration.sec / 60.0))
                 min_minutes = int(
@@ -1778,7 +1780,10 @@ class ScheduleProcessor:
                 )
                 while take > 0:
                     landing = self._first_clean_start(
-                        [(name, buf, ok[take:]) for name, buf, ok in requirements],
+                        [
+                            (name, buf, ok[take:])
+                            for name, buf, ok in requirements
+                        ],
                         n_neighbor - take,
                     )
                     if (
@@ -1819,7 +1824,9 @@ class ScheduleProcessor:
         boundary = "start" if direction < 0 else "stop"
         if neighbor is None:
             self._note_timing(
-                visit_id, seq.id, f"{boundary}: grew {gained} min into idle time"
+                visit_id,
+                seq.id,
+                f"{boundary}: grew {gained} min into idle time",
             )
             return gained, 0
 
@@ -1850,7 +1857,9 @@ class ScheduleProcessor:
             )
         else:
             self._note_timing(
-                visit_id, seq.id, f"{boundary}: grew {gained} min into idle time"
+                visit_id,
+                seq.id,
+                f"{boundary}: grew {gained} min into idle time",
             )
 
         # Growth that reached a bound set by a lower-priority neighbor's

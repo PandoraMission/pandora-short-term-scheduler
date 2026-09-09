@@ -44,8 +44,17 @@ def answers_visibility(method):
     """
 
     @functools.wraps(method)
-    def get_visibility(self, coord, times, roll=None, *, optimize_roll=False,
-                       roll_step=None, min_power_frac=None, weights=None):
+    def get_visibility(
+        self,
+        coord,
+        times,
+        roll=None,
+        *,
+        optimize_roll=False,
+        roll_step=None,
+        min_power_frac=None,
+        weights=None
+    ):
         return visibility_result(
             method(self, coord, times, roll), roll, optimize_roll
         )
