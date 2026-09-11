@@ -14,7 +14,7 @@ numpy = "^2.1.0"
 pandas = "^2.2.3"
 appdirs = "^1.4.4"
 astropy = "^7.1.1"
-pandoravisibility = {git = "https://github.com/jrenaud90/pandora-visibility.git", branch = "consolidated-roll-calculations"}
+pandoravisibility = ">=2.0.0,<2.1.0"
 requests = "^2.32.5"
 tqdm = "^4.66.0"
 cmasher = "^1.9.2"
