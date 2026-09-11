@@ -131,9 +131,13 @@ class TestModelConstruction:
         coord = SkyCoord(15.0, -20.0, frame="icrs", unit="deg")
         times = T0 + np.arange(200) * u.min
 
-        nominal = np.asarray(scheduler.visibility.get_visibility(coord, times))
+        nominal = np.asarray(
+            scheduler.visibility.get_visibility(coord, times)["visible"]
+        )
         strict = np.asarray(
-            scheduler.priority_0_visibility.get_visibility(coord, times)
+            scheduler.priority_0_visibility.get_visibility(coord, times)[
+                "visible"
+            ]
         )
 
         assert strict.sum() < nominal.sum()
@@ -284,7 +288,7 @@ class TestEveryPassAgrees:
                     model.get_visibility(
                         SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg"),
                         seq.start_time + np.arange(n_mins) * u.min,
-                    )
+                    )["visible"]
                 )
             )
             assert visible.all(), (
@@ -297,7 +301,7 @@ class TestRollSweep:
     """A priority-0 target is scored under the keepouts it will fly."""
 
     def test_all_priority_0_target_uses_the_strict_model(self):
-        from shortschedule.roll import find_best_rolls_for_visit
+        from shortschedule.roll import get_best_roll_per_visit
 
         nominal = Visibility(TLE1, TLE2)
         strict = Visibility(TLE1, TLE2, earthlimb_min=70 * u.deg)
@@ -316,9 +320,9 @@ class TestRollSweep:
             id="v1",
             sequences=[_make_seq("s0", 0), _make_seq("s0b", 0, start_min=60)],
         )
-        find_best_rolls_for_visit(
-            _Recorder("nominal", nominal),
+        get_best_roll_per_visit(
             visit,
+            _Recorder("nominal", nominal),
             roll_step=90.0,
             priority_0_visibility=_Recorder("strict", strict),
         )
@@ -333,7 +337,7 @@ class TestRollSweep:
         would over-constrain its priority-1 observations, which are not
         subject to the stricter limb at all.
         """
-        from shortschedule.roll import find_best_rolls_for_visit
+        from shortschedule.roll import get_best_roll_per_visit
 
         nominal = Visibility(TLE1, TLE2)
         strict = Visibility(TLE1, TLE2, earthlimb_min=70 * u.deg)
@@ -351,9 +355,9 @@ class TestRollSweep:
         mixed = _make_seq("s1", 1, start_min=60)
         mixed.target = "TARGET_P0"  # same target, different priority
         visit = Visit(id="v1", sequences=[_make_seq("s0", 0), mixed])
-        find_best_rolls_for_visit(
-            _Recorder("nominal", nominal),
+        get_best_roll_per_visit(
             visit,
+            _Recorder("nominal", nominal),
             roll_step=90.0,
             priority_0_visibility=_Recorder("strict", strict),
         )

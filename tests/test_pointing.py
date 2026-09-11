@@ -337,7 +337,6 @@ class _StubScheduler:
 
     def __init__(self, visibility):
         self.visibility = visibility
-        self._computed_target_rolls = {}
 
     def get_gap_report(self):
         return {}
@@ -424,3 +423,41 @@ class TestPointingPlots:
 
         assert drawn == expected
         assert sum(drawn) == len(timeline.times)
+
+
+def test_illumination_follows_the_model_reference_point():
+    """The illumination angle is taken where the model measures it.
+
+    Sub-satellite (the library default) is target independent, so every
+    axis reads the same value; the grazed-limb mode differs per axis.
+    """
+    calendar = _make_calendar()
+    subsatellite = build_pointing_timeline(calendar, _visibility())
+    np.testing.assert_array_equal(
+        subsatellite.illumination["Boresight"],
+        subsatellite.illumination["ST1"],
+    )
+    assert 64.0 < subsatellite.earth_radius_deg < 68.0
+
+    limb = build_pointing_timeline(
+        calendar, Visibility(TLE1, TLE2, daynight_mode="limb")
+    )
+    assert not np.allclose(
+        limb.illumination["Boresight"], limb.illumination["ST1"]
+    )
+
+
+def test_visibility_gantt_paints_rolls_only_on_request():
+    """Off by default the bar is all priority and there is no colorbar."""
+    from shortschedule.scheduler import ScheduleProcessor
+
+    visualizer = ScheduleVisualizer(ScheduleProcessor(TLE1, TLE2))
+    calendar = _make_calendar()
+
+    plain = visualizer.plot_gantt_with_visibility(calendar)
+    assert len(plain.axes) == 1
+
+    with_rolls = visualizer.plot_gantt_with_visibility(
+        calendar, plot_rolls=True
+    )
+    assert len(with_rolls.axes) == 2

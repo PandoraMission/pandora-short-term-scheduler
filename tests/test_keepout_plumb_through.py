@@ -99,33 +99,3 @@ def test_priority_0_limb_is_not_overridden_by_library_day_night():
     assert strict.earthlimb_day_min is None
     assert strict.earthlimb_night_min is None
     assert strict.earthlimb_min.to_value("deg") == pytest.approx(54.0)
-
-
-@pytest.mark.parametrize(
-    "star_tracker_limits",
-    [
-        {},
-        {"st_sun_min": 0.0},
-        {"st_sun_min": 50.0},
-        {"st_moon_min": 20.0},
-        {"st_earthlimb_min": 30.0},
-        {"st1_earthlimb_min": 30.0},
-        {"st2_earthlimb_min": 30.0},
-        {"st_sun_min": 0.0, "st_moon_min": 0.0, "st_earthlimb_min": 0.0},
-        {"st_sun_min": 50.0, "st_moon_min": 20.0, "st_earthlimb_min": 30.0},
-    ],
-)
-def test_roll_sweep_gate_agrees_with_the_library(star_tracker_limits):
-    """The roll sweep runs exactly when tracker constraints are active.
-
-    ``_roll_sweep_enabled`` is derived from the constructor arguments so
-    that a duck-typed visibility object still works, which means it can
-    drift from what the library actually applies. This pins the two
-    together across the configurations the scheduler can produce. A limit
-    of zero disables that keepout, so passing one is not a reason to sweep.
-    """
-    processor = ScheduleProcessor(TLE1, TLE2, **star_tracker_limits)
-
-    assert processor._roll_sweep_enabled == bool(
-        processor.visibility._st_constraint_active
-    )

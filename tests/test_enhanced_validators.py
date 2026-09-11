@@ -26,6 +26,7 @@ from shortschedule.models import (
 )
 from shortschedule.overhead import OverheadTiming
 from shortschedule.scheduler import ScheduleProcessor
+from tests.doubles import answers_visibility
 
 # ================================================================
 # Helpers
@@ -83,8 +84,6 @@ def _bare_sched(**attrs):
     """
     sched = ScheduleProcessor.__new__(ScheduleProcessor)
     sched.min_sequence_duration = TimeDelta(120, format="sec")
-    sched._computed_target_rolls = {}
-    sched._roll_sweep_enabled = False
     for k, v in attrs.items():
         setattr(sched, k, v)
     return sched
@@ -111,6 +110,7 @@ def _make_vda_element(exposure_us, num_frames=None, frames_per_coadd=None):
 class _VisAllTrue:
     """Always visible."""
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -126,6 +126,7 @@ class _VisHalfFalse:
     ``get_all_constraints``.
     """
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -147,6 +148,7 @@ class _VisHalfFalse:
 class _VisAllFalse:
     """Never visible."""
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -170,6 +172,7 @@ class _VisRollFails:
     yet get_visibility (called with a roll) returns partially False.
     """
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -199,6 +202,7 @@ class _VisRecordsRoll:
         self.constraint_rolls = []
         self.breakdown_rolls = []
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -299,13 +303,9 @@ class TestValidateVisibility:
         for k in ("moon", "sun", "earthlimb", "star_tracker"):
             assert iss["constraint_failures"][k] is False
 
-    def test_roll_included_when_roll_sweep_enabled(self):
-        sched = _bare_sched(
-            visibility=_VisHalfFalse(),
-            _roll_sweep_enabled=True,
-            _computed_target_rolls={"v1": {"StarA": 42.0}},
-        )
-        cal = _cal([_seq("s1", "StarA", 0, 20)])
+    def test_roll_is_reported(self):
+        sched = _bare_sched(visibility=_VisHalfFalse())
+        cal = _cal([_seq("s1", "StarA", 0, 20, roll=42.0)])
         issues = sched.validate_visibility(cal, report_issues=False)
         assert len(issues) == 1
         assert issues[0]["roll"] == 42.0
@@ -314,12 +314,8 @@ class TestValidateVisibility:
         """When boresight constraints all pass but roll-aware
         visibility fails, the summary should indicate the star
         tracker constraint at the specific roll angle."""
-        sched = _bare_sched(
-            visibility=_VisRollFails(),
-            _roll_sweep_enabled=True,
-            _computed_target_rolls={"v1": {"StarA": 170.0}},
-        )
-        cal = _cal([_seq("s1", "StarA", 0, 20)])
+        sched = _bare_sched(visibility=_VisRollFails())
+        cal = _cal([_seq("s1", "StarA", 0, 20, roll=170.0)])
         issues = sched.validate_visibility(cal, report_issues=False)
         assert len(issues) == 1
         iss = issues[0]
@@ -336,12 +332,8 @@ class TestValidateVisibility:
         contradict the visibility result it is meant to explain.
         """
         model = _VisRecordsRoll()
-        sched = _bare_sched(
-            visibility=model,
-            _roll_sweep_enabled=True,
-            _computed_target_rolls={"v1": {"StarA": 137.0}},
-        )
-        cal = _cal([_seq("s1", "StarA", 0, 20)])
+        sched = _bare_sched(visibility=model)
+        cal = _cal([_seq("s1", "StarA", 0, 20, roll=137.0)])
         issues = sched.validate_visibility(cal, report_issues=False)
 
         assert len(issues) == 1
@@ -351,12 +343,8 @@ class TestValidateVisibility:
     def test_tracker_rows_come_from_the_breakdown(self):
         """Per-tracker detail shares the geometry of the verdict above it."""
         model = _VisRecordsRoll()
-        sched = _bare_sched(
-            visibility=model,
-            _roll_sweep_enabled=True,
-            _computed_target_rolls={"v1": {"StarA": 137.0}},
-        )
-        cal = _cal([_seq("s1", "StarA", 0, 20)])
+        sched = _bare_sched(visibility=model)
+        cal = _cal([_seq("s1", "StarA", 0, 20, roll=137.0)])
         details = sched.validate_visibility(cal, report_issues=False)[0][
             "constraint_details"
         ]

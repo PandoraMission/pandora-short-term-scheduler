@@ -25,6 +25,7 @@ from astropy.time import Time
 # First-party/Local
 from shortschedule.models import ObservationSequence, ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor
+from tests.doubles import answers_visibility
 
 # ================================================================
 # Helpers
@@ -63,7 +64,6 @@ def _bare_processor(earthlimb_gap_tolerance=0, st_gap_tolerance=0):
     """
     proc = ScheduleProcessor.__new__(ScheduleProcessor)
     proc.visibility = None
-    proc._computed_target_rolls = {}
     proc.earthlimb_gap_tolerance = earthlimb_gap_tolerance
     proc.st_gap_tolerance = st_gap_tolerance
     return proc
@@ -231,6 +231,7 @@ class _DummyVisibilityAllTrue:
     def __init__(self, l1, l2, **kwargs):
         pass
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -345,6 +346,7 @@ class _DarkGapVis:
     def _minutes(self, times):
         return np.rint((times - T0).sec / 60.0).astype(int)
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         return np.array(
             [i not in self.dark for i in np.atleast_1d(self._minutes(times))],

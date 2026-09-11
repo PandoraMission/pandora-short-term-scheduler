@@ -28,6 +28,7 @@ from pandoravisibility import Visibility
 from shortschedule.models import ObservationSequence, ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor
 from shortschedule.writer import XMLWriter
+from tests.doubles import answers_visibility
 
 TLE1 = "1 67395U 80229J   26196.69732639  .00000000  00000-0  37770-3 0    00"
 TLE2 = "2 67395  97.8056 194.9117 0006480  50.2285  39.6294 14.88117629    09"
@@ -42,6 +43,7 @@ class _AllVisible:
 
     _st_constraint_active = False
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         return np.ones(np.atleast_1d(times).size, dtype=bool)
 

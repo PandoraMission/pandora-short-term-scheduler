@@ -9,7 +9,7 @@ from `pandoravisibility` rather than being restated.
 """
 
 # Standard library
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 # Third-party
 import numpy as np
@@ -26,7 +26,7 @@ from .models import ScienceCalendar
 IDLE_LABEL = "IDLE"
 
 # The three pointing directions and the three bodies every plot works
-# over.  "earth" is the angle to the Earth *centre* (nadir), matching
+# over.  "earth" is the angle to the Earth *center* (nadir), matching
 # the reference pointing analysis, not the angle above the limb that
 # the keep-outs are tested against.
 AXES = ("Boresight", "ST1", "ST2")
@@ -187,9 +187,16 @@ class PointingTimeline:
         ``(axis, body) -> ndarray`` of degrees, for every axis in
         :data:`AXES` and body in :data:`BODIES`.
     illumination : dict
-        ``axis -> ndarray`` of degrees.  The solar zenith angle at the
-        Earth surface point that axis grazes: 0 is the brightest limb,
-        180 the fully dark limb.
+        ``axis -> ndarray`` of degrees.  The Earth illumination angle at
+        the reference point the visibility model uses
+        (``daynight_mode``): the solar zenith angle at the sub-satellite
+        point directly below the spacecraft, the library default and the
+        same for every axis, or at the limb point that axis grazes.  0 is
+        the sub-solar point, 90 the terminator, 180 the anti-solar point.
+    earth_radius_deg : float
+        Mean Earth angular radius over the span, in degrees, which turns
+        a keep-out given above the limb into an angle from the Earth
+        center.
     ra, dec : dict
         ``axis -> ndarray`` of degrees, where each axis points.
     segments : list of tuple
@@ -207,6 +214,7 @@ class PointingTimeline:
         labels: np.ndarray,
         angles: Dict[Tuple[str, str], np.ndarray],
         illumination: Dict[str, np.ndarray],
+        earth_radius_deg: float,
         ra: Dict[str, np.ndarray],
         dec: Dict[str, np.ndarray],
         unresolved: List[str],
@@ -215,6 +223,7 @@ class PointingTimeline:
         self.labels = labels
         self.angles = angles
         self.illumination = illumination
+        self.earth_radius_deg = earth_radius_deg
         self.ra = ra
         self.dec = dec
         self.unresolved = unresolved
@@ -244,7 +253,7 @@ def build_pointing_timeline(
     visibility: Any,
     step_minutes: int = 1,
     idle_euler_deg: Sequence[float] = DARK_IDLE_EULER_DEG,
-    computed_rolls: Optional[Dict[Any, Dict[str, float]]] = None,
+    progress: Optional[Callable] = None,
     verbose: bool = False,
 ) -> PointingTimeline:
     """Reconstruct where the spacecraft points for every minute of a week.
@@ -261,18 +270,20 @@ def build_pointing_timeline(
         Calendar to walk.  Its observations define both the minute grid
         and which minutes are not idle.
     visibility : pandoravisibility.Visibility
-        Supplies the orbit (``get_state``) and the star tracker
-        pointing.  Its ``roll`` attribute is set and restored around
-        each group of observations.
+        Supplies the orbit (``get_state``), the star tracker pointing and
+        the Earth reference point for the illumination angle
+        (``daynight_mode``).  Its ``roll`` attribute is set and restored
+        around each group of observations.
     step_minutes : int, optional
         Grid spacing.  One minute matches the scheduler's own
         granularity; coarser is much faster on long spans.
     idle_euler_deg : sequence of float, optional
         ``(roll, pitch, yaw)`` offset of the dark-idle command, in
         degrees.  Defaults to :data:`DARK_IDLE_EULER_DEG`.
-    computed_rolls : dict, optional
-        ``{visit_id: {target: roll_deg}}`` fallback for observations
-        that carry no roll of their own.
+    progress : callable, optional
+        ``progress(iterable, desc=..., total=...)`` returning the iterable
+        wrapped in a progress bar, such as ``ScheduleProcessor._progress``.
+        The per-group star tracker lookups are the slow part of a week.
     verbose : bool, optional
         Print progress and any groups that could not be resolved.
 
@@ -303,7 +314,6 @@ def build_pointing_timeline(
     # than one call per observation.
     labels = np.full(n_steps, IDLE_LABEL, dtype=object)
     groups: Dict[Tuple[float, float, Optional[float]], List[int]] = {}
-    rolls = computed_rolls or {}
     for visit_id, seq in observations:
         first = int(
             np.rint((seq.start_time - span_start).sec / 60.0 / step_minutes)
@@ -316,10 +326,7 @@ def build_pointing_timeline(
             continue
         labels[indices] = seq.target
 
-        roll = seq.roll
-        if roll is None:
-            roll = rolls.get(visit_id, {}).get(seq.target)
-        key = (round(float(seq.ra), 6), round(float(seq.dec), 6), roll)
+        key = (round(float(seq.ra), 6), round(float(seq.dec), 6), seq.roll)
         groups.setdefault(key, []).extend(indices)
 
     labels = np.array([str(label) for label in labels])
@@ -334,6 +341,7 @@ def build_pointing_timeline(
     nadir_unit = -zenith_unit
     with np.errstate(invalid="ignore"):
         limb_angle_rad = np.arccos(R_earth.to(u.m).value / observer_distance)
+    earth_radius_deg = float(np.nanmean(90.0 - np.degrees(limb_angle_rad)))
 
     sun_coord = get_body("sun", times, location=location)
     moon_coord = get_body("moon", times, location=location)
@@ -346,8 +354,13 @@ def build_pointing_timeline(
 
     # Observation minutes
     original_roll = getattr(visibility, "roll", None)
+    group_items = list(groups.items())
+    if progress is not None:
+        group_items = progress(
+            group_items, desc="Reconstructing pointing", total=len(group_items)
+        )
     try:
-        for (ra_deg, dec_deg, roll), indices in groups.items():
+        for (ra_deg, dec_deg, roll), indices in group_items:
             index = np.asarray(sorted(indices))
             group_times = times[index]
             coord = SkyCoord(ra_deg, dec_deg, frame="icrs", unit="deg")
@@ -408,10 +421,11 @@ def build_pointing_timeline(
         unit = pointing[axis]
         for body in BODIES:
             angles[(axis, body)] = _angle_between(unit, body_units[body])
-        # The library's own definition of the wedge's driving angle, so
-        # the scatter and the dynamic keep-out cannot disagree.  Vectors
-        # are (3, N), which is the layout it expects by default.
-        illumination[axis] = Visibility._get_earth_illumination_angle(
+        # The library's own illumination angle at its own reference point
+        # (sub-satellite by default, or the grazed limb point), so the
+        # scatter and the dynamic keep-out cannot disagree about either.
+        # Vectors are (3, N), which is the layout it expects by default.
+        illumination[axis] = visibility._daynight_illumination_angle(
             unit,
             zenith_unit,
             sun_unit,
@@ -435,6 +449,7 @@ def build_pointing_timeline(
         labels=labels,
         angles=angles,
         illumination=illumination,
+        earth_radius_deg=earth_radius_deg,
         ra=right_ascension,
         dec=declination,
         unresolved=unresolved,

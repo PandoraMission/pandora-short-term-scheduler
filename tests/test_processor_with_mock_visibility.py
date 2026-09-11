@@ -8,12 +8,14 @@ import numpy as np
 import shortschedule
 from shortschedule.parser import parse_science_calendar
 from shortschedule.scheduler import ScheduleProcessor
+from tests.doubles import answers_visibility
 
 
 class DummyVisibilityAllTrue:
     def __init__(self, l1, l2, **kwargs):
         pass
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         # times may be an astropy Time or array-like; return True for each entry
         try:

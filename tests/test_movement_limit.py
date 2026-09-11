@@ -14,6 +14,7 @@ from astropy.time import Time, TimeDelta
 # First-party/Local
 from shortschedule.models import ObservationSequence, ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor
+from tests.doubles import answers_visibility
 
 T0 = Time("2026-01-01T00:00:00", scale="utc")
 
@@ -65,6 +66,7 @@ class _PatternVis:
             else False
         )
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         indices = np.rint((times - T0).sec / 60.0).astype(int)
         return np.array(
@@ -81,14 +83,17 @@ class _PatternVis:
     def get_star_tracker_breakdown(self, coord, time, roll=None, pre=None):
         return {"passed": {"combined": True}}
 
+    def get_constraint(self, coord, body, times):
+        return self.get_visibility(coord, times)["visible"]
+
 
 def _processor(visibility=None, limit=45, earthlimb_gap_tolerance=0):
     proc = ScheduleProcessor.__new__(ScheduleProcessor)
     proc.visibility = visibility
     proc.max_movement_minutes = limit
+    proc.roll_step = 1.0
+    proc.min_power_frac = None
     proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-    proc._roll_sweep_enabled = False
-    proc._computed_target_rolls = {}
     # Zero tolerance means growth stops at the first dark minute, which
     # keeps most of these tests about bounds rather than about tolerances.
     proc.earthlimb_gap_tolerance = earthlimb_gap_tolerance

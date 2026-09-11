@@ -39,6 +39,10 @@ calendar_name = xml_file_path.stem
 window_start = Time("2026-08-17T00:00:00Z")
 window_duration_days = 7
 
+# Whether the visibility Gantt also paints the prescribed roll of each
+# observation on the lower half of its bar, with a colorbar.
+plot_rolls = False
+
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
 new_tle1 = (
@@ -79,6 +83,7 @@ scheduler = ScheduleProcessor(
     use_dynamic_earthlimb=True,  # Use dynamic DPC Earth Limb keepout flag.
     roll_step=1.0,  # roll search step size (deg)
     min_power_frac=0.68,  # min acceptable orbit-average power fraction
+    grow_by_priority=True,  # higher priorities grow first and may take time from lower-priority neighbors
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
     fix_bad_data=True,  # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------
@@ -203,7 +208,7 @@ print("\n\nCreating visualizations...")
 visualizer = ScheduleVisualizer(scheduler)
 output_dir = xml_file_path.parent
 
-# Gantt timeline coloured by observation priority; saved using the calendar name.
+# Gantt timeline colored by observation priority; saved using the calendar name.
 priority_fig = visualizer.plot_gantt_timeline_by_priority(
     processed_calendar,
     figsize=(12, 16),
@@ -218,6 +223,7 @@ vis_fig = visualizer.plot_gantt_with_visibility(
     figsize=(14, 18),
     show_sequence_labels=False,
     title="Schedule — Visibility Check",
+    plot_rolls=plot_rolls,
 )
 vis_fig.savefig(output_dir / f"{calendar_name}_visibility.png", dpi=300)
 
@@ -230,7 +236,7 @@ fig, ax = visualizer.plot_timeline(processed_calendar, show_visits=True)
 # These three reconstruct where the spacecraft points for every minute of the
 # week, using the dark-idle attitude between observations, and share one
 # timeline: the first call pays for it (~10 s on a week) and the rest are free.
-# Colours are per target throughout, with black reserved for idle.
+# Colors are per target throughout, with black reserved for idle.
 print("\n\nCreating pointing plots...")
 
 # Boresight right ascension and declination across the week.

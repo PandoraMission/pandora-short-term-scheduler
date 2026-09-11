@@ -1364,42 +1364,27 @@ class TestRenumberIds:
         assert all(len(v.id) == 4 for v in cal.visits)
         assert all(len(s.id) == 3 for v in cal.visits for s in v.sequences)
 
-    def test_roll_cache_follows_renumbered_visit_ids(self):
-        """The precomputed roll cache is re-keyed onto the new visit IDs.
 
-        validate_visibility() and the visibility Gantt plot both run after
-        renumbering and look rolls up by the *new* visit ID.  A cache left
-        on the old IDs silently hands back a neighbouring visit's roll,
-        which produces bogus keepout violations.
-        """
-        sched = ScheduleProcessor.__new__(ScheduleProcessor)
-        cal = ScienceCalendar(
-            metadata={},
-            visits=[
-                Visit(id="0002", sequences=[_seq_with_id("001")]),
-                Visit(id="0003", sequences=[_seq_with_id("001")]),
-                Visit(id="0004", sequences=[_seq_with_id("001")]),
-            ],
-        )
-        sched._computed_target_rolls = {
-            "0002": {"KELT-9b": 14.0},
-            "0003": {"KELT-9b": 16.0},
-            "0004": {"KELT-9b": 10.0},
-        }
+def test_unchanged_integration_counts_are_not_logged(capsys):
+    """A count recomputed to the value already on the observation is not
+    a change, so the second pass over a calendar writes nothing."""
+    sched = _sched()
+    vda = _make_vda_seq(
+        duration_sec=1800, exposure_us=1_000_000, frames_per_coadd=1
+    )
+    nirda = _make_nirda_seq(duration_sec=1800)
+    sched._update_VDA_integrations(vda, vda.duration, overhead=_overhead())
+    sched._update_NIRDA_integrations(
+        nirda, nirda.duration, overhead=_overhead()
+    )
+    first = capsys.readouterr().out
+    assert "NumTotalFramesRequested '0' ->" in first
+    assert "SC_Integrations '0' ->" in first
 
-        sched._renumber_ids(cal)
-
-        assert [v.id for v in cal.visits] == ["0001", "0002", "0003"]
-        # Each visit still resolves to the roll that was computed for it.
-        assert sched._computed_target_rolls == {
-            "0001": {"KELT-9b": 14.0},
-            "0002": {"KELT-9b": 16.0},
-            "0003": {"KELT-9b": 10.0},
-        }
-
-    def test_renumber_without_roll_cache_is_safe(self):
-        """Renumbering works when no rolls were ever precomputed."""
-        sched = ScheduleProcessor.__new__(ScheduleProcessor)
-        cal = self._cal()
-        sched._renumber_ids(cal)  # no _computed_target_rolls attribute at all
-        assert [v.id for v in cal.visits] == ["0001", "0002", "0003"]
+    sched._update_VDA_integrations(vda, vda.duration, overhead=_overhead())
+    sched._update_NIRDA_integrations(
+        nirda, nirda.duration, overhead=_overhead()
+    )
+    second = capsys.readouterr().out
+    assert "NumTotalFramesRequested" not in second
+    assert "SC_Integrations" not in second

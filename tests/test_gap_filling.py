@@ -16,6 +16,7 @@ from astropy.time import Time, TimeDelta
 # First-party/Local
 from shortschedule.models import ObservationSequence, ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor, _find_false_blocks
+from tests.doubles import answers_visibility
 
 # ================================================================
 # Helpers
@@ -62,6 +63,7 @@ class DummyVisibilityAllTrue:
     def __init__(self, l1, l2, **kwargs):
         pass
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -85,6 +87,7 @@ class DummyVisibilityPattern:
             pattern if pattern is not None else np.array([], dtype=bool)
         )
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         try:
             n = len(times)
@@ -169,8 +172,6 @@ class TestTrimNonVisibleTails:
     def _make_processor(self, visibility_cls):
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
         proc.visibility = visibility_cls
         proc.earthlimb_gap_tolerance = 0
         proc.st_gap_tolerance = 0
@@ -220,6 +221,7 @@ class TestTrimNonVisibleTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 if abs(coord.ra.deg - 10.0) < 1.0:
@@ -289,6 +291,7 @@ class TestTrimNonVisibleTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 if abs(coord.ra.deg - 10.0) < 1.0:
@@ -329,8 +332,6 @@ class TestTrimToLongestVisibleBlock:
     def _make_processor(self, visibility_cls):
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
         proc.visibility = visibility_cls
         proc.earthlimb_gap_tolerance = 0
         proc.st_gap_tolerance = 0
@@ -354,6 +355,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 indices = np.rint((times - T0).sec / 60.0).astype(int)
                 return np.array(
@@ -476,6 +478,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -518,6 +521,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -558,6 +562,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -596,6 +601,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -635,6 +641,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -686,6 +693,7 @@ class TestTrimToLongestVisibleBlock:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -728,8 +736,6 @@ class TestToleranceAtHeadsAndTails:
     def _make_processor(self, visibility_cls):
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
         proc.visibility = visibility_cls
         proc.earthlimb_gap_tolerance = 0
         proc.st_gap_tolerance = 0
@@ -749,6 +755,7 @@ class TestToleranceAtHeadsAndTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -786,6 +793,7 @@ class TestToleranceAtHeadsAndTails:
             def __init__(self, *a, **kw):
                 pass
 
+            @answers_visibility
             def get_visibility(self, coord, times, roll=None):
                 n = len(times)
                 result = np.ones(n, dtype=bool)
@@ -830,6 +838,7 @@ class _STBreakdownVis:
         self.roll_masks = roll_masks or {}
         self.rolls_seen = []
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         return np.ones(len(times), dtype=bool)
 
@@ -864,8 +873,6 @@ class TestSTStartBuffer:
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.visibility = visibility
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
         proc.st_gap_tolerance_start_buffer = buffer_minutes
         # These tests are about the star-tracker buffer specifically, so
         # the Earth-limb one is left off.
@@ -996,9 +1003,8 @@ class TestSTStartBuffer:
             roll_masks={137: np.zeros(60, dtype=bool)},
         )
         proc = self._make_processor(vis)
-        proc._roll_sweep_enabled = True
-        proc._computed_target_rolls = {"v1": {"T": 137.0}}
         seq = _make_seq("s1", "T", start_min=0, duration_min=40)
+        seq.roll = 137.0
         cal = _make_calendar([seq])
 
         proc._enforce_start_buffers(cal)
@@ -1034,6 +1040,7 @@ class _EarthlimbPatternVis:
             dtype=bool,
         )
 
+    @answers_visibility
     def get_visibility(self, coord, times, roll=None):
         return self._lookup(times)
 
@@ -1049,8 +1056,6 @@ class TestEarthlimbStartBuffer:
         proc = ScheduleProcessor.__new__(ScheduleProcessor)
         proc.visibility = visibility
         proc.min_sequence_duration = TimeDelta(8 * 60 * u.s)
-        proc._roll_sweep_enabled = False
-        proc._computed_target_rolls = {}
         proc.st_gap_tolerance_start_buffer = 0
         proc.earthlimb_gap_tolerance_start_buffer = buffer_minutes
         return proc

@@ -1,603 +1,203 @@
-"""Unit tests for the roll module.
+"""Tests for get_best_roll_per_visit.
 
-Tests cover:
-- Basic roll angle calculation
-- Vector conversion utilities
-- Visit-level roll calculation
-- Calendar-level roll application
-- Edge cases and error handling
+The search is pandoravisibility's; what is tested here is the visit rule
+built around it: one call per target per visit, which minutes are scored
+and how much each counts, which keepout model applies, and that the roll
+lands on every sequence of the target.
 """
-
-# Standard library
-from unittest.mock import MagicMock
 
 # Third-party
 import numpy as np
-import pytest
 from astropy import units as u
 from astropy.time import Time
 
 # First-party/Local
 from shortschedule.models import ObservationSequence, Visit
-from shortschedule.roll import (
-    apply_rolls_to_calendar,
-    apply_rolls_to_visit,
-    calculate_roll,
-    calculate_visit_rolls,
-    find_best_roll_for_target,
-    find_best_rolls_for_visit,
-    normalize,
-    radec_to_vector,
-    vector_to_radec,
-)
+from shortschedule.roll import get_best_roll_per_visit
 
-T0 = Time("2026-01-01T00:00:00", scale="utc")
+T0 = Time("2026-07-16T00:00:00", scale="utc")
 
 
-def _make_seq(sid, target, start_min, duration_min, ra=10.0, dec=20.0):
+def _make_seq(
+    sid, target, start_min, duration_min, ra=10.0, dec=20.0, priority=1
+):
     start = T0 + start_min * u.min
-    stop = start + duration_min * u.min
     return ObservationSequence(
         id=sid,
         target=target,
-        priority=1,
+        priority=priority,
         start_time=start,
-        stop_time=stop,
+        stop_time=start + duration_min * u.min,
         ra=ra,
         dec=dec,
         payload_params={},
     )
 
 
-class TestRadecToVector:
-    """Tests for radec_to_vector conversion."""
+def _minutes(times):
+    return np.rint((times - T0).to_value(u.min)).astype(int)
 
-    def test_ra0_dec0(self):
-        """RA=0, Dec=0 should point along +X axis."""
-        vec = radec_to_vector(0, 0)
-        expected = np.array([1.0, 0.0, 0.0])
-        np.testing.assert_array_almost_equal(vec, expected)
 
-    def test_ra90_dec0(self):
-        """RA=90, Dec=0 should point along +Y axis."""
-        vec = radec_to_vector(90, 0)
-        expected = np.array([0.0, 1.0, 0.0])
-        np.testing.assert_array_almost_equal(vec, expected)
+class _RecordingVisibility:
+    """A get_visibility that records the roll searches asked of it.
 
-    def test_ra0_dec90(self):
-        """RA=0, Dec=90 should point along +Z axis (north pole)."""
-        vec = radec_to_vector(0, 90)
-        expected = np.array([0.0, 0.0, 1.0])
-        np.testing.assert_array_almost_equal(vec, expected)
+    Answers ``roll_deg`` (a number, or a function of the call count) and
+    marks visible whatever ``visible`` says of the times, everything by
+    default.
+    """
 
-    def test_ra0_dec_minus90(self):
-        """RA=0, Dec=-90 should point along -Z axis (south pole)."""
-        vec = radec_to_vector(0, -90)
-        expected = np.array([0.0, 0.0, -1.0])
-        np.testing.assert_array_almost_equal(vec, expected)
+    def __init__(self, roll_deg=30.0, visible=None):
+        self.calls = []
+        self.roll_deg = roll_deg
+        self.visible = visible
 
-    def test_unit_vector(self):
-        """Output should always be a unit vector."""
-        for ra in [0, 45, 90, 180, 270]:
-            for dec in [-60, -30, 0, 30, 60]:
-                vec = radec_to_vector(ra, dec)
-                assert np.isclose(np.linalg.norm(vec), 1.0)
-
-    def test_roundtrip_radec_vector_radec(self):
-        """Converting RA/Dec to vector and back should preserve values."""
-        test_cases = [
-            (0.0, 0.0),
-            (90.0, 0.0),
-            (180.0, 0.0),
-            (270.0, 0.0),
-            (45.0, 45.0),
-            (123.456, -30.0),
-            (359.9, 89.0),
-            (0.0, -89.0),
-        ]
-        for ra, dec in test_cases:
-            vec = radec_to_vector(ra, dec)
-            ra_out, dec_out = vector_to_radec(vec)
-            np.testing.assert_almost_equal(
-                ra_out,
-                ra,
-                decimal=10,
-                err_msg=f"RA roundtrip failed for ({ra}, {dec})",
+    def get_visibility(
+        self,
+        coord,
+        times,
+        roll=None,
+        *,
+        optimize_roll=False,
+        roll_step=None,
+        min_power_frac=None,
+        weights=None
+    ):
+        assert optimize_roll and roll is None, "the visit rule searches"
+        self.calls.append(
+            dict(
+                coord=coord,
+                times=times,
+                roll_step=roll_step,
+                min_power_frac=min_power_frac,
+                weights=weights,
             )
-            np.testing.assert_almost_equal(
-                dec_out,
-                dec,
-                decimal=10,
-                err_msg=f"Dec roundtrip failed for ({ra}, {dec})",
-            )
-
-
-class TestNormalize:
-    """Tests for the normalize helper function."""
-
-    def test_normalize_simple(self):
-        """Normalize a simple vector."""
-        vec = np.array([3.0, 4.0, 0.0])
-        result = normalize(vec)
-        expected = np.array([0.6, 0.8, 0.0])
-        np.testing.assert_array_almost_equal(result, expected)
-
-    def test_normalize_unit_vector(self):
-        """Normalizing a unit vector returns the same vector."""
-        vec = np.array([1.0, 0.0, 0.0])
-        result = normalize(vec)
-        np.testing.assert_array_almost_equal(result, vec)
-
-    def test_normalize_zero_vector_raises(self):
-        """Normalizing a zero vector should raise ValueError."""
-        vec = np.array([0.0, 0.0, 0.0])
-        with pytest.raises(ValueError, match="Zero-length vector"):
-            normalize(vec)
-
-
-class TestCalculateRoll:
-    """Tests for the main roll calculation function."""
-
-    def test_roll_returns_float(self):
-        """Roll calculation should return a float."""
-        obs_time = Time("2026-06-15T12:00:00")
-        roll = calculate_roll(ra=180.0, dec=30.0, obs_time=obs_time)
-        assert isinstance(roll, float)
-
-    def test_roll_in_valid_range(self):
-        """Roll angle should be in (-180, 180] range."""
-        obs_time = Time("2026-06-15T12:00:00")
-        for ra in [0, 90, 180, 270]:
-            for dec in [-45, 0, 45]:
-                roll = calculate_roll(ra=ra, dec=dec, obs_time=obs_time)
-                assert (
-                    -180.0 < roll <= 180.0
-                ), f"Roll {roll} out of range for RA={ra}, Dec={dec}"
-
-    def test_roll_consistency_same_target(self):
-        """Same target at same time should give same roll."""
-        obs_time = Time("2026-06-15T12:00:00")
-        roll1 = calculate_roll(ra=120.0, dec=25.0, obs_time=obs_time)
-        roll2 = calculate_roll(ra=120.0, dec=25.0, obs_time=obs_time)
-        assert roll1 == roll2
-
-    def test_roll_changes_with_time(self):
-        """Roll should change as Sun position changes over time."""
-        time1 = Time("2026-06-15T12:00:00")
-        time2 = Time("2026-09-15T12:00:00")  # 3 months later
-
-        roll1 = calculate_roll(ra=180.0, dec=0.0, obs_time=time1)
-        roll2 = calculate_roll(ra=180.0, dec=0.0, obs_time=time2)
-
-        # Sun has moved ~90 degrees in 3 months, so rolls should differ
-        assert roll1 != roll2
-
-    def test_roll_handles_high_declination(self):
-        """Roll calculation should handle high declination targets."""
-        obs_time = Time("2026-06-15T12:00:00")
-        # High declination but not exactly at pole
-        roll = calculate_roll(ra=0.0, dec=85.0, obs_time=obs_time)
-        assert 0.0 <= roll < 360.0
-
-
-class TestCalculateVisitRolls:
-    """Tests for visit-level roll calculations."""
-
-    def _make_mock_sequence(self, target, ra, dec, start_time):
-        """Create a mock observation sequence."""
-        seq = MagicMock()
-        seq.target = target
-        seq.ra = ra
-        seq.dec = dec
-        seq.start_time = start_time
-        return seq
-
-    def _make_mock_visit(self, sequences):
-        """Create a mock visit with given sequences."""
-        visit = MagicMock()
-        visit.sequences = sequences
-        return visit
-
-    def test_single_target_visit(self):
-        """Visit with single target should return one roll value."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq = self._make_mock_sequence("HD_123456", 120.0, 30.0, start_time)
-        visit = self._make_mock_visit([seq])
-
-        rolls = calculate_visit_rolls(visit)
-
-        assert len(rolls) == 1
-        assert "HD_123456" in rolls
-        assert isinstance(rolls["HD_123456"], float)
-
-    def test_multiple_targets_visit(self):
-        """Visit with multiple targets should return roll for each."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq1 = self._make_mock_sequence("Target_A", 100.0, 20.0, start_time)
-        seq2 = self._make_mock_sequence("Target_B", 200.0, -10.0, start_time)
-        visit = self._make_mock_visit([seq1, seq2])
-
-        rolls = calculate_visit_rolls(visit)
-
-        assert len(rolls) == 2
-        assert "Target_A" in rolls
-        assert "Target_B" in rolls
-        # Different targets should generally have different rolls
-        assert rolls["Target_A"] != rolls["Target_B"]
-
-    def test_same_target_multiple_sequences(self):
-        """Multiple sequences of same target should share one roll."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq1 = self._make_mock_sequence("HD_123456", 120.0, 30.0, start_time)
-        seq2 = self._make_mock_sequence(
-            "HD_123456", 120.0, 30.0, Time("2026-06-15T14:00:00")
         )
-        visit = self._make_mock_visit([seq1, seq2])
-
-        rolls = calculate_visit_rolls(visit)
-
-        assert len(rolls) == 1
-        assert "HD_123456" in rolls
-
-    def test_reference_time_override(self):
-        """Providing reference_time should use that for all calculations."""
-        start_time1 = Time("2026-06-15T12:00:00")
-        start_time2 = Time("2026-06-15T18:00:00")
-        reference = Time("2026-01-01T00:00:00")
-
-        seq1 = self._make_mock_sequence("Target_A", 100.0, 20.0, start_time1)
-        seq2 = self._make_mock_sequence("Target_B", 200.0, -10.0, start_time2)
-        visit = self._make_mock_visit([seq1, seq2])
-
-        rolls_with_ref = calculate_visit_rolls(visit, reference_time=reference)
-        rolls_without_ref = calculate_visit_rolls(visit)
-
-        # Rolls should differ when using different reference times
-        assert rolls_with_ref["Target_A"] != rolls_without_ref["Target_A"]
-
-
-class TestApplyRollsToVisit:
-    """Tests for applying rolls to visit sequences."""
-
-    def _make_mock_sequence(self, target, ra, dec, start_time):
-        """Create a mock observation sequence."""
-        seq = MagicMock()
-        seq.target = target
-        seq.ra = ra
-        seq.dec = dec
-        seq.start_time = start_time
-        seq.roll = None  # Will be set by apply_rolls_to_visit
-        return seq
-
-    def _make_mock_visit(self, sequences):
-        """Create a mock visit with given sequences."""
-        visit = MagicMock()
-        visit.sequences = sequences
-        return visit
-
-    def test_apply_rolls_sets_roll_attribute(self):
-        """Applying rolls should set roll attribute on sequences."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq = self._make_mock_sequence("HD_123456", 120.0, 30.0, start_time)
-        visit = self._make_mock_visit([seq])
-
-        apply_rolls_to_visit(visit)
-
-        assert seq.roll is not None
-        assert isinstance(seq.roll, float)
-
-    def test_apply_precomputed_rolls(self):
-        """Providing target_rolls dict should use those values."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq = self._make_mock_sequence("HD_123456", 120.0, 30.0, start_time)
-        visit = self._make_mock_visit([seq])
-
-        precomputed = {"HD_123456": 42.5}
-        apply_rolls_to_visit(visit, target_rolls=precomputed)
-
-        assert seq.roll == 42.5
-
-    def test_same_target_gets_same_roll(self):
-        """All sequences of same target should get the same roll."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq1 = self._make_mock_sequence("HD_123456", 120.0, 30.0, start_time)
-        seq2 = self._make_mock_sequence(
-            "HD_123456", 120.0, 30.0, Time("2026-06-15T14:00:00")
+        visible = (
+            np.ones(len(times), dtype=bool)
+            if self.visible is None
+            else self.visible(times)
         )
-        visit = self._make_mock_visit([seq1, seq2])
-
-        apply_rolls_to_visit(visit)
-
-        assert seq1.roll == seq2.roll
-
-
-class TestApplyRollsToCalendar:
-    """Tests for calendar-level roll application."""
-
-    def _make_mock_sequence(self, target, ra, dec, start_time):
-        """Create a mock observation sequence."""
-        seq = MagicMock()
-        seq.target = target
-        seq.ra = ra
-        seq.dec = dec
-        seq.start_time = start_time
-        seq.roll = None
-        return seq
-
-    def _make_mock_visit(self, visit_id, sequences):
-        """Create a mock visit with given sequences."""
-        visit = MagicMock()
-        visit.id = visit_id
-        visit.sequences = sequences
-        return visit
-
-    def _make_mock_calendar(self, visits):
-        """Create a mock calendar with given visits."""
-        calendar = MagicMock()
-        calendar.visits = visits
-        return calendar
-
-    def test_apply_rolls_to_all_visits(self):
-        """Rolls should be applied to all visits in calendar."""
-        start_time = Time("2026-06-15T12:00:00")
-
-        seq1 = self._make_mock_sequence("Target_A", 100.0, 20.0, start_time)
-        seq2 = self._make_mock_sequence("Target_B", 200.0, -10.0, start_time)
-
-        visit1 = self._make_mock_visit("001", [seq1])
-        visit2 = self._make_mock_visit("002", [seq2])
-
-        calendar = self._make_mock_calendar([visit1, visit2])
-
-        apply_rolls_to_calendar(calendar)
-
-        assert seq1.roll is not None
-        assert seq2.roll is not None
-
-    def test_verbose_mode(self, capsys):
-        """Verbose mode should print progress information."""
-        start_time = Time("2026-06-15T12:00:00")
-        seq = self._make_mock_sequence("Target_A", 100.0, 20.0, start_time)
-        visit = self._make_mock_visit("001", [seq])
-        calendar = self._make_mock_calendar([visit])
-
-        apply_rolls_to_calendar(calendar, verbose=True)
-
-        captured = capsys.readouterr()
-        assert "visit 001" in captured.out
-        assert "Target_A" in captured.out
-
-
-class TestRollPhysicalReasonableness:
-    """Tests to verify roll calculations are physically reasonable."""
-
-    def test_roll_reasonable_pointing_north_pole(self):
-        """Roll should be well-defined when pointing near celestial north pole."""
-        obs_time = Time("2026-06-01T12:00:00", scale="utc")
-        # Point near north celestial pole (Dec = 89.9)
-        roll = calculate_roll(ra=0.0, dec=89.9, obs_time=obs_time)
-        # Roll should still be a valid number in (-180, 180]
-        assert isinstance(roll, float)
-        assert -180.0 < roll <= 180.0
-        assert not np.isnan(roll)
-        assert not np.isinf(roll)
-
-    def test_roll_changes_with_target_position(self):
-        """Different target positions should generally give different rolls."""
-        obs_time = Time("2026-06-15T12:00:00")
-
-        # Targets at different positions
-        roll_at_0_0 = calculate_roll(ra=0.0, dec=0.0, obs_time=obs_time)
-        roll_at_180_0 = calculate_roll(ra=180.0, dec=0.0, obs_time=obs_time)
-
-        # Opposite sides of sky should have different rolls
-        assert roll_at_0_0 != roll_at_180_0
-
-    def test_roll_symmetry(self):
-        """Roll calculation should be deterministic."""
-        obs_time = Time("2026-06-15T12:00:00")
-
-        # Calculate same roll multiple times
-        rolls = [
-            calculate_roll(ra=150.0, dec=25.0, obs_time=obs_time)
-            for _ in range(5)
-        ]
-
-        # All should be identical
-        assert len(set(rolls)) == 1
-
-    def test_anti_sun_pointing(self):
-        """Roll should be valid for anti-Sun pointing (Pandora's operational case)."""
-        from shortschedule.roll import _spacecraft_roll_from_radec
-
-        # Exact anti-Sun: target 180° from Sun
-        target_ra, target_dec = 270.0, 0.0
-        sun_ra, sun_dec = 90.0, 0.0
-
-        roll, (xB, yB, zB) = _spacecraft_roll_from_radec(
-            target_ra, target_dec, sun_ra, sun_dec
+        roll = (
+            self.roll_deg(len(self.calls))
+            if callable(self.roll_deg)
+            else self.roll_deg
         )
-
-        # Roll should be a valid number
-        assert isinstance(roll, float)
-        assert not np.isnan(roll)
-        assert not np.isinf(roll)
-
-        # Body frame should be orthonormal
-        assert np.isclose(np.linalg.norm(xB), 1.0)
-        assert np.isclose(np.linalg.norm(yB), 1.0)
-        assert np.isclose(np.linalg.norm(zB), 1.0)
-        assert np.isclose(np.dot(xB, yB), 0.0, atol=1e-10)
-        assert np.isclose(np.dot(yB, zB), 0.0, atol=1e-10)
-        assert np.isclose(np.dot(xB, zB), 0.0, atol=1e-10)
-
-        # Should be right-handed: xB × yB = zB
-        cross = np.cross(xB, yB)
-        np.testing.assert_array_almost_equal(cross, zB, decimal=10)
+        return {
+            # Echoed per timestep, as pandoravisibility v2.0.0 does.
+            "roll_deg": np.full(len(times), float(roll)),
+            "n_visible": int(visible.sum()),
+            "visible": visible,
+            "boresight_visible": visible,
+            "n_st_pass": visible.astype(int),
+            "solar_power_frac": np.where(visible, 1.0, np.nan),
+        }
 
 
-# ================================================================
-# Tests for solar power fraction helpers
-# ================================================================
+def test_same_target_in_a_visit_shares_one_roll():
+    vis = _RecordingVisibility(roll_deg=30.0)
+    visit = Visit(
+        "v1", [_make_seq("s1", "A", 0, 10), _make_seq("s2", "A", 100, 10)]
+    )
+    result = get_best_roll_per_visit(visit, vis)
+    assert len(vis.calls) == 1
+    assert set(result) == {"A"}
+    assert [seq.roll for seq in visit.sequences] == [30.0, 30.0]
 
 
-class TestSolarPowerFraction:
-    """Tests for compute_solar_power_fraction and compute_mean_solar_power."""
-
-    def test_power_in_unit_range(self):
-        from shortschedule.roll import compute_solar_power_fraction
-
-        t = Time("2026-01-15T12:00:00", scale="utc")
-        power = compute_solar_power_fraction(
-            ra=100.0, dec=20.0, roll_deg=0.0, obs_time=t
-        )
-        assert 0.0 <= power <= 1.0
-
-    def test_sun_derived_roll_gives_high_power(self):
-        """The sun-derived roll should yield near-optimal power."""
-        from shortschedule.roll import (
-            calculate_roll,
-            compute_solar_power_fraction,
-        )
-
-        t = Time("2026-01-15T12:00:00", scale="utc")
-        sun_roll = calculate_roll(100.0, 20.0, t)
-        power = compute_solar_power_fraction(100.0, 20.0, sun_roll, t)
-        # Sun-derived roll should give high (near 1.0) power
-        assert power > 0.9
-
-    def test_mean_solar_power_scalar_time(self):
-        from shortschedule.roll import compute_mean_solar_power
-
-        t = Time("2026-01-15T12:00:00", scale="utc")
-        power = compute_mean_solar_power(100.0, 20.0, 0.0, t)
-        assert 0.0 <= power <= 1.0
-
-    def test_mean_solar_power_array_time(self):
-        from shortschedule.roll import compute_mean_solar_power
-
-        times = Time("2026-01-15T12:00:00", scale="utc") + np.arange(5) * u.min
-        power = compute_mean_solar_power(100.0, 20.0, 0.0, times)
-        assert 0.0 <= power <= 1.0
+def test_targets_in_a_visit_are_solved_independently():
+    vis = _RecordingVisibility(roll_deg=lambda n: 10.0 * n)
+    visit = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, ra=10.0),
+            _make_seq("s2", "B", 20, 10, ra=50.0),
+            _make_seq("s3", "A", 40, 10, ra=10.0),
+        ],
+    )
+    get_best_roll_per_visit(visit, vis)
+    assert len(vis.calls) == 2
+    assert [call["coord"].ra.deg for call in vis.calls] == [10.0, 50.0]
+    rolls = {seq.target: seq.roll for seq in visit.sequences}
+    assert rolls == {"A": 10.0, "B": 20.0}
 
 
-# ================================================================
-# Tests for roll sweep functions
-# ================================================================
+def test_same_target_in_another_visit_gets_its_own_roll():
+    vis = _RecordingVisibility(roll_deg=lambda n: 10.0 * n)
+    first = Visit("v1", [_make_seq("s1", "A", 0, 10)])
+    second = Visit("v2", [_make_seq("s2", "A", 500, 10)])
+    get_best_roll_per_visit(first, vis)
+    get_best_roll_per_visit(second, vis)
+    assert first.sequences[0].roll != second.sequences[0].roll
 
 
-class TestFindBestRollForTarget:
-    """Tests for find_best_roll_for_target."""
-
-    def test_selects_roll_with_most_visible_minutes(self):
-        from shortschedule.roll import find_best_roll_for_target
-
-        class MockVis:
-            """Returns True only for roll near 90 deg."""
-
-            def get_visibility(self, coord, times, roll=None):
-                n = len(times)
-                if roll is not None:
-                    val = roll.to(u.deg).value
-                    if 89.0 <= val <= 91.0:
-                        return np.ones(n, dtype=bool)
-                return np.zeros(n, dtype=bool)
-
-        vis = MockVis()
-        times = Time("2026-01-15T12:00:00") + np.arange(10) * u.min
-
-        best = find_best_roll_for_target(
-            vis,
-            ra=100.0,
-            dec=20.0,
-            times=times,
-            roll_step=2.0,
-            min_power_frac=0.0,  # disable power filter
-        )
-        assert best is not None
-        assert abs(best - 90.0) <= 2.0 or abs(best + 270.0) <= 2.0
-
-    def test_returns_none_when_no_roll_visible(self):
-        from shortschedule.roll import find_best_roll_for_target
-
-        class MockVisNone:
-            def get_visibility(self, coord, times, roll=None):
-                return np.zeros(len(times), dtype=bool)
-
-        best = find_best_roll_for_target(
-            MockVisNone(),
-            ra=100.0,
-            dec=20.0,
-            times=Time("2026-01-15T12:00:00") + np.arange(5) * u.min,
-            roll_step=30.0,
-            min_power_frac=0.0,
-        )
-        assert best is None
-
-    def test_rejects_rolls_below_power_threshold(self):
-        from shortschedule.roll import find_best_roll_for_target
-
-        class MockVisAlwaysTrue:
-            def get_visibility(self, coord, times, roll=None):
-                return np.ones(len(times), dtype=bool)
-
-        # With extremely high power threshold, only rolls near sun-derived
-        # should pass.  Using min_power_frac=1.1 means nothing passes.
-        best = find_best_roll_for_target(
-            MockVisAlwaysTrue(),
-            ra=100.0,
-            dec=20.0,
-            times=Time("2026-01-15T12:00:00") + np.arange(5) * u.min,
-            roll_step=30.0,
-            min_power_frac=1.1,
-        )
-        assert best is None
-
-    def test_tiebreaker_prefers_sun_roll(self):
-        class MockVisAll:
-            """All rolls equally visible."""
-
-            def get_visibility(self, coord, times, roll=None):
-                return np.ones(len(times), dtype=bool)
-
-        t = Time("2026-01-15T12:00:00")
-        sun_roll = calculate_roll(100.0, 20.0, t)
-
-        best = find_best_roll_for_target(
-            MockVisAll(),
-            ra=100.0,
-            dec=20.0,
-            times=t + np.arange(5) * u.min,
-            roll_step=2.0,
-            min_power_frac=0.0,
-            sun_roll=sun_roll,
-        )
-        assert best is not None
-        # Should be within one step of the sun-derived roll
-        dist = abs(((best - sun_roll + 180.0) % 360.0) - 180.0)
-        assert dist <= 2.0
+def test_scored_minutes_are_scheduled_plus_margin():
+    vis = _RecordingVisibility()
+    visit = Visit(
+        "v1", [_make_seq("s1", "A", 0, 10), _make_seq("s2", "A", 60, 10)]
+    )
+    result = get_best_roll_per_visit(visit, vis, growth_margin_minutes=5)
+    call = vis.calls[0]
+    expected = np.concatenate([np.arange(-5, 15), np.arange(55, 75)])
+    np.testing.assert_array_equal(_minutes(call["times"]), expected)
+    scheduled = result["A"]["scheduled"]
+    np.testing.assert_array_equal(
+        _minutes(call["times"])[scheduled],
+        np.concatenate([np.arange(0, 10), np.arange(60, 70)]),
+    )
+    # 20 margin minutes, so a scheduled minute outweighs all of them.
+    np.testing.assert_array_equal(call["weights"], np.where(scheduled, 21, 1))
 
 
-class TestFindBestRollsForVisit:
-    """Tests for find_best_rolls_for_visit."""
+def test_without_margin_every_minute_weighs_one():
+    vis = _RecordingVisibility()
+    visit = Visit("v1", [_make_seq("s1", "A", 0, 10)])
+    get_best_roll_per_visit(visit, vis)
+    call = vis.calls[0]
+    np.testing.assert_array_equal(_minutes(call["times"]), np.arange(10))
+    np.testing.assert_array_equal(call["weights"], np.ones(10, dtype=int))
 
-    def test_multi_target_visit(self):
-        class MockVisAllTrue:
-            def get_visibility(self, coord, times, roll=None):
-                return np.ones(len(times), dtype=bool)
 
-        s1 = _make_seq("s1", "TargetA", 0, 10, ra=100.0, dec=20.0)
-        s2 = _make_seq("s2", "TargetB", 10, 10, ra=200.0, dec=-30.0)
-        visit = Visit(id="v1", sequences=[s1, s2])
+def test_roll_step_and_floor_are_forwarded():
+    vis = _RecordingVisibility()
+    visit = Visit("v1", [_make_seq("s1", "A", 0, 10)])
+    get_best_roll_per_visit(visit, vis, roll_step=2.0, min_power_frac=0.68)
+    call = vis.calls[0]
+    assert call["roll_step"] == 2.0 * u.deg
+    assert call["min_power_frac"] == 0.68
 
-        result = find_best_rolls_for_visit(
-            MockVisAllTrue(),
-            visit,
-            roll_step=30.0,
-            min_power_frac=0.0,
-        )
 
-        assert "TargetA" in result
-        assert "TargetB" in result
-        assert result["TargetA"] is not None
-        assert result["TargetB"] is not None
+def test_n_scheduled_visible_counts_scheduled_minutes_only():
+    def only_margin(times):
+        minutes = _minutes(times)
+        return (minutes < 0) | (minutes >= 10)
+
+    vis = _RecordingVisibility(visible=only_margin)
+    visit = Visit("v1", [_make_seq("s1", "A", 0, 10)])
+    result = get_best_roll_per_visit(visit, vis, growth_margin_minutes=5)
+    assert result["A"]["n_visible"] == 10
+    assert result["A"]["n_scheduled_visible"] == 0
+    assert visit.sequences[0].roll == 30.0
+
+
+def test_priority_0_model_only_when_every_observation_is_priority_0():
+    nominal, strict = _RecordingVisibility(), _RecordingVisibility()
+    all_zero = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, priority=0),
+            _make_seq("s2", "A", 60, 10, priority=0),
+        ],
+    )
+    get_best_roll_per_visit(all_zero, nominal, priority_0_visibility=strict)
+    assert (len(nominal.calls), len(strict.calls)) == (0, 1)
+
+    nominal, strict = _RecordingVisibility(), _RecordingVisibility()
+    mixed = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, priority=0),
+            _make_seq("s2", "A", 60, 10, priority=1),
+        ],
+    )
+    get_best_roll_per_visit(mixed, nominal, priority_0_visibility=strict)
+    assert (len(nominal.calls), len(strict.calls)) == (1, 0)
