@@ -454,3 +454,71 @@ class TestBridgingATolerableGap:
         result = proc._merge_similar_observations(cal)
 
         assert len(result.visits[0].sequences) == 2
+
+
+# ================================================================
+# Tests: drop_priority0 clears priority-0 filler out of a bridgeable gap
+# ================================================================
+
+
+def _pair_around_filler(filler_visit="v1", gap_minutes=4):
+    """Two TargetA observations with a priority-0 filler filling the gap."""
+    first, second = _pair_across_gap(gap_minutes=gap_minutes)
+    filler = _make_seq(
+        "f1", "Filler", start_min=20, duration_min=gap_minutes, ra=50.0
+    )
+    filler.priority = 0
+    filler.roll = 30.0
+    if filler_visit == "v1":
+        visits = [Visit(id="v1", sequences=[first, filler, second])]
+    else:
+        visits = [
+            Visit(id="v1", sequences=[first, second]),
+            Visit(id=filler_visit, sequences=[filler]),
+        ]
+    return ScienceCalendar(metadata={}, visits=visits)
+
+
+class TestDropPriority0BetweenMergeablePair:
+    def _proc(self, drop=True, st_gap_tolerance=12):
+        proc = _bare_processor(st_gap_tolerance=st_gap_tolerance)
+        proc.visibility = _DarkGapVis(20, 24)
+        proc.drop_priority0 = drop
+        return proc
+
+    def test_filler_in_a_tolerable_gap_is_dropped_and_the_pair_merged(
+        self, capsys
+    ):
+        result = self._proc()._merge_similar_observations(
+            _pair_around_filler()
+        )
+        sequences = result.visits[0].sequences
+        assert [seq.target for seq in sequences] == ["TargetA"]
+        assert abs((sequences[0].stop_time - (T0 + 44 * u.min)).sec) < 1
+        out = capsys.readouterr().out
+        assert "WARNING" in out and "dropped priority-0 Filler" in out
+
+    def test_flag_off_keeps_the_filler(self):
+        result = self._proc(drop=False)._merge_similar_observations(
+            _pair_around_filler()
+        )
+        assert len(result.visits[0].sequences) == 3
+
+    def test_gap_beyond_the_tolerance_keeps_the_filler(self):
+        result = self._proc(st_gap_tolerance=3)._merge_similar_observations(
+            _pair_around_filler()
+        )
+        assert len(result.visits[0].sequences) == 3
+
+    def test_filler_in_another_visit_is_dropped_with_its_visit(self):
+        result = self._proc()._merge_similar_observations(
+            _pair_around_filler(filler_visit="v2")
+        )
+        assert [visit.id for visit in result.visits] == ["v1"]
+        assert len(result.visits[0].sequences) == 1
+
+    def test_a_higher_priority_observation_between_still_blocks(self):
+        cal = _pair_around_filler()
+        cal.visits[0].sequences[1].priority = 1
+        result = self._proc()._merge_similar_observations(cal)
+        assert len(result.visits[0].sequences) == 3
