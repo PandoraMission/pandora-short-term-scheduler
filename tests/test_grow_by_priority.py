@@ -1,15 +1,17 @@
-"""Tests for grow_by_priority.
+"""Tests for grow_by_priority and drop_priority0.
 
 Higher priorities grow first and may take minutes from an adjacent
-lower-priority observation, down to that observation's floor. The doubles
-and helpers come from the movement-limit tests, whose growth pass this
-extends.
+lower-priority observation, down to that observation's floor. With
+drop_priority0 a priority-0 neighbor has no floor and is dropped once taken
+past it. The doubles and helpers come from the movement-limit tests, whose
+growth pass this extends.
 """
 
 # Third-party
 import numpy as np
 
 # First-party/Local
+from shortschedule.models import ScienceCalendar, Visit
 from tests.test_movement_limit import (
     T0,
     _make_calendar,
@@ -28,11 +30,12 @@ def _seq(sid, target, start_min, duration_min, priority):
     return seq
 
 
-def _proc(pattern=None, by_priority=True, limit=45):
+def _proc(pattern=None, by_priority=True, limit=45, drop=False):
     if pattern is None:
         pattern = np.ones(300, dtype=bool)
     proc = _processor(_PatternVis(pattern), limit=limit)
     proc.grow_by_priority = by_priority
+    proc.drop_priority0 = drop
     return proc
 
 
@@ -198,3 +201,84 @@ def test_timing_log_says_why_each_boundary_moved(capsys):
         "(duration 40.0 -> 53.0 min): start: gave 32 min to "
         "higher-priority A; stop: grew 45 min into idle time"
     ) in out
+
+
+# ================================================================
+# drop_priority0
+# ================================================================
+
+
+def test_drop_priority0_eats_a_priority_0_whole_and_keeps_growing(capsys):
+    """Priority 2 takes all of the priority 0 after it, which is dropped,
+    and then grows on into the idle time beyond it."""
+    proc = _proc(drop=True)
+    sequences = _grow(
+        proc, [_seq("s1", "A", 0, 20, 2), _seq("s2", "B", 20, 10, 0)]
+    )
+    assert [seq.target for seq in sequences] == ["A"]
+    assert _minute(sequences[0].stop_time) == 65  # its own 45 min limit
+    summary = proc.gap_report["processing_summary"]
+    assert summary["priority_0_dropped"] == 1
+    assert summary["minutes_taken_from_lower_priority"] == 10
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "dropped" in out and "priority-0 B" in out
+    assert "GROWTH BLOCKED" not in out
+
+
+def test_drop_priority0_drops_a_remnant_below_the_minimum():
+    """A take that stops inside the priority 0 but past its floor leaves a
+    remnant too short to fly, so it is dropped rather than kept."""
+    pattern = np.zeros(300, dtype=bool)
+    pattern[:56] = True
+    proc = _proc(pattern, drop=True)
+    sequences = _grow(
+        proc, [_seq("s1", "A", 0, 20, 2), _seq("s2", "B", 20, 40, 0)]
+    )
+    # Without the flag A would stop at 52, leaving B its 8 min floor.
+    assert [seq.target for seq in sequences] == ["A"]
+    assert _minute(sequences[0].stop_time) == 56
+
+
+def test_drop_priority0_keeps_a_priority_0_left_above_its_floor(capsys):
+    pattern = np.zeros(300, dtype=bool)
+    pattern[:40] = True
+    proc = _proc(pattern, drop=True)
+    high, low = _grow(
+        proc, [_seq("s1", "A", 0, 20, 2), _seq("s2", "B", 20, 40, 0)]
+    )
+    assert (_minute(high.stop_time), _minute(low.start_time)) == (40, 40)
+    assert proc.gap_report["processing_summary"]["priority_0_dropped"] == 0
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_drop_priority0_leaves_a_priority_1_floor_alone():
+    proc = _proc(drop=True)
+    high, low = _grow(
+        proc, [_seq("s1", "A", 0, 20, 2), _seq("s2", "B", 20, 40, 1)]
+    )
+    assert (_minute(high.stop_time), _minute(low.start_time)) == (52, 52)
+
+
+def test_drop_priority0_needs_grow_by_priority():
+    proc = _proc(by_priority=False, drop=True)
+    high, low = _grow(
+        proc, [_seq("s1", "A", 0, 20, 2), _seq("s2", "B", 20, 10, 0)]
+    )
+    assert (_minute(high.stop_time), _minute(low.start_time)) == (20, 20)
+
+
+def test_drop_priority0_eats_the_previous_neighbor_and_empties_its_visit():
+    """Growing a start back over a priority 0 drops it, and a visit left
+    with no observations is removed."""
+    proc = _proc(drop=True)
+    cal = ScienceCalendar(
+        metadata={},
+        visits=[
+            Visit(id="v1", sequences=[_seq("s1", "A", 5, 15, 0)]),
+            Visit(id="v2", sequences=[_seq("s1", "B", 20, 20, 1)]),
+        ],
+    )
+    proc._grow_into_free_time(cal, _timing(cal))
+    assert [visit.id for visit in cal.visits] == ["v2"]
+    # Its 45 min limit would allow minute -25, but visibility starts at 0.
+    assert _minute(cal.visits[0].sequences[0].start_time) == 0

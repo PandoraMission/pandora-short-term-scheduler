@@ -172,6 +172,7 @@ class ScheduleProcessor:
         min_power_frac: float = 0.7,
         max_movement_minutes: int = 45,
         grow_by_priority: bool = True,
+        drop_priority0: bool = False,
         earthlimb_gap_tolerance: int = 0,
         earthlimb_gap_tolerance_start_buffer: int = 7.5,
         st_gap_tolerance: int = 0,
@@ -303,6 +304,16 @@ class ScheduleProcessor:
             observation as long as that one keeps the minimum duration and
             stays within ``max_movement_minutes`` (default True). False
             grows in start-time order with every neighbor a hard bound.
+        drop_priority0 : bool, optional
+            With ``grow_by_priority``, let a priority-1 or 2 observation
+            take as much of an adjacent priority-0 one as its own visibility,
+            gap tolerances and movement limit allow, past that priority 0's
+            floor. A priority 0 left unable to fly (under
+            ``min_sequence_duration`` once its opening is cleaned, past its
+            movement limit, or eaten whole) is removed and logged as a
+            warning. Merging also drops priority 0s that are all that
+            separates two otherwise mergeable priority-1/2 observations
+            (default False).
         earthlimb_gap_tolerance : int, optional
             Maximum number of contiguous minutes of earth-limb
             visibility violations to tolerate within a sequence
@@ -390,6 +401,7 @@ class ScheduleProcessor:
         # Furthest either boundary may drift from its long-term time.
         self.max_movement_minutes = max_movement_minutes
         self.grow_by_priority = grow_by_priority
+        self.drop_priority0 = drop_priority0
 
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
@@ -813,6 +825,11 @@ class ScheduleProcessor:
         observation therefore can contain minutes that fail a keepout, and
         ``validate_visibility`` will report them.
 
+        With ``drop_priority0``, point 4 is relaxed for priority-0 filler:
+        when only priority-0 observations sit between two priority-1/2
+        observations that meet every other point, those priority 0s are
+        dropped (and logged as a warning) and the pair is merged.
+
         The merged sequence keeps the first sequence's identity, priority,
         and payload parameters, and extends its ``stop_time`` to the second
         sequence's ``stop_time``. Merging is applied transitively, so a run
@@ -834,13 +851,50 @@ class ScheduleProcessor:
         merged_count = 0
         new_visits: List[Visit] = []
 
+        # With drop_priority0, priority-0 observations that are all that
+        # separates two otherwise mergeable higher-priority observations are
+        # dropped first, so the merge below sees an empty gap and joins the
+        # pair. Keyed by (visit_id, seq_id).
+        dropped = set()
+        if getattr(self, "drop_priority0", False):
+            all_ordered = self._ordered_sequences(calendar)
+            kept = [
+                index
+                for index, (_, seq) in enumerate(all_ordered)
+                if int(seq.priority or 0) > 0
+            ]
+            for i, j in zip(kept, kept[1:]):
+                (first_visit, first), (second_visit, second) = (
+                    all_ordered[i],
+                    all_ordered[j],
+                )
+                between = all_ordered[i + 1 : j]
+                # No occupied list: the priority 0s between are the ones
+                # being judged, and nothing else is there.
+                if (
+                    not between
+                    or first_visit != second_visit
+                    or not self._can_merge(first, second)
+                ):
+                    continue
+                for visit_id, seq in between:
+                    dropped.add((visit_id, seq.id))
+                    self._print(
+                        f"WARNING: {self._seq_prefix(visit_id, seq)} | "
+                        f"MERGE: dropped priority-0 {seq.target}, the only "
+                        f"observation between {first.target} sequences "
+                        f"{first.id} and {second.id}, whose gap is within "
+                        "tolerance (drop_priority0)."
+                    )
+
         # Every observation's span, so a pair separated by a gap is only
         # joined when nothing else is scheduled inside that gap. Taken
         # across the whole calendar, not just the visit, because visits can
         # interleave in time.
         occupied = [
             (seq.start_time, seq.stop_time)
-            for _, seq in self._ordered_sequences(calendar)
+            for visit_id, seq in self._ordered_sequences(calendar)
+            if (visit_id, seq.id) not in dropped
         ]
 
         for visit in self._progress(
@@ -850,7 +904,14 @@ class ScheduleProcessor:
         ):
             # Process sequences in chronological order so "right after each
             # other" is well defined regardless of input ordering.
-            ordered = sorted(visit.sequences, key=lambda s: s.start_time)
+            ordered = sorted(
+                (
+                    seq
+                    for seq in visit.sequences
+                    if (visit.id, seq.id) not in dropped
+                ),
+                key=lambda s: s.start_time,
+            )
 
             merged_sequences: List[ObservationSequence] = []
             for seq in ordered:
@@ -871,11 +932,20 @@ class ScheduleProcessor:
                     # Copy so the returned calendar never aliases the input.
                     merged_sequences.append(seq.copy())
 
-            new_visits.append(Visit(id=visit.id, sequences=merged_sequences))
+            # A visit left empty by the drops above goes with them.
+            if merged_sequences or not visit.sequences:
+                new_visits.append(
+                    Visit(id=visit.id, sequences=merged_sequences)
+                )
 
+        if dropped and getattr(self, "gap_report", None):
+            self.gap_report["processing_summary"]["priority_0_dropped"] += len(
+                dropped
+            )
         self._print(
             f"Merged {merged_count} similar observation sequence(s) "
-            f"across {len(calendar.visits)} visit(s)."
+            f"across {len(calendar.visits)} visit(s), dropping "
+            f"{len(dropped)} priority-0 observation(s) between them."
         )
 
         return ScienceCalendar(
@@ -1665,9 +1735,12 @@ class ScheduleProcessor:
         ``min_sequence_duration`` and the moved boundary stays within
         ``max_movement_minutes`` of the neighbor's long-term time. Growth
         that visibility allowed but such a floor refused goes to the error
-        log. Off, the walk is start-time order and every neighbor is a
-        hard bound. Either way a boundary that has already moved is what
-        the next observation sees. Times are modified in place.
+        log. With ``drop_priority0`` as well, a priority-0 neighbor has no
+        floor: a priority 1 or 2 may grow past it, and a priority 0 taken
+        past its floor is removed from the calendar. Off, the walk is
+        start-time order and every neighbor is a hard bound. Either way a
+        boundary that has already moved is what the next observation sees.
+        Times are modified in place.
         """
         ordered = self._ordered_sequences(calendar)
         walk = list(range(len(ordered)))
@@ -1675,6 +1748,8 @@ class ScheduleProcessor:
             # Highest priority first; start-time order within a priority.
             walk.sort(key=lambda i: -int(ordered[i][1].priority or 0))
         gained_starts = gained_stops = taken = 0
+        # (visit_id, seq_id) of priority-0 observations eaten by growth.
+        self._dropped_by_growth = set()
 
         for index in self._progress(
             walk, desc="Growing into idle time", total=len(walk)
@@ -1682,25 +1757,46 @@ class ScheduleProcessor:
             visit_id, seq = ordered[index]
             if original_timing.get((visit_id, seq.id)) is None:
                 continue
-            gained, took = self._grow_one_side(
-                ordered, index, -1, original_timing
-            )
-            gained_starts += gained
-            taken += took
-            gained, took = self._grow_one_side(
-                ordered, index, 1, original_timing
-            )
-            gained_stops += gained
-            taken += took
+            if (visit_id, seq.id) in self._dropped_by_growth:
+                continue
+            for direction in (-1, 1):
+                # A neighbor eaten whole leaves room beyond it, so that side
+                # is grown again until no further neighbor is dropped.
+                while True:
+                    n_dropped = len(self._dropped_by_growth)
+                    gained, took = self._grow_one_side(
+                        ordered, index, direction, original_timing
+                    )
+                    if direction < 0:
+                        gained_starts += gained
+                    else:
+                        gained_stops += gained
+                    taken += took
+                    if len(self._dropped_by_growth) == n_dropped:
+                        break
+
+        if self._dropped_by_growth:
+            for visit in calendar.visits:
+                visit.sequences = [
+                    seq
+                    for seq in visit.sequences
+                    if (visit.id, seq.id) not in self._dropped_by_growth
+                ]
+            calendar.visits = [
+                visit for visit in calendar.visits if visit.sequences
+            ]
 
         summary = self.gap_report["processing_summary"]
         summary["minutes_grown_at_starts"] = gained_starts
         summary["minutes_grown_at_stops"] = gained_stops
         summary["minutes_taken_from_lower_priority"] = taken
+        summary["priority_0_dropped"] = len(self._dropped_by_growth)
         self._print(
             f"Grew observations into idle time: {gained_starts} min added "
             f"at starts, {gained_stops} min added at stops, {taken} min of "
-            "that taken from lower-priority neighbors."
+            "that taken from lower-priority neighbors, "
+            f"{len(self._dropped_by_growth)} priority-0 observation(s) "
+            "dropped."
         )
         return calendar
 
@@ -1730,10 +1826,20 @@ class ScheduleProcessor:
         # reach: not at all unless growth is by priority and the neighbor
         # ranks lower, and then only while the neighbor keeps its minimum
         # duration once the start-buffer pass has cleaned its opening, and
-        # its moved boundary stays within the movement limit.
+        # its moved boundary stays within the movement limit. With
+        # drop_priority0 a priority-0 neighbor may be taken past that floor,
+        # which drops it.
         neighbor = None
-        takeable = False
+        takeable = may_drop = False
+        dropped = self.__dict__.setdefault("_dropped_by_growth", set())
         neighbor_index = index + direction
+        # A priority 0 already eaten in this pass is no longer a neighbor.
+        while (
+            0 <= neighbor_index < len(ordered)
+            and (ordered[neighbor_index][0], ordered[neighbor_index][1].id)
+            in dropped
+        ):
+            neighbor_index += direction
         if 0 <= neighbor_index < len(ordered):
             neighbor_visit, neighbor = ordered[neighbor_index]
             neighbor_original = original_timing.get(
@@ -1793,6 +1899,20 @@ class ScheduleProcessor:
                         break
                     take -= 1
                 reach = max(reach, neighbor.start_time + max(take, 0) * u.min)
+            # With drop_priority0 the floor above only decides whether a
+            # priority-0 neighbor survives; the grower may reach its far edge.
+            floor_reach = reach
+            may_drop = (
+                takeable
+                and bool(getattr(self, "drop_priority0", False))
+                and int(neighbor.priority or 0) == 0
+            )
+            if may_drop:
+                reach = (
+                    neighbor.start_time
+                    if direction < 0
+                    else neighbor.stop_time
+                )
             bound = max(bound, reach) if direction < 0 else min(bound, reach)
 
         # Whole seconds before the floor division: a bound built from the
@@ -1834,9 +1954,28 @@ class ScheduleProcessor:
         taken = 0
         if direction < 0 and new_edge < neighbor.stop_time:
             taken = int(np.rint((neighbor.stop_time - new_edge).sec / 60.0))
-            neighbor.stop_time = new_edge
         elif direction > 0 and new_edge > neighbor.start_time:
             taken = int(np.rint((new_edge - neighbor.start_time).sec / 60.0))
+        # Whole seconds, so landing exactly on the floor is not a drop.
+        if may_drop and np.rint(direction * (new_edge - floor_reach).sec) > 0:
+            # Past its floor the priority 0 cannot fly what is left of it.
+            dropped.add((neighbor_visit, neighbor.id))
+            self._print(
+                f"WARNING: {prefix} | GROWTH: took {taken} min from "
+                f"priority-0 {neighbor.target}, leaving it unable to fly; "
+                f"dropped {self._seq_prefix(neighbor_visit, neighbor)} "
+                "(drop_priority0)."
+            )
+            self._note_timing(
+                visit_id,
+                seq.id,
+                f"{boundary}: grew {gained} min, {taken} of them taken from "
+                f"priority-0 {neighbor.target}, which was dropped",
+            )
+            return gained, taken
+        if direction < 0 and taken:
+            neighbor.stop_time = new_edge
+        elif taken:
             neighbor.start_time = new_edge
         if taken:
             self._print(
@@ -4006,6 +4145,7 @@ class ScheduleProcessor:
             ),
             "Max_Movement_Min": str(self.max_movement_minutes),
             "Grow_By_Priority": str(self.grow_by_priority),
+            "Drop_Priority0": str(getattr(self, "drop_priority0", False)),
             "Roll_Step_Deg": f"{float(self.roll_step):g}",
             "Min_Power_Frac": f"{float(self.min_power_frac):g}",
         }
@@ -4209,6 +4349,7 @@ class ScheduleProcessor:
                 "minutes_grown_at_starts": 0,
                 "minutes_grown_at_stops": 0,
                 "minutes_taken_from_lower_priority": 0,
+                "priority_0_dropped": 0,
                 "boundaries_clamped": 0,
                 "overlaps_repaired": 0,
                 "original_gap_time_minutes": 0,

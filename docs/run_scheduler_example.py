@@ -84,6 +84,7 @@ scheduler = ScheduleProcessor(
     roll_step=1.0,  # roll search step size (deg)
     min_power_frac=0.68,  # min acceptable orbit-average power fraction
     grow_by_priority=True,  # higher priorities grow first and may take time from lower-priority neighbors
+    drop_priority0=False,  # let a priority 1/2 grow past (and drop) a priority 0, or merge across priority-0 filler
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
     fix_bad_data=True,  # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------
