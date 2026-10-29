@@ -424,6 +424,35 @@ class TestPointingPlots:
         assert drawn == expected
         assert sum(drawn) == len(timeline.times)
 
+    def test_illumination_stars_each_observation_start(self, visualizer):
+        """One opaque star per observation, on its first minute."""
+        from shortschedule.pointing import IDLE_LABEL
+
+        calendar = _make_calendar()
+        timeline = visualizer.get_pointing_timeline(calendar)
+        figure = visualizer.plot_earth_illumination(calendar)
+
+        starts = [
+            start
+            for start, _, label in timeline.segments
+            if label != IDLE_LABEL
+        ]
+        ax = figure.axes[0]
+        stars = [
+            collection
+            for collection in ax.collections
+            if collection.get_alpha() is None
+        ]
+        star_offsets = np.concatenate(
+            [collection.get_offsets() for collection in stars]
+        )
+
+        assert len(star_offsets) == len(starts)
+        np.testing.assert_allclose(
+            np.sort(star_offsets[:, 0]),
+            np.sort(timeline.angles[("Boresight", "earth")][starts]),
+        )
+
 
 def test_illumination_follows_the_model_reference_point():
     """The illumination angle is taken where the model measures it.

@@ -22,6 +22,12 @@ from .models import ObservationSequence, ScienceCalendar, Visit
 from .nirda import NirdaData
 from .overhead import OverheadTiming
 from .roll import get_best_roll_per_visit
+from .transit import (
+    load_ephemerides,
+    planet_key,
+    transit_core,
+    transit_epoch,
+)
 from .visda import VisdaData
 
 # Standard library
@@ -178,6 +184,14 @@ class ScheduleProcessor:
         st_gap_tolerance: int = 0,
         st_gap_tolerance_start_buffer: int = 7.5,
         use_dynamic_earthlimb: Optional[bool] = None,
+        use_trace_sweep: Optional[bool] = None,
+        trace_contamination_tol: Optional[float] = None,
+        nirda_roi_x: Optional[int] = None,
+        nirda_roi_y: Optional[int] = None,
+        drop_observations_based_on_trace: bool = False,
+        target_list_dir: Optional[str] = None,
+        transit_middle_frac: float = 0.75,
+        transit_duration_constraint_min: float = 15.0,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -348,6 +362,46 @@ class ScheduleProcessor:
             ``pandoravisibility``, which, currently, defaults to
             switching the wedge on. Passing ``False`` selects the
             flat or day/night limb instead.
+        use_trace_sweep : bool, optional
+            If True, the roll search rejects rolls where neighbor stars'
+            NIRDA traces contaminate the target's spectrum by more than
+            ``trace_contamination_tol``, taking the best ranked roll that
+            passes. A target that some roll could see but no such roll
+            passes is handled by ``drop_observations_based_on_trace``.
+            Needs the gaiaoffline database. ``None`` (default) defers to
+            ``pandoravisibility``, which currently switches it on.
+        trace_contamination_tol : float, optional
+            Largest acceptable trace contamination: the worst extraction
+            row's neighbor flux over the target's, within the roll
+            uncertainty. ``None`` (default) defers to ``pandoravisibility``
+            (currently 1e-3).
+        nirda_roi_x, nirda_roi_y : int, optional
+            NIRDA ROI size in pixels (across and along the dispersion) that
+            clips which neighbor light the trace check counts. ``None``
+            (default) defers to ``pandoravisibility`` (currently 80 x 256).
+        drop_observations_based_on_trace : bool, optional
+            What happens to a target in a visit that some roll could see
+            but where every such roll fails the trace check. True drops
+            its observations from that visit (and the visit if that empties
+            it), logged as a warning, before trimming and growth so
+            neighbors can use the time. False (default) keeps them at the
+            best ranked roll, trace failure and all, logged as an error.
+        target_list_dir : str or Path, optional
+            A PandoraTargetList checkout (or its ``target_definition_files``
+            directory) whose transit ephemerides switch on the transit
+            constraint for priority-2 observations; a planet defined in
+            more than one category takes its most precise ephemeris (see
+            ``transit.load_ephemerides``). ``None`` (default) leaves it off.
+        transit_middle_frac : float, optional
+            Share of a transit's total duration, centered on mid-transit,
+            that forms its core (default 0.75).
+        transit_duration_constraint_min : float, optional
+            Visible minutes of a transit's core its priority-2 observations
+            must keep between them, at the rolls they fly (default 15). A
+            pass that would shrink one of them below this, or further
+            below it for a transit the long-term calendar already left
+            short, is refused; overlap repair still applies but is logged
+            as an error. 0 turns the constraint off.
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -371,6 +425,10 @@ class ScheduleProcessor:
             earthlimb_day_min=self._to_deg(earthlimb_day_min),
             earthlimb_night_min=self._to_deg(earthlimb_night_min),
             use_dynamic_earthlimb=use_dynamic_earthlimb,
+            use_trace_sweep=use_trace_sweep,
+            trace_contamination_tol=trace_contamination_tol,
+            nirda_roi_x=nirda_roi_x,
+            nirda_roi_y=nirda_roi_y,
         )
         # Strip None entries so Visibility uses its own class-level defaults
         # for any constraint the caller left unset.
@@ -414,6 +472,15 @@ class ScheduleProcessor:
         # Roll sweep configuration
         self.roll_step = roll_step
         self.min_power_frac = min_power_frac
+        self.drop_observations_based_on_trace = drop_observations_based_on_trace
+
+        # Priority-2 transit constraint; planet key to ephemeris, empty
+        # (constraint off) without a PandoraTargetList.
+        self.transit_middle_frac = transit_middle_frac
+        self.transit_duration_constraint_min = transit_duration_constraint_min
+        self.transit_ephemerides = (
+            {} if target_list_dir is None else load_ephemerides(target_list_dir)
+        )
 
         # Validate any explicitly supplied overheads carry time units so that
         # downstream .to(u.s) / .to(u.us) calls succeed. ``None`` means "use
@@ -1096,7 +1163,13 @@ class ScheduleProcessor:
 
         # One roll per target per visit, chosen by pandoravisibility and
         # written onto the sequences, so every pass below judges an
-        # observation at the roll it will fly.
+        # observation at the roll it will fly. A target whose every
+        # observable roll fails the NIRDA trace check is reported, and with
+        # drop_observations_based_on_trace dropped from the visit here,
+        # before trimming and growth, so neighbors can use the time. A
+        # fixed roll is not trace checked, so later passes see a kept one
+        # as visible.
+        trace_dropped = 0
         for visit in self._progress(
             working_calendar.visits,
             desc="Roll sweep",
@@ -1112,21 +1185,80 @@ class ScheduleProcessor:
                 ),
                 growth_margin_minutes=self.max_movement_minutes,
             )
+            blocked = set()
             for target, result in visit_rolls.items():
+                contamination = result.get("trace_contamination", np.nan)
                 self._print(
                     f"  Visit {visit.id} / {target}: roll "
                     f"{result['roll_deg']:.1f} deg, "
                     f"{result['n_scheduled_visible']} of "
                     f"{int(result['scheduled'].sum())} scheduled minutes "
                     "visible"
+                    + (
+                        f", trace contamination {contamination:.1e}"
+                        if np.isfinite(contamination)
+                        else ""
+                    )
                 )
-                if result["n_scheduled_visible"] == 0:
+                if result["trace_blocked"]:
+                    failure = (
+                        f"Visit {visit.id} / {target}: every roll that sees "
+                        "it fails the NIRDA trace check (tolerance "
+                        f"{self.visibility.trace_contamination_tol:g}); "
+                        f"best ranked roll {result['roll_deg']:.1f} deg "
+                        f"has contamination {contamination:.1e}, the "
+                        "cleanest roll "
+                        f"{result['trace_min_roll_deg']:.1f} deg has "
+                        f"{result['trace_min_contamination']:.1e}"
+                    )
+                    if getattr(self, "drop_observations_based_on_trace", False):
+                        blocked.add(target)
+                        self._print(f"WARNING: {failure}. Dropped.")
+                    else:
+                        self._print(
+                            f"ERROR: {failure}. Kept, flying "
+                            f"{result['roll_deg']:.1f} deg "
+                            "(drop_observations_based_on_trace is off)."
+                        )
+                elif result["n_scheduled_visible"] == 0:
                     self._print(
                         f"ERROR: Visit {visit.id} / {target}: no roll "
                         "makes any scheduled minute visible; flying "
                         f"{result['roll_deg']:.1f} deg (best for the star "
                         "trackers alone, then for solar power)"
                     )
+            if blocked:
+                kept = [s for s in visit.sequences if s.target not in blocked]
+                trace_dropped += len(visit.sequences) - len(kept)
+                visit.sequences = kept
+        if trace_dropped:
+            # Only visits the drop emptied can be empty here.
+            working_calendar.visits = [
+                visit for visit in working_calendar.visits if visit.sequences
+            ]
+        if getattr(self, "gap_report", None):
+            self.gap_report["processing_summary"][
+                "trace_dropped"
+            ] = trace_dropped
+
+        # Each priority-2 transit's coverage as the long-term calendar
+        # placed it, at the rolls now held, for the report at the end.
+        transits_before = self._transit_coverages(working_calendar)
+        if getattr(self, "transit_ephemerides", None):
+            for target in sorted(
+                {
+                    seq.target
+                    for visit in working_calendar.visits
+                    for seq in visit.sequences
+                    if seq.priority == 2
+                    and planet_key(seq.target) not in self.transit_ephemerides
+                }
+            ):
+                self._print(
+                    f"WARNING: {target}: no transit ephemeris in the "
+                    "PandoraTargetList, so its priority-2 observations are "
+                    "not held to the transit constraint."
+                )
 
         # Observations keep the times the long-term calendar gave them and
         # are adjusted in place. Idle time between them is expected under
@@ -1161,6 +1293,24 @@ class ScheduleProcessor:
 
         # Overlaps can never be flown, so this has the last word on timing.
         working_calendar = self._repair_overlaps(working_calendar)
+
+        # A transit can end up short only if the long-term calendar left it
+        # short or overlap repair cut it; either needs a look.
+        needed = getattr(self, "transit_duration_constraint_min", 0)
+        for transit, (target, core_start, covered) in self._transit_coverages(
+            working_calendar
+        ).items():
+            if covered >= needed:
+                continue
+            before = transits_before.get(transit, (None, None, 0))[2]
+            self._print(
+                f"ERROR: {target} transit at {core_start.isot[:16]} (epoch "
+                f"{transit[1]}): its priority-2 observations cover {covered} "
+                f"visible min of the middle "
+                f"{self.transit_middle_frac:.0%} of the transit, under the "
+                f"{needed:g} min required ({before} min as the long-term "
+                "calendar placed them)."
+            )
 
         # Report any timing changes (shrink/elongate) made above.
         self._log_timing_changes(working_calendar, original_timing)
@@ -1666,7 +1816,14 @@ class ScheduleProcessor:
                 continue
 
             trimmed = self._build_trimmed_sequence(seq, *best_window)
-            if trimmed is None:
+            if trimmed is None or not self._transit_allows(
+                working_cal,
+                visit_id,
+                seq,
+                trimmed.start_time,
+                trimmed.stop_time,
+                "keeping only the longest visible block",
+            ):
                 continue
 
             working_cal.replace_sequence(visit_id, seq.id, trimmed)
@@ -2149,6 +2306,15 @@ class ScheduleProcessor:
                         f"Left unclamped for manual review."
                     )
                     continue
+                if not self._transit_allows(
+                    calendar,
+                    visit.id,
+                    seq,
+                    new_start,
+                    new_stop,
+                    "clamping to the movement limit",
+                ):
+                    continue
                 for boundary, moved in (
                     ("start", new_start != seq.start_time),
                     ("stop", new_stop != seq.stop_time),
@@ -2204,6 +2370,15 @@ class ScheduleProcessor:
                 f"{overlap_sec / 60:.1f} min; stop truncated to "
                 f"{later.start_time.isot}. This is a scheduler bug, please "
                 f"report it."
+            )
+            self._transit_allows(
+                calendar,
+                visit_id,
+                earlier,
+                earlier.start_time,
+                later.start_time,
+                "truncating to end an overlap",
+                refuse=False,
             )
             earlier.stop_time = later.start_time
             repaired += 1
@@ -2299,6 +2474,16 @@ class ScheduleProcessor:
                         f"{self.min_sequence_duration.sec / 60:.0f} min. "
                         f"Left unchanged."
                     )
+                    continue
+                if not self._transit_allows(
+                    calendar,
+                    visit.id,
+                    seq,
+                    new_start,
+                    seq.stop_time,
+                    f"moving the start {offset} min later to open cleanly "
+                    f"({reasons})",
+                ):
                     continue
 
                 self._print(
@@ -2434,6 +2619,144 @@ class ScheduleProcessor:
         return np.asarray(
             model.get_visibility(target_coord, times, roll=roll)["visible"]
         )
+
+    def _transit_of(
+        self, seq: ObservationSequence
+    ) -> Optional[Tuple[str, int, Time, Time]]:
+        """The transit a priority-2 observation is placed around.
+
+        Returns ``(planet key, epoch, core_start, core_stop)`` for the
+        transit nearest the observation's midpoint, or ``None`` when the
+        transit constraint is off, the observation is not priority 2, or
+        its planet has no ephemeris.
+        """
+        ephemerides = getattr(self, "transit_ephemerides", None)
+        if (
+            not ephemerides
+            or not getattr(self, "transit_duration_constraint_min", 0)
+            or seq.priority != 2
+        ):
+            return None
+        key = planet_key(seq.target)
+        if key not in ephemerides:
+            return None
+        epoch = transit_epoch(
+            ephemerides[key], seq.start_time + seq.duration / 2
+        )
+        # The barycentric correction is the slow part; a transit's core
+        # never changes, so it is worked out once.
+        cores = self.__dict__.setdefault("_transit_cores", {})
+        if (key, epoch) not in cores:
+            cores[(key, epoch)] = transit_core(
+                ephemerides[key], epoch, self.transit_middle_frac
+            )
+        return (key, epoch, *cores[(key, epoch)])
+
+    def _transit_coverage(
+        self,
+        calendar: ScienceCalendar,
+        transit: Tuple[str, int, Time, Time],
+        replace: Optional[Tuple[ObservationSequence, Time, Time]] = None,
+    ) -> int:
+        """Visible minutes of a transit's core its observations cover.
+
+        Every priority-2 observation placed around ``transit`` counts, each
+        judged at its own roll under the model its priority flies.
+        ``replace`` gives one of them new start and stop times, to judge a
+        change before it is made.
+        """
+        key, epoch, core_start, core_stop = transit
+        n_minutes = int(np.floor((core_stop - core_start).to_value(u.min)))
+        minutes = core_start + np.arange(n_minutes) * u.min
+        covered = 0
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                found = self._transit_of(seq)
+                if found is None or found[:2] != (key, epoch):
+                    continue
+                start, stop = seq.start_time, seq.stop_time
+                if replace is not None and seq is replace[0]:
+                    start, stop = replace[1], replace[2]
+                inside = (minutes >= start) & (minutes < stop)
+                if not inside.any():
+                    continue
+                coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+                covered += int(
+                    self._visibility_for_sequence(
+                        seq, coord, minutes[inside]
+                    ).sum()
+                )
+        return covered
+
+    def _transit_allows(
+        self,
+        calendar: ScienceCalendar,
+        visit_id: Any,
+        seq: ObservationSequence,
+        new_start: Time,
+        new_stop: Time,
+        change: str,
+        refuse: bool = True,
+    ) -> bool:
+        """Whether ``seq`` may move to ``new_start``-``new_stop``.
+
+        A priority-2 observation's transit must keep
+        ``transit_duration_constraint_min`` visible minutes of its core
+        covered, and a transit the long-term calendar left short of that
+        may not lose any. A change breaking this is refused and logged as
+        a warning. With ``refuse`` False (overlap repair, which has to
+        win) the break is logged as an error and the change allowed.
+        """
+        transit = self._transit_of(seq)
+        if transit is None:
+            return True
+        needed = self.transit_duration_constraint_min
+        before = self._transit_coverage(calendar, transit)
+        after = self._transit_coverage(
+            calendar, transit, (seq, new_start, new_stop)
+        )
+        if after >= needed or after >= before:
+            return True
+
+        message = (
+            f"{self._seq_prefix(visit_id, seq)} | TRANSIT: {change} would "
+            f"leave {after} visible min of the {seq.target} transit core "
+            f"(epoch {transit[1]}, {transit[2].isot[:16]} to "
+            f"{transit[3].isot[11:16]}) covered, down from {before}; "
+            f"needs {needed:g}."
+        )
+        if not refuse:
+            self._print(f"ERROR: {message} Applied anyway.")
+            return True
+        self._print(f"WARNING: {message} Refused.")
+        summary = (getattr(self, "gap_report", None) or {}).get(
+            "processing_summary"
+        )
+        if summary is not None:
+            summary["transit_changes_refused"] = (
+                summary.get("transit_changes_refused", 0) + 1
+            )
+        return False
+
+    def _transit_coverages(
+        self, calendar: ScienceCalendar
+    ) -> Dict[Tuple[str, int], Tuple[str, Time, int]]:
+        """Every transit with priority-2 observations, and its coverage.
+
+        Returns ``{(planet key, epoch): (target, core_start, covered
+        minutes)}``; empty when the transit constraint is off.
+        """
+        coverages = {}
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                transit = self._transit_of(seq)
+                if transit is not None and transit[:2] not in coverages:
+                    coverages[transit[:2]] = (
+                        seq.target,
+                        transit[2],
+                        self._transit_coverage(calendar, transit),
+                    )
+        return coverages
 
     def _find_nonvisible_gaps(
         self,
@@ -4148,7 +4471,30 @@ class ScheduleProcessor:
             "Drop_Priority0": str(getattr(self, "drop_priority0", False)),
             "Roll_Step_Deg": f"{float(self.roll_step):g}",
             "Min_Power_Frac": f"{float(self.min_power_frac):g}",
+            "Use_Trace_Sweep": str(
+                bool(getattr(nominal, "use_trace_sweep", False))
+            ),
         }
+        if getattr(nominal, "use_trace_sweep", False):
+            settings["Trace_Contamination_Tol"] = (
+                f"{float(nominal.trace_contamination_tol):g}"
+            )
+            settings["Trace_NIRDA_ROI"] = (
+                f"{nominal.nirda_roi_x}x{nominal.nirda_roi_y}"
+            )
+            settings["Drop_Observations_Based_On_Trace"] = str(
+                bool(getattr(self, "drop_observations_based_on_trace", False))
+            )
+        transit_on = bool(
+            getattr(self, "transit_ephemerides", None)
+            and getattr(self, "transit_duration_constraint_min", 0)
+        )
+        settings["Transit_Constraint"] = str(transit_on)
+        if transit_on:
+            settings["Transit_Middle_Frac"] = f"{self.transit_middle_frac:g}"
+            settings["Transit_Duration_Constraint_Min"] = (
+                f"{self.transit_duration_constraint_min:g}"
+            )
         # A keepout with no value is left out rather than written empty:
         # Priority_0_Earthlimb_Min_Deg absent means it was not in use.
         return {k: v for k, v in settings.items() if v is not None}
@@ -4350,6 +4696,8 @@ class ScheduleProcessor:
                 "minutes_grown_at_stops": 0,
                 "minutes_taken_from_lower_priority": 0,
                 "priority_0_dropped": 0,
+                "trace_dropped": 0,
+                "transit_changes_refused": 0,
                 "boundaries_clamped": 0,
                 "overlaps_repaired": 0,
                 "original_gap_time_minutes": 0,

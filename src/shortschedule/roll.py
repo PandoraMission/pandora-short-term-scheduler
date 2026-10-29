@@ -56,10 +56,13 @@ def get_best_roll_per_visit(
     -------
     dict
         Target name to the ``get_visibility`` result, with ``roll_deg``
-        reduced to the one roll held, and ``scheduled`` (which scored
-        minutes were scheduled) and ``n_scheduled_visible`` added. Zero
-        scheduled minutes visible means no roll can observe the target and
-        the fallback attitude was written.
+        and the trace fields reduced to the one roll held, and
+        ``scheduled`` (which scored minutes were scheduled),
+        ``n_scheduled_visible`` and ``trace_blocked`` added. Zero scheduled
+        minutes visible means no roll can observe the target and the
+        fallback attitude was written. ``trace_blocked`` is True when some
+        roll sees a scored minute but every such roll fails the NIRDA
+        trace check.
     """
     by_target: Dict[str, list] = {}
     for seq in visit.sequences:
@@ -98,12 +101,30 @@ def get_best_roll_per_visit(
             weights=weights,
         )
         # The search holds one roll over every scored minute and echoes it
-        # per timestep; the visit rule wants that one number.
-        result["roll_deg"] = float(np.atleast_1d(result["roll_deg"])[0])
+        # per timestep; the visit rule wants that one number. The trace
+        # fields (pandoravisibility v2.1.0) are echoed the same way.
+        for key in (
+            "roll_deg",
+            "trace_contamination",
+            "trace_ok",
+            "trace_min_contamination",
+            "trace_min_roll_deg",
+        ):
+            if key in result:
+                result[key] = np.atleast_1d(result[key])[0].item()
         result["scheduled"] = scheduled
         result["n_scheduled_visible"] = int(
             np.asarray(result["visible"])[scheduled].sum()
         )
+        # A roll failing the NIRDA trace check is reported with nothing
+        # visible. Asking again at that fixed roll, which skips the trace
+        # check, tells a trace rejection from a target no roll can see.
+        result["trace_blocked"] = False
+        if not result.get("trace_ok", True):
+            fixed = model.get_visibility(
+                coord, times, roll=result["roll_deg"] * u.deg
+            )
+            result["trace_blocked"] = bool(np.any(fixed["visible"]))
         for seq in sequences:
             seq.roll = result["roll_deg"]
         results[target] = result

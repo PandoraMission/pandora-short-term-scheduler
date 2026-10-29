@@ -3044,7 +3044,9 @@ class ScheduleVisualizer:
         angular radius over the span.
 
         Dots are transparent so repeated visits to the same phase space
-        stack up visibly.
+        stack up visibly.  The first minute of each observation is an
+        opaque star in the target's color; back-to-back observations of
+        the same target form one run and get one star.
 
         Parameters
         ----------
@@ -3061,6 +3063,7 @@ class ScheduleVisualizer:
         -------
         matplotlib.figure.Figure
         """
+        from matplotlib.lines import Line2D
         from pandoravisibility import Visibility
 
         from .pointing import AXES, IDLE_LABEL
@@ -3122,6 +3125,23 @@ class ScheduleVisualizer:
                     color=colors[target],
                     alpha=0.35,
                     linewidths=0,
+                )
+                # An opaque star on the first minute of each observation,
+                # so the direction each trail runs can be read.
+                starts = [
+                    start
+                    for start, _, label in timeline.segments
+                    if label == target
+                ]
+                ax.scatter(
+                    timeline.angles[(axis, "earth")][starts],
+                    timeline.illumination[axis][starts],
+                    s=90,
+                    marker="*",
+                    color=colors[target],
+                    edgecolors="black",
+                    linewidths=0.4,
+                    zorder=4,
                 )
             ax.axhline(90.0, color="gray", linestyle=":", linewidth=1.0)
 
@@ -3193,8 +3213,21 @@ class ScheduleVisualizer:
                     zorder=5,
                     label=label,
                 )
-            if lines:
-                ax.legend(loc="lower right", fontsize=7)
+            handles, _ = ax.get_legend_handles_labels()
+            handles.append(
+                Line2D(
+                    [],
+                    [],
+                    linestyle="none",
+                    marker="*",
+                    markersize=9,
+                    color="gray",
+                    markeredgecolor="black",
+                    markeredgewidth=0.4,
+                    label="observation start",
+                )
+            )
+            ax.legend(handles=handles, loc="lower right", fontsize=7)
 
             ax.set_title(axis, fontsize=11, fontweight="bold")
             ax.set_xlabel("Angle to Earth center (deg)")
@@ -3230,4 +3263,140 @@ class ScheduleVisualizer:
         )
         self._add_pointing_legend(fig, timeline, colors)
         fig.tight_layout(rect=(0.0, 0.1, 1.0, 0.93))
+        return fig
+
+    def plot_target_fields(
+        self,
+        calendar,
+        targets_per_row=4,
+        panel_height=5.0,
+        title="Simulated NIRDA and VISDA Fields",
+    ):
+        """Simulated NIRDA subarray and VISDA frame of every target.
+
+        Each target gets two panels side by side: its NIRDA ROI with the
+        neighbor star traces (``pandoravisibility.trace.plot_trace``, title
+        ``c`` = trace contamination) and one uncoadded VISDA frame
+        (``pandoravisibility.visda.plot_visible_field`` with its defaults).
+        Both are drawn at the target's mean roll over the calendar, the
+        circular mean of its observations' rolls weighted by duration, with
+        stars moved to the epoch of its first observation. When its visits
+        fly different rolls, the NIRDA title gives their span about that
+        mean, since the contamination depends on roll. Stars come from the
+        gaiaoffline database that the roll search's trace check reads.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Processed calendar to plot.
+        targets_per_row : int, optional
+            Targets (panel pairs) per figure row.
+        panel_height : float, optional
+            Height of each row in inches.
+        title : str
+            Plot title.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+        from pandoravisibility import star_field, trace, visda
+
+        # Targets in the order they are first observed
+        by_target = {}
+        for seq in sorted(
+            (
+                seq
+                for visit in calendar.visits
+                for seq in visit.sequences
+                if seq.roll is not None
+            ),
+            key=lambda seq: seq.start_time,
+        ):
+            by_target.setdefault(seq.target, []).append(seq)
+
+        visibility = self.scheduler.visibility
+        roi_x, roi_y = visibility.nirda_roi_x, visibility.nirda_roi_y
+        n_rows = max(1, int(np.ceil(len(by_target) / targets_per_row)))
+        # The NIRDA panel keeps its ROI's aspect next to the square VISDA
+        # frame, which also carries a colorbar.
+        nirda_width = roi_x / roi_y
+        fig = plt.figure(
+            figsize=(
+                targets_per_row * panel_height * (nirda_width + 1.0) * 1.3,
+                n_rows * panel_height + 1.0,
+            ),
+            layout="constrained",
+        )
+        grid = fig.add_gridspec(
+            n_rows,
+            2 * targets_per_row,
+            width_ratios=[nirda_width, 1.0] * targets_per_row,
+        )
+
+        for index, (target, sequences) in enumerate(by_target.items()):
+            row, col = divmod(index, targets_per_row)
+            nirda_ax = fig.add_subplot(grid[row, 2 * col])
+            visda_ax = fig.add_subplot(grid[row, 2 * col + 1])
+
+            minutes = np.array([seq.duration.sec / 60.0 for seq in sequences])
+            rolls = np.deg2rad([seq.roll for seq in sequences])
+            mean_roll = np.rad2deg(
+                np.arctan2(
+                    np.sum(minutes * np.sin(rolls)),
+                    np.sum(minutes * np.cos(rolls)),
+                )
+            )
+            offsets = (np.rad2deg(rolls) - mean_roll + 180.0) % 360.0 - 180.0
+            nirda_title = f"{target} NIRDA"
+            if np.ptp(offsets) > 0.05:
+                nirda_title += (
+                    f"\nvisits {offsets.min():+.1f} to {offsets.max():+.1f}°"
+                    " from mean"
+                )
+            coord = SkyCoord(
+                sequences[0].ra, sequences[0].dec, unit="deg", frame="icrs"
+            )
+            epoch = sequences[0].start_time
+
+            field = star_field.query_field(coord, epoch)
+            if field is None:
+                # No Gaia star at the target, so the trace check was skipped
+                nirda_ax.text(
+                    0.5,
+                    0.5,
+                    "no Gaia star\nat the target",
+                    ha="center",
+                    va="center",
+                    transform=nirda_ax.transAxes,
+                )
+                nirda_ax.set_title(nirda_title, fontsize=9)
+            else:
+                trace.plot_trace(
+                    field,
+                    mean_roll * u.deg,
+                    roi_x,
+                    roi_y,
+                    ax=nirda_ax,
+                    title=nirda_title,
+                )
+            visda.plot_visible_field(
+                star_field.query_visible_field(
+                    coord, epoch, visda.field_radius_arcmin()
+                ),
+                mean_roll * u.deg,
+                ax=visda_ax,
+                title=f"{target} VISDA",
+            )
+
+        if not by_target:
+            fig.text(0.5, 0.5, "No observations", ha="center", va="center")
+        fig.suptitle(
+            f"{title}\nEach target at its duration-weighted mean roll; NIRDA "
+            "c is the trace contamination (tolerance "
+            f"{getattr(visibility, 'trace_contamination_tol', np.nan):g})",
+            fontsize=14,
+        )
         return fig
