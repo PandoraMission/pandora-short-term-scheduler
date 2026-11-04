@@ -703,7 +703,14 @@ class ScheduleProcessor:
         window_duration_days: int,
         verbose: bool,
     ) -> ScienceCalendar:
-        """Extract time-based window from calendar."""
+        """Extract time-based window from calendar.
+
+        A sequence is kept, whole, when it starts inside the window. So
+        ``window_start`` is a hard edge: one that started before it belongs
+        to the previous calendar, which may run it, or grow it, past its own
+        end. ``window_end`` is soft, a sequence starting before it keeps its
+        full length.
+        """
         if isinstance(window_start, str):
             window_start = Time(window_start, format="isot", scale="utc")
 
@@ -726,15 +733,8 @@ class ScheduleProcessor:
                 )
             windowed_sequences = []
             for seq in visit.sequences:
-                seq_start = seq.start_time
-                seq_stop = seq.stop_time
-
-                # Include sequence if it overlaps with window. First complete sequence.
-                if (
-                    seq_start < window_end
-                    and seq_stop > window_start
-                    and seq_start >= window_start
-                ):
+                # Starts inside the window; may run past its end.
+                if window_start <= seq.start_time < window_end:
                     windowed_sequences.append(seq)
 
             if windowed_sequences:
@@ -1725,7 +1725,10 @@ class ScheduleProcessor:
         This grows each observation outward into the idle time around it for
         as long as the target stays visible at its scheduled roll, bounded by:
         - the neighboring observations, so growth can never create an
-          overlap, and
+          overlap,
+        - ``window_start``, so nothing grows back into the previous
+          calendar (``window_end`` is no bound: growth may carry an
+          observation into the next calendar), and
         - ``max_movement_minutes`` either side of the long-term start and
           stop, so an observation grows in place instead of drifting.
 
@@ -1820,6 +1823,11 @@ class ScheduleProcessor:
             edge, bound = seq.start_time, original[0] - limit * u.min
         else:
             edge, bound = seq.stop_time, original[1] + limit * u.min
+        # Nothing grows back before the window start, which is the previous
+        # calendar's time. The window end is soft, so stops are not bound.
+        window_start = getattr(self, "window_start", None)
+        if direction < 0 and window_start is not None:
+            bound = max(bound, window_start)
         own_bound = bound
 
         # The neighbor on this side, and how far into it the grower may
