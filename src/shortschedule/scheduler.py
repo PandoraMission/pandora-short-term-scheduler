@@ -179,6 +179,7 @@ class ScheduleProcessor:
         max_movement_minutes: int = 45,
         grow_by_priority: bool = True,
         drop_priority0: bool = False,
+        refine_edges_to_second: bool = True,
         earthlimb_gap_tolerance: int = 0,
         earthlimb_gap_tolerance_start_buffer: int = 7.5,
         st_gap_tolerance: int = 0,
@@ -328,6 +329,19 @@ class ScheduleProcessor:
             warning. Merging also drops priority 0s that are all that
             separates two otherwise mergeable priority-1/2 observations
             (default False).
+        refine_edges_to_second : bool, optional
+            Every other pass judges visibility once a minute, so a target
+            can leave the keepouts anywhere inside an observation's last
+            minute, or still be visible for part of the minute past a
+            boundary. With this on, a final pass rechecks the minute either
+            side of each start and stop at 1 s, at the roll the observation
+            flies, and moves the boundary to the second: in, where the
+            target leaves visibility inside the observation's first or last
+            minute, and out, into free time the target is visible for,
+            within the neighbors and ``max_movement_minutes``. A cut under
+            ``min_sequence_duration`` is logged as a warning, and with
+            ``drop_priority0`` a priority 0 cut that short is dropped
+            (default True).
         earthlimb_gap_tolerance : int, optional
             Maximum number of contiguous minutes of earth-limb
             visibility violations to tolerate within a sequence
@@ -460,6 +474,7 @@ class ScheduleProcessor:
         self.max_movement_minutes = max_movement_minutes
         self.grow_by_priority = grow_by_priority
         self.drop_priority0 = drop_priority0
+        self.refine_edges_to_second = refine_edges_to_second
 
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
@@ -1291,8 +1306,17 @@ class ScheduleProcessor:
             working_calendar, original_timing
         )
 
-        # Overlaps can never be flown, so this has the last word on timing.
+        # Overlaps can never be flown, so this has the last say on how
+        # observations share time.
         working_calendar = self._repair_overlaps(working_calendar)
+
+        # Everything above works in whole minutes; settle each boundary to
+        # the second. Only moves within free time and the target's own
+        # visibility, so it cannot create an overlap.
+        if getattr(self, "refine_edges_to_second", False):
+            working_calendar = self._refine_edges_to_second(
+                working_calendar, original_timing
+            )
 
         # A transit can end up short only if the long-term calendar left it
         # short or overlap repair cut it; either needs a look.
@@ -2399,6 +2423,200 @@ class ScheduleProcessor:
                 )
 
         self.gap_report["processing_summary"]["overlaps_repaired"] = repaired
+        return calendar
+
+    def _refine_edges_to_second(
+        self,
+        calendar: ScienceCalendar,
+        original_timing: Dict[Any, Any],
+    ) -> ScienceCalendar:
+        """Move each start and stop to the second visibility puts it at.
+
+        Every other pass samples visibility once a minute, so a target can
+        leave the keepouts anywhere inside an observation's first or last
+        minute without a sample seeing it, and a boundary stopped at a dark
+        minute sample may have had most of the minute before that sample
+        visible. Each boundary is rechecked at 1 s over the minute either
+        side of it, at the roll the observation flies:
+
+        - In: a stop whose last minute opens visible is pulled back to the
+          first dark second in that minute, and a start whose first minute
+          opens visible is pushed past the last dark second in it.
+        - Out: a boundary with no dark second inside that minute moves
+          outward over the seconds the target stays visible, up to a
+          minute, never past a neighbor or ``max_movement_minutes`` from
+          its long-term time. A visible second clears both start buffers,
+          so a start moved earlier this way still opens cleanly.
+
+        A boundary whose own minute sample is dark was left there by an
+        earlier pass on purpose and is not touched. Pulling a boundary in
+        is applied even when it costs a transit core a minute (an error),
+        since those seconds cannot be observed. A cut that takes an
+        observation under ``min_sequence_duration`` is a warning; with
+        ``drop_priority0`` a priority 0 cut that short is dropped instead
+        (and a visit left empty with it), while any other is kept short.
+        Times are modified in place.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar after overlap repair.
+        original_timing : dict
+            Long-term ``(start, stop)`` per ``(visit_id, sequence_id)``,
+            for the movement limit.
+
+        Returns
+        -------
+        ScienceCalendar
+            The same calendar, boundaries refined.
+        """
+        limit = getattr(self, "max_movement_minutes", 0) or 0
+        ordered = self._ordered_sequences(calendar)
+        offsets = np.arange(-60, 60)
+        seconds_in = seconds_out = moved_in = moved_out = 0
+        # (visit_id, seq_id) of priority-0 observations a cut took under
+        # the minimum, with drop_priority0 on.
+        dropped = set()
+
+        def room(seconds: float) -> int:
+            # Whole seconds of free time, never negative or over a minute.
+            return int(min(60, max(0, np.floor(seconds + 1e-6))))
+
+        for index, (visit_id, seq) in enumerate(
+            self._progress(
+                ordered, desc="Refining edges to the second", total=len(ordered)
+            )
+        ):
+            start, stop = seq.start_time, seq.stop_time
+            coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+            # One query: the minute either side of the start, then of the
+            # stop. Slices are [start-60 s, start), [start, start+60 s),
+            # [stop-60 s, stop), [stop, stop+60 s).
+            deltas = np.concatenate([offsets, (stop - start).sec + offsets])
+            vis = self._visibility_for_sequence(seq, coord, start + deltas * u.s)
+            outside_start, inside_start = vis[:60], vis[60:120]
+            inside_stop, outside_stop = vis[120:180], vis[180:]
+            original = original_timing.get((visit_id, seq.id))
+
+            new_start = start
+            if inside_start[0]:
+                if not inside_start.all():
+                    later = int(np.flatnonzero(~inside_start)[-1]) + 1
+                    new_start = start + later * u.s
+                else:
+                    free = 60
+                    previous = index - 1
+                    while (
+                        previous >= 0
+                        and (ordered[previous][0], ordered[previous][1].id)
+                        in dropped
+                    ):
+                        previous -= 1
+                    if previous >= 0:
+                        free = room((start - ordered[previous][1].stop_time).sec)
+                    if original is not None and limit > 0:
+                        free = min(
+                            free,
+                            room((start - (original[0] - limit * u.min)).sec),
+                        )
+                    dark = np.flatnonzero(~outside_start)
+                    visible = 60 - (int(dark[-1]) + 1) if dark.size else 60
+                    new_start = start - min(visible, free) * u.s
+
+            new_stop = stop
+            if inside_stop[0]:
+                if not inside_stop.all():
+                    first_dark = int(np.flatnonzero(~inside_stop)[0])
+                    new_stop = stop + (first_dark - 60) * u.s
+                else:
+                    free = 60
+                    if index + 1 < len(ordered):
+                        free = room((ordered[index + 1][1].start_time - stop).sec)
+                    if original is not None and limit > 0:
+                        free = min(
+                            free,
+                            room(((original[1] + limit * u.min) - stop).sec),
+                        )
+                    dark = np.flatnonzero(~outside_stop)
+                    visible = int(dark[0]) if dark.size else 60
+                    new_stop = stop + min(visible, free) * u.s
+
+            d_start = int(np.rint((new_start - start).sec))
+            d_stop = int(np.rint((new_stop - stop).sec))
+            if d_start == 0 and d_stop == 0:
+                continue
+
+            prefix = self._seq_prefix(visit_id, seq)
+            if d_start > 0 or d_stop < 0:
+                if self._below_minimum_duration(new_stop - new_start):
+                    short = (
+                        f"{prefix} | EDGES: the target is not visible at 1 s "
+                        "resolution inside its first or last minute; cutting "
+                        f"that leaves {(new_stop - new_start).sec / 60:.1f} "
+                        "min, under "
+                        f"{self.min_sequence_duration.sec / 60:.0f} min"
+                    )
+                    if int(seq.priority or 0) == 0 and getattr(
+                        self, "drop_priority0", False
+                    ):
+                        dropped.add((visit_id, seq.id))
+                        self._print(f"WARNING: {short}. Dropped (drop_priority0).")
+                        continue
+                    self._print(f"WARNING: {short}.")
+                self._transit_allows(
+                    calendar,
+                    visit_id,
+                    seq,
+                    new_start,
+                    new_stop,
+                    "cutting seconds the target is not visible for",
+                    refuse=False,
+                )
+
+            for boundary, change, pulled_in in (
+                ("start", d_start, d_start > 0),
+                ("stop", d_stop, d_stop < 0),
+            ):
+                if change == 0:
+                    continue
+                if pulled_in:
+                    seconds_in += abs(change)
+                    moved_in += 1
+                    why = "the target is not visible past there (1 s check)"
+                else:
+                    seconds_out += abs(change)
+                    moved_out += 1
+                    why = "the target is visible that far (1 s check)"
+                self._note_timing(
+                    visit_id,
+                    seq.id,
+                    f"{boundary}: {abs(change)} s "
+                    f"{'later' if change > 0 else 'earlier'}, {why}",
+                )
+            seq.start_time, seq.stop_time = new_start, new_stop
+
+        if dropped:
+            for visit in calendar.visits:
+                visit.sequences = [
+                    seq
+                    for seq in visit.sequences
+                    if (visit.id, seq.id) not in dropped
+                ]
+            calendar.visits = [
+                visit for visit in calendar.visits if visit.sequences
+            ]
+
+        summary = self.gap_report["processing_summary"]
+        summary["edge_seconds_cut"] = seconds_in
+        summary["edge_seconds_grown"] = seconds_out
+        summary["priority_0_dropped"] = (
+            summary.get("priority_0_dropped", 0) + len(dropped)
+        )
+        self._print(
+            f"Refined edges to the second: {moved_in} boundaries pulled in "
+            f"({seconds_in} s), {moved_out} pushed out ({seconds_out} s), "
+            f"{len(dropped)} priority-0 observation(s) dropped."
+        )
         return calendar
 
     def _enforce_start_buffers(
@@ -4469,6 +4687,9 @@ class ScheduleProcessor:
             "Max_Movement_Min": str(self.max_movement_minutes),
             "Grow_By_Priority": str(self.grow_by_priority),
             "Drop_Priority0": str(getattr(self, "drop_priority0", False)),
+            "Refine_Edges_To_Second": str(
+                getattr(self, "refine_edges_to_second", False)
+            ),
             "Roll_Step_Deg": f"{float(self.roll_step):g}",
             "Min_Power_Frac": f"{float(self.min_power_frac):g}",
             "Use_Trace_Sweep": str(
@@ -4700,6 +4921,8 @@ class ScheduleProcessor:
                 "transit_changes_refused": 0,
                 "boundaries_clamped": 0,
                 "overlaps_repaired": 0,
+                "edge_seconds_cut": 0,
+                "edge_seconds_grown": 0,
                 "original_gap_time_minutes": 0,
                 "duty_cycle_improvement_percent": 0,
                 "duration_improvement_minutes": 0,
@@ -4866,6 +5089,11 @@ class ScheduleProcessor:
         )
         self._print(
             f"  Overlaps Repaired: {summary.get('overlaps_repaired', 0)}"
+        )
+        self._print(
+            f"  Edges Refined To The Second: "
+            f"{summary.get('edge_seconds_cut', 0)} s cut where the target "
+            f"is not visible, {summary.get('edge_seconds_grown', 0)} s grown"
         )
 
     def debug_sequence_visibility(

@@ -28,7 +28,7 @@ from shortschedule.visualizer import ScheduleVisualizer
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
-xml_file_path = Path("G:\\","Other computers","Joe Desktop","Work Documents","Organizations","NASA - Pandora","Short Term Scheduler","WY45-2026-11-02","long-term","Pandora_science_calendar.xml")
+xml_file_path = Path("G:\\","Other computers","Joe Desktop","Work Documents","Organizations","NASA - Pandora","Short Term Scheduler","WY46_2026-11-09","long-term","Pandora_science_calendar_HD_29037_window.xml")
 
 # Base name (without extension) used to label the output plots, e.g.
 # "Pandora_science_calendar".
@@ -36,8 +36,8 @@ calendar_name = xml_file_path.stem
 
 # Observing window: the short-term schedule is built starting at ``window_start``
 # and spanning ``window_duration_days``.
-window_start = Time("2026-11-01T23:44:20Z")
-window_duration_days = 7.0015
+window_start = Time("2026-11-09T00:00:00Z")
+window_duration_days = 7.0
 
 # Whether the visibility Gantt also paints the prescribed roll of each
 # observation on the lower half of its bar, with a colorbar.
@@ -46,10 +46,10 @@ plot_rolls = False
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
 new_tle1 = (
-    "1 67395U 80229J   26300.82081019  .00000000  00000-0  25284-5 0    00"
+    "1 67395U 26004AJ  26307.75618341  .00000364  00000-0  45342-4 0  9990"
 )
 new_tle2 = (
-    "2 67395  97.8121 297.4948 0006830  58.6710 246.7835 14.88256756    04"
+    "2 67395  97.8123 304.3299 0006134  41.6656 318.5027 14.88249946 44036"
 )
 
 # ---------------------------------------------------------------------------
@@ -93,6 +93,7 @@ scheduler = ScheduleProcessor(
     min_power_frac=0.68,  # min acceptable orbit-average power fraction
     grow_by_priority=True,  # higher priorities grow first and may take time from lower-priority neighbors
     drop_priority0=True,  # let a priority 1/2 grow past (and drop) a priority 0, or merge across priority-0 filler
+    refine_edges_to_second=True,  # last pass: recheck the minute either side of every start/stop at 1 s and move it to the second the target is visible
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
     fix_bad_data=True,  # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------
@@ -118,8 +119,8 @@ scheduler = ScheduleProcessor(
                 "SC_Groups": 2,
             },
             "AcquireVisCamScienceData": {
-                "FramesPerCoadd": 50,
                 "StarRoiDimension": 75,
+                "FramesPerCoadd": 50
             },
         },
         "Priority_1": {
