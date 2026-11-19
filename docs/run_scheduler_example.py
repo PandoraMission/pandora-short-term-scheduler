@@ -28,7 +28,7 @@ from shortschedule.visualizer import ScheduleVisualizer
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
-xml_file_path = Path("G:\\","Other computers","Joe Desktop","Work Documents","Organizations","NASA - Pandora","Short Term Scheduler","WY47_2026-11-16","Longterm","Pandora_science_calendar_HD_29037_window_JPR_Edit3.xml")
+xml_file_path = Path("Path","To", "Longterm", "calendar.xml")
 
 # Base name (without extension) used to label the output plots, e.g.
 # "Pandora_science_calendar".
@@ -36,7 +36,7 @@ calendar_name = xml_file_path.stem
 
 # Observing window: the short-term schedule is built starting at ``window_start``
 # and spanning ``window_duration_days``.
-window_start = Time("2026-11-16T00:00:00Z")
+window_start = Time("2026-11-23T00:00:00Z")
 window_duration_days = 7.0
 
 # Whether the visibility Gantt also paints the prescribed roll of each
@@ -46,10 +46,10 @@ plot_rolls = False
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
 new_tle1 = (
-    "1 67395U 26004AJ  26314.21065720  .00000748  00000-0  86864-4 0  9996"
+    "1 67395U 26004AJ  26320.26168606  .00000672  00000-0  78625-4 0  9997"
 )
 new_tle2 = (
-    "2 67395  97.8122 310.6907 0005707  23.2428 336.9045 14.88259735 44995"
+    "2 67395  97.8127 316.6539 0005210   5.0283 355.0985 14.88269058 45897"
 )
 
 # ---------------------------------------------------------------------------
@@ -75,11 +75,11 @@ scheduler = ScheduleProcessor(
     earthlimb_day_min=44,  # min Earth-limb angle, daytime (deg)
     earthlimb_night_min=13,  # min Earth-limb angle, nighttime (deg)
     occultation_earthlimb_min=69,  # if not `None`: min Earth-limb angle for every target except each visit's main target (its priority 1/2 target, else its non-Gaia target with the most minutes), so they can be used to dissipate heat. No day/night or dynamic illumination angle is used. All other keepouts are left the same.
-    occultation_overrides=['HD_29037', 'TOI-5349', 'Titan', 'NGC_1433_SN'],  # list of target names that fly the standard keepouts even when not their visit's main target. Growth order is unchanged (still by priority).
+    occultation_overrides=[],  # list of target names that fly the standard keepouts even when not their visit's main target. Growth order is unchanged (still by priority).
     sun_min=91,  # min payload Sun keel angle (deg)
-    moon_min=20,  # min payload Moon keel angle (deg)
+    moon_min=15,  # min payload Moon keel angle (deg)
     st_sun_min=50,  # min star-tracker Sun angle (deg)
-    st_moon_min=20,  # min star-tracker Moon angle (deg)
+    st_moon_min=15,  # min star-tracker Moon angle (deg)
     st_earthlimb_min=30,  # min star-tracker Earth-limb angle (deg)
     use_dynamic_earthlimb=True,  # Use dynamic DPC Earth Limb keepout flag.
     use_trace_sweep=True,  # reject rolls where neighbor stars' NIRDA traces contaminate the target. Needs the gaiaoffline database.
@@ -96,7 +96,7 @@ scheduler = ScheduleProcessor(
     high_priority_adds_max_duration=90,  # longest addition (minutes); longer idle stretches are split
     high_priority_adds_min_observations=3,  # a target with fewer additions gets none, and its time goes to the other targets
     high_priority_adds_transit_buffer_min=40,  # an addition overlapping T1 - this .. T4 + this is priority 1, otherwise 0
-    high_priority_adds_exclude=['Titan', 'NGC_1433_SN'],  # target names never given additions; None adds every priority 1/2 target
+    high_priority_adds_exclude=[],  # target names never given additions; None adds every priority 1/2 target
     roll_step=1.0,  # roll search step size (deg)
     min_power_frac=0.68,  # min acceptable orbit-average power fraction
     grow_by_priority=True,  # grow by priority (main target first at equal priority, earlier visit first at equal rank); each may take time from lower-ranked neighbors, or equal-ranked ones in a later visit
@@ -211,7 +211,7 @@ scheduler.generate_diagnostics(
 # Write the scheduled calendar back out as XML
 # ---------------------------------------------------------------------------
 print("\n\nWriting calendar...")
-XMLWriter().write_calendar(processed_calendar, mission_phase="COM")
+XMLWriter().write_calendar(processed_calendar, mission_phase="SCI")
 
 
 # ---------------------------------------------------------------------------
