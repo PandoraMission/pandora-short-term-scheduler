@@ -8,7 +8,8 @@ how much each counts, and which keepout model applies.
 """
 
 # Standard library
-from typing import Any, Collection, Dict, Optional
+from collections.abc import Collection
+from typing import Any
 
 # Third-party
 import numpy as np
@@ -23,11 +24,11 @@ def get_best_roll_per_visit(
     visit: Any,
     visibility: Any,
     roll_step: float = 1.0,
-    min_power_frac: Optional[float] = None,
+    min_power_frac: float | None = None,
     occultation_visibility: Any = None,
     occultation_overrides: Collection[str] = (),
     growth_margin_minutes: float = 0.0,
-) -> Dict[str, dict]:
+) -> dict[str, dict]:
     """Choose one roll per target in ``visit`` and write it onto its sequences.
 
     The minutes scored are every scheduled minute of the target in this
@@ -71,7 +72,7 @@ def get_best_roll_per_visit(
         roll sees a scored minute but every such roll fails the NIRDA
         trace check.
     """
-    by_target: Dict[str, list] = {}
+    by_target: dict[str, list] = {}
     for seq in visit.sequences:
         by_target.setdefault(seq.target, []).append(seq)
 
@@ -80,7 +81,7 @@ def get_best_roll_per_visit(
     override_names = {
         clean_target_name(name) for name in occultation_overrides
     }
-    results: Dict[str, dict] = {}
+    results: dict[str, dict] = {}
     for target, sequences in by_target.items():
         sequences = sorted(sequences, key=lambda s: s.start_time)
         origin = sequences[0].start_time

@@ -14,7 +14,7 @@ from astropy.time import TimeDelta
 # First-party/Local
 from shortschedule.models import ScienceCalendar, Visit
 from shortschedule.scheduler import ScheduleProcessor
-from tests.test_edge_refinement import T0, _SecondsVis, _at, _off_by, _seq
+from tests.test_edge_refinement import T0, _at, _off_by, _SecondsVis, _seq
 
 # A one-hour window, 01:00 to 02:00 after T0.
 START, DAYS = _at(60), 1.0 / 24.0

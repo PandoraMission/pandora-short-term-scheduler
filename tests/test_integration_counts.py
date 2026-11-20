@@ -1,8 +1,8 @@
 # Standard library
 import copy
-import unittest.mock as mock
 import warnings
 import xml.etree.ElementTree as ET
+from unittest import mock
 
 # Third-party
 import pytest
@@ -1269,15 +1269,14 @@ class TestScheduleProcessorOverheadValidation:
 
     def test_plain_number_raises_type_error(self):
         """A plain number (no units) must raise TypeError."""
-        with mock.patch("shortschedule.scheduler.Visibility"):
-            with pytest.raises(
-                TypeError, match="astropy Quantity or TimeDelta"
-            ):
-                ScheduleProcessor(
-                    "L1",
-                    "L2",
-                    nirda_pre_sequence_overhead=258,  # bare int, no units
-                )
+        with mock.patch("shortschedule.scheduler.Visibility"), pytest.raises(
+            TypeError, match="astropy Quantity or TimeDelta"
+        ):
+            ScheduleProcessor(
+                "L1",
+                "L2",
+                nirda_pre_sequence_overhead=258,  # bare int, no units
+            )
 
 
 # ---------------------------------------------------------------------------

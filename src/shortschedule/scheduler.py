@@ -18,6 +18,17 @@ observation around the time the long-term calendar chose for it rather
 than sliding observations to close gaps.
 """
 
+# Standard library
+import copy
+import logging
+import re
+import uuid
+import warnings
+import xml.etree.ElementTree as ET
+from collections import defaultdict
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
+
 from .models import (  # BAD_NAME_SYMBOLS re-exported for existing imports
     BAD_NAME_SYMBOLS,  # noqa: F401
     ObservationSequence,
@@ -36,23 +47,12 @@ from .transit import (
 )
 from .visda import VisdaData
 
-# Standard library
-import copy
-import logging
-import re
-import uuid
-import warnings
-import xml.etree.ElementTree as ET
-from collections import defaultdict
-from copy import deepcopy
-from datetime import datetime, timedelta, timezone
-
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Third-party
 import numpy as np
@@ -129,8 +129,8 @@ class ScheduleProcessor:
 
     @staticmethod
     def _to_deg(
-        value: Optional[float],
-    ) -> Optional[u.Quantity]:
+        value: float | None,
+    ) -> u.Quantity | None:
         """Convert a plain float (degrees) to an astropy Quantity.
 
         Returns *None* unchanged so callers can use ``None`` to fall back
@@ -148,31 +148,29 @@ class ScheduleProcessor:
         vda_post_sequence_overhead: u.Quantity | None = None,
         nirda_pre_sequence_overhead: u.Quantity | None = None,
         nirda_post_sequence_overhead: u.Quantity | None = None,
-        override_nirda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
-        override_visda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
-        override_payload_parameters: Optional[
-            Dict[Any, Dict[str, Dict[str, Any]]]
-        ] = None,
+        override_nirda_parameters: dict[int, dict[str, Any]] | None = None,
+        override_visda_parameters: dict[int, dict[str, Any]] | None = None,
+        override_payload_parameters: dict[Any, dict[str, dict[str, Any]]] | None = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
         vitl_settling_time: u.Quantity = 60.0 * u.s,
         convert_single_roi_to_predefined: bool = True,
         fix_bad_data: bool = True,
-        moon_min: Optional[float] = None,
-        sun_min: Optional[float] = None,
-        earthlimb_min: Optional[float] = None,
-        earthlimb_day_min: Optional[float] = None,
-        earthlimb_night_min: Optional[float] = None,
-        occultation_earthlimb_min: Optional[float] = None,
-        occultation_overrides: Optional[List[str]] = None,
-        mars_min: Optional[float] = None,
-        jupiter_min: Optional[float] = None,
-        st_sun_min: Optional[float] = None,
-        st_moon_min: Optional[float] = None,
-        st_earthlimb_min: Optional[float] = None,
-        st1_earthlimb_min: Optional[float] = None,
-        st2_earthlimb_min: Optional[float] = None,
+        moon_min: float | None = None,
+        sun_min: float | None = None,
+        earthlimb_min: float | None = None,
+        earthlimb_day_min: float | None = None,
+        earthlimb_night_min: float | None = None,
+        occultation_earthlimb_min: float | None = None,
+        occultation_overrides: list[str] | None = None,
+        mars_min: float | None = None,
+        jupiter_min: float | None = None,
+        st_sun_min: float | None = None,
+        st_moon_min: float | None = None,
+        st_earthlimb_min: float | None = None,
+        st1_earthlimb_min: float | None = None,
+        st2_earthlimb_min: float | None = None,
         roll_step: float = 1.0,
         min_power_frac: float = 0.7,
         max_movement_minutes: int = 45,
@@ -183,22 +181,22 @@ class ScheduleProcessor:
         earthlimb_gap_tolerance_start_buffer: int = 7.5,
         st_gap_tolerance: int = 0,
         st_gap_tolerance_start_buffer: int = 7.5,
-        use_dynamic_earthlimb: Optional[bool] = None,
-        use_trace_sweep: Optional[bool] = None,
-        trace_contamination_tol: Optional[float] = None,
-        nirda_roi_x: Optional[int] = None,
-        nirda_roi_y: Optional[int] = None,
+        use_dynamic_earthlimb: bool | None = None,
+        use_trace_sweep: bool | None = None,
+        trace_contamination_tol: float | None = None,
+        nirda_roi_x: int | None = None,
+        nirda_roi_y: int | None = None,
         drop_observations_based_on_trace: bool = False,
-        target_list_dir: Optional[str] = None,
+        target_list_dir: str | None = None,
         transit_middle_frac: float = 0.75,
         transit_duration_constraint_min: float = 15.0,
         add_high_pri_observations: bool = False,
-        high_priority_adds_earthlimb_min: Optional[float] = None,
+        high_priority_adds_earthlimb_min: float | None = None,
         high_priority_adds_min_duration: float = 10.0,
         high_priority_adds_max_duration: float = 90.0,
         high_priority_adds_min_observations: int = 5,
         high_priority_adds_transit_buffer_min: float = 40.0,
-        high_priority_adds_exclude: Optional[List[str]] = None,
+        high_priority_adds_exclude: list[str] | None = None,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -484,7 +482,7 @@ class ScheduleProcessor:
         self.tle_line1 = tle_line1
         self.tle_line2 = tle_line2
 
-        _kw: Dict[str, Any] = dict(
+        _kw: dict[str, Any] = dict(
             moon_min=self._to_deg(moon_min),
             sun_min=self._to_deg(sun_min),
             earthlimb_min=self._to_deg(earthlimb_min),
@@ -643,15 +641,15 @@ class ScheduleProcessor:
         # step. Structure: { priority: {field_name: value-or-None} }, where a
         # None value means "use the data-class default". An iterable of field
         # names is also accepted (treated as all-default).
-        self._override_nirda_parameters: Dict[int, Any] = (
+        self._override_nirda_parameters: dict[int, Any] = (
             override_nirda_parameters or {}
         )
-        self._override_visda_parameters: Dict[int, Any] = (
+        self._override_visda_parameters: dict[int, Any] = (
             override_visda_parameters or {}
         )
         # General per-priority XML-tag payload overrides (cleaner config.json
         # format). Normalized to int priority keys.
-        self._override_payload_parameters: Dict[int, Any] = (
+        self._override_payload_parameters: dict[int, Any] = (
             self._normalize_priority_keys(override_payload_parameters)
         )
 
@@ -688,10 +686,10 @@ class ScheduleProcessor:
     def process_calendar(
         self,
         calendar: ScienceCalendar,
-        window_start: Optional[Any] = None,
+        window_start: Any | None = None,
         window_duration_days: int = 21,
         merge_similar_observations: bool = True,
-        log_path: Optional[Any] = None,
+        log_path: Any | None = None,
         verbose: bool = False,
     ) -> ScienceCalendar:
         """Process a `ScienceCalendar` and return an updated calendar.
@@ -831,7 +829,7 @@ class ScheduleProcessor:
         # The validators are run for the report, not for the verdict. Under
         # the gap tolerances a healthy calendar legitimately contains
         # keepout violations, and merging can absorb one deliberately.
-        validation_counts: Dict[str, int] = {}
+        validation_counts: dict[str, int] = {}
 
         target_issues = self.validate_target_names(
             processed_calendar, report_issues=False
@@ -917,7 +915,7 @@ class ScheduleProcessor:
 
     def _mark_main_targets(
         self, calendar: ScienceCalendar
-    ) -> Dict[str, List[str]]:
+    ) -> dict[str, list[str]]:
         """Choose each visit's main targets.
 
         A visit's main target is its priority 1/2 target. With none, it is
@@ -944,10 +942,10 @@ class ScheduleProcessor:
             Visit ID to the list of its main targets' names, empty when it
             has none. Also kept as ``self.main_targets``.
         """
-        main_targets: Dict[str, List[str]] = {}
+        main_targets: dict[str, list[str]] = {}
         for visit in calendar.visits:
-            minutes: Dict[str, float] = {}
-            science: List[str] = []
+            minutes: dict[str, float] = {}
+            science: list[str] = []
             for seq in visit.sequences:
                 minutes[seq.target] = (
                     minutes.get(seq.target, 0.0) + seq.duration.sec / 60.0
@@ -1021,7 +1019,7 @@ class ScheduleProcessor:
     def _extract_time_window(
         self,
         calendar: ScienceCalendar,
-        window_start: Optional[Any],
+        window_start: Any | None,
         window_duration_days: int,
         verbose: bool,
     ) -> ScienceCalendar:
@@ -1284,9 +1282,9 @@ class ScheduleProcessor:
         # Each candidate's source visit: the one with the most minutes of
         # it among those where it is priority 1/2, the earlier on a tie.
         # Target -> ((seconds, -visit index), template observation, visit).
-        sources: Dict[str, Tuple[Any, ObservationSequence, str]] = {}
+        sources: dict[str, tuple[Any, ObservationSequence, str]] = {}
         for order, visit in enumerate(calendar.visits):
-            by_target: Dict[str, List[ObservationSequence]] = {}
+            by_target: dict[str, list[ObservationSequence]] = {}
             for seq in visit.sequences:
                 by_target.setdefault(seq.target, []).append(seq)
             for target, sequences in by_target.items():
@@ -1328,13 +1326,13 @@ class ScheduleProcessor:
                 "known and every addition is priority 0."
             )
         model = self.high_priority_adds_visibility
-        usable: Dict[str, np.ndarray] = {}
-        in_window: Dict[str, np.ndarray] = {}
+        usable: dict[str, np.ndarray] = {}
+        in_window: dict[str, np.ndarray] = {}
         for target, (_, template, _) in sources.items():
             coord = SkyCoord(
                 template.ra, template.dec, unit="deg", frame="icrs"
             )
-            at_roll: Dict[Any, np.ndarray] = {}
+            at_roll: dict[Any, np.ndarray] = {}
             usable[target] = np.ones(n_minutes, dtype=bool)
             for k, visit in enumerate(calendar.visits):
                 need = (visit_before == k) | (visit_after == k)
@@ -1385,7 +1383,7 @@ class ScheduleProcessor:
         excluded = set()
         while True:
             free = ~occupied
-            placed: Dict[str, List[Tuple[int, int, bool]]] = {
+            placed: dict[str, list[tuple[int, int, bool]]] = {
                 target: [] for target in sources if target not in excluded
             }
             while True:
@@ -1432,7 +1430,7 @@ class ScheduleProcessor:
         # additions in one idle gap join the same visit, so visits stay in
         # time order: the visit before the gap or the one after it,
         # whichever more of them sit closer to (the one before on a tie).
-        gaps: Dict[Tuple[int, int], List[Tuple[str, int, int, bool]]] = {}
+        gaps: dict[tuple[int, int], list[tuple[str, int, int, bool]]] = {}
         for target, adds in placed.items():
             for start, stop, has_transit in adds:
                 gaps.setdefault(
@@ -1544,7 +1542,7 @@ class ScheduleProcessor:
             The same calendar instance, with IDs renumbered.
         """
         changed = 0
-        visit_id_map: Dict[str, str] = {}
+        visit_id_map: dict[str, str] = {}
         for visit_index, visit in enumerate(calendar.visits, start=1):
             new_visit_id = f"{visit_index:04d}"
             if visit.id is not None:
@@ -1641,7 +1639,7 @@ class ScheduleProcessor:
             Calendar with eligible sequences merged.
         """
         merged_count = 0
-        new_visits: List[Visit] = []
+        new_visits: list[Visit] = []
 
         # With drop_priority0, priority-0 observations that are all that
         # separates two otherwise mergeable higher-priority observations are
@@ -1705,7 +1703,7 @@ class ScheduleProcessor:
                 key=lambda s: s.start_time,
             )
 
-            merged_sequences: List[ObservationSequence] = []
+            merged_sequences: list[ObservationSequence] = []
             for seq in ordered:
                 if merged_sequences and self._can_merge(
                     merged_sequences[-1],
@@ -1772,7 +1770,7 @@ class ScheduleProcessor:
         self,
         first: ObservationSequence,
         second: ObservationSequence,
-        occupied: Optional[List[Tuple[Time, Time]]] = None,
+        occupied: list[tuple[Time, Time]] | None = None,
         judge_join: bool = False,
     ) -> bool:
         """Return True if ``second`` can be merged into ``first``.
@@ -2188,7 +2186,7 @@ class ScheduleProcessor:
         return working_calendar
 
     def _log_timing_changes(
-        self, calendar: ScienceCalendar, original_timing: Dict[Any, Any]
+        self, calendar: ScienceCalendar, original_timing: dict[Any, Any]
     ) -> None:
         """Log per-sequence shrink/elongate vs the snapshot in
         original_timing (keyed by ``(visit_id, sequence_id)``).
@@ -2261,7 +2259,7 @@ class ScheduleProcessor:
 
     def _get_synchronized_time_grid(
         self, calendar: ScienceCalendar
-    ) -> Tuple[int, Optional[Time], Optional[Time], Any]:
+    ) -> tuple[int, Time | None, Time | None, Any]:
         """Create a minute-resolution time grid covering all sequences.
 
         Returns a tuple (total_minutes, start_time, end_time, time_grid)
@@ -2375,7 +2373,7 @@ class ScheduleProcessor:
         working_cal = deepcopy(calendar)
 
         # Collect all sequences globally, sorted by start_time
-        all_sequences: List[Tuple[str, ObservationSequence]] = []
+        all_sequences: list[tuple[str, ObservationSequence]] = []
         for visit in working_cal.visits:
             for seq in visit.sequences:
                 all_sequences.append((visit.id, seq))
@@ -2549,7 +2547,7 @@ class ScheduleProcessor:
         self,
         target_coord: SkyCoord,
         time: Time,
-        roll: Optional[float],
+        roll: float | None,
         visibility: Any = None,
     ) -> bool:
         """Whether the star-tracker keepout fails at ``time`` for this roll.
@@ -2592,7 +2590,7 @@ class ScheduleProcessor:
         times: Any,
         gap_start: int,
         gap_length: int,
-        roll: Optional[float] = None,
+        roll: float | None = None,
         visibility: Any = None,
     ) -> bool:
         """Check whether a non-visible gap is short enough to tolerate.
@@ -2668,7 +2666,7 @@ class ScheduleProcessor:
         working_cal = deepcopy(calendar)
 
         # Collect all sequences globally, sorted by start_time.
-        all_sequences: List[Tuple[str, ObservationSequence]] = []
+        all_sequences: list[tuple[str, ObservationSequence]] = []
         for visit in working_cal.visits:
             for seq in visit.sequences:
                 all_sequences.append((visit.id, seq))
@@ -2757,7 +2755,7 @@ class ScheduleProcessor:
 
     def _ordered_sequences(
         self, calendar: ScienceCalendar
-    ) -> List[Tuple[str, ObservationSequence]]:
+    ) -> list[tuple[str, ObservationSequence]]:
         """Return ``(visit_id, sequence)`` pairs in start-time order."""
         pairs = [
             (visit.id, seq)
@@ -2770,7 +2768,7 @@ class ScheduleProcessor:
     def _grow_into_free_time(
         self,
         calendar: ScienceCalendar,
-        original_timing: Dict[Any, Any],
+        original_timing: dict[Any, Any],
     ) -> ScienceCalendar:
         """Extend observations into adjacent idle time while still visible.
 
@@ -2873,7 +2871,7 @@ class ScheduleProcessor:
         return calendar
 
     @staticmethod
-    def _growth_rank(seq: ObservationSequence) -> Tuple[int, int]:
+    def _growth_rank(seq: ObservationSequence) -> tuple[int, int]:
         """Where ``seq`` stands in growth under ``grow_by_priority``.
 
         The higher priority ranks higher; at equal priority a visit's main
@@ -2900,11 +2898,11 @@ class ScheduleProcessor:
 
     def _grow_one_side(
         self,
-        ordered: List[Tuple[str, ObservationSequence]],
+        ordered: list[tuple[str, ObservationSequence]],
         index: int,
         direction: int,
-        original_timing: Dict[Any, Any],
-    ) -> Tuple[int, int]:
+        original_timing: dict[Any, Any],
+    ) -> tuple[int, int]:
         """Grow one boundary of ``ordered[index]``.
 
         ``direction`` -1 grows the start earlier, +1 the stop later; see
@@ -3228,7 +3226,7 @@ class ScheduleProcessor:
         visible: np.ndarray,
         times: Any,
         target_coord: SkyCoord,
-        roll: Optional[float],
+        roll: float | None,
         visibility: Any = None,
     ) -> int:
         """How many of ``times`` an observation may absorb, walking outward.
@@ -3273,7 +3271,7 @@ class ScheduleProcessor:
     def _clamp_movement(
         self,
         calendar: ScienceCalendar,
-        original_timing: Dict[Any, Any],
+        original_timing: dict[Any, Any],
     ) -> ScienceCalendar:
         """Hold every boundary within ``max_movement_minutes`` of its plan.
 
@@ -3436,7 +3434,7 @@ class ScheduleProcessor:
     def _refine_edges_to_second(
         self,
         calendar: ScienceCalendar,
-        original_timing: Dict[Any, Any],
+        original_timing: dict[Any, Any],
         added_only: bool = False,
     ) -> ScienceCalendar:
         """Move each start and stop to the second visibility puts it at.
@@ -3765,7 +3763,7 @@ class ScheduleProcessor:
         seq: ObservationSequence,
         times: Any,
         target_coord: SkyCoord,
-    ) -> List[Tuple[str, int, np.ndarray]]:
+    ) -> list[tuple[str, int, np.ndarray]]:
         """The per-minute checks ``_enforce_start_buffers`` holds ``seq`` to.
 
         Each is ``(reason, buffer_minutes, ok_per_minute)`` over ``times``,
@@ -3817,9 +3815,9 @@ class ScheduleProcessor:
 
     @staticmethod
     def _first_clean_start(
-        requirements: List[Tuple[str, int, np.ndarray]],
+        requirements: list[tuple[str, int, np.ndarray]],
         n_mins: int,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Earliest offset at which every requirement holds for its buffer.
 
         Each requirement is ``(name, buffer_minutes, ok_per_minute)``. The
@@ -3848,7 +3846,7 @@ class ScheduleProcessor:
     def _analyze_mid_sequence_visibility(
         self,
         seq: ObservationSequence,
-    ) -> Optional[Tuple[SkyCoord, Any, np.ndarray]]:
+    ) -> tuple[SkyCoord, Any, np.ndarray] | None:
         """Return per-minute visibility for one sequence, if useful."""
         n_mins = int(np.rint(seq.duration.sec / 60.0))
         if n_mins <= 0:
@@ -3881,7 +3879,7 @@ class ScheduleProcessor:
 
     def _transit_of(
         self, seq: ObservationSequence
-    ) -> Optional[Tuple[str, int, Time, Time]]:
+    ) -> tuple[str, int, Time, Time] | None:
         """The transit a priority-2 observation is placed around.
 
         Returns ``(planet key, epoch, core_start, core_stop)`` for the
@@ -3914,8 +3912,8 @@ class ScheduleProcessor:
     def _transit_coverage(
         self,
         calendar: ScienceCalendar,
-        transit: Tuple[str, int, Time, Time],
-        replace: Optional[Tuple[ObservationSequence, Time, Time]] = None,
+        transit: tuple[str, int, Time, Time],
+        replace: tuple[ObservationSequence, Time, Time] | None = None,
     ) -> int:
         """Visible minutes of a transit's core its observations cover.
 
@@ -3999,7 +3997,7 @@ class ScheduleProcessor:
 
     def _transit_coverages(
         self, calendar: ScienceCalendar
-    ) -> Dict[Tuple[str, int], Tuple[str, Time, int]]:
+    ) -> dict[tuple[str, int], tuple[str, Time, int]]:
         """Every transit with priority-2 observations, and its coverage.
 
         Returns ``{(planet key, epoch): (target, core_start, covered
@@ -4020,9 +4018,9 @@ class ScheduleProcessor:
     def _find_nonvisible_gaps(
         self,
         vis_arr: np.ndarray,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """Find contiguous non-visible runs as half-open index ranges."""
-        gaps: List[Tuple[int, int]] = []
+        gaps: list[tuple[int, int]] = []
         gap_start = None
         for i, visible in enumerate(vis_arr):
             if not visible:
@@ -4039,11 +4037,11 @@ class ScheduleProcessor:
     def _best_tolerable_segment(
         self,
         vis_arr: np.ndarray,
-        gaps: List[Tuple[int, int]],
-        gap_tolerable: List[bool],
-    ) -> Optional[Tuple[int, int]]:
+        gaps: list[tuple[int, int]],
+        gap_tolerable: list[bool],
+    ) -> tuple[int, int] | None:
         """Return best [start, end) span separated by intolerable gaps."""
-        segment_bounds: List[Tuple[int, int]] = []
+        segment_bounds: list[tuple[int, int]] = []
         seg_start = 0
         for i, (gap_start, gap_end) in enumerate(gaps):
             if not gap_tolerable[i]:
@@ -4075,7 +4073,7 @@ class ScheduleProcessor:
         seq: ObservationSequence,
         best_start: int,
         best_end: int,
-    ) -> Optional[ObservationSequence]:
+    ) -> ObservationSequence | None:
         """Create trimmed sequence if valid and changed from input."""
         new_start = seq.start_time + best_start * u.min
         new_stop = seq.start_time + best_end * u.min
@@ -4101,7 +4099,7 @@ class ScheduleProcessor:
     def _extend_previous_after_mid_trim(
         self,
         working_cal: ScienceCalendar,
-        all_sequences: List[Tuple[str, ObservationSequence]],
+        all_sequences: list[tuple[str, ObservationSequence]],
         idx: int,
         old_start: Time,
         new_start: Time,
@@ -4158,7 +4156,7 @@ class ScheduleProcessor:
     def _extend_next_after_mid_trim(
         self,
         working_cal: ScienceCalendar,
-        all_sequences: List[Tuple[str, ObservationSequence]],
+        all_sequences: list[tuple[str, ObservationSequence]],
         idx: int,
         new_stop: Time,
         old_stop: Time,
@@ -4213,7 +4211,7 @@ class ScheduleProcessor:
 
     def get_minute_by_minute_assignments(
         self, calendar: ScienceCalendar
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate assignments using synchronized time grid."""
         # Use synchronized time grid
         total_minutes, start_time, end_time, time_grid = (
@@ -4320,7 +4318,7 @@ class ScheduleProcessor:
         sequence: ObservationSequence,
         override_fields: Any,
         data_cls: Any,
-        extra_kwargs: Optional[Dict[str, Any]] = None,
+        extra_kwargs: dict[str, Any] | None = None,
     ):
         """Build a NirdaData/VisdaData object from a sequence's payload.
 
@@ -4357,12 +4355,12 @@ class ScheduleProcessor:
             overrides = {field: None for field in (override_fields or ())}
 
         default_config = data_cls().get_config()
-        kwargs: Dict[str, Any] = dict(extra_kwargs or {})
+        kwargs: dict[str, Any] = dict(extra_kwargs or {})
         # Share the run logger so the data class's own warnings (zero frame
         # time, oversize, VITL fallback, ...) land in the same log.
         kwargs.setdefault("logger", getattr(self, "logger", None))
-        writeback: Dict[str, str] = {}
-        missing: List[str] = []
+        writeback: dict[str, str] = {}
+        missing: list[str] = []
 
         for field, (tag, from_xml, to_xml) in spec.items():
             if field in overrides:
@@ -4436,10 +4434,10 @@ class ScheduleProcessor:
 
     @staticmethod
     def _normalize_priority_keys(
-        raw: Optional[Dict[Any, Any]],
-    ) -> Dict[int, Any]:
+        raw: dict[Any, Any] | None,
+    ) -> dict[int, Any]:
         """Coerce override priority keys to ints (accepts 'Priority_0', '0')."""
-        out: Dict[int, Any] = {}
+        out: dict[int, Any] = {}
         for key, value in (raw or {}).items():
             if isinstance(key, bool):
                 # bool is an int subclass; reject to avoid surprises.
@@ -4470,7 +4468,7 @@ class ScheduleProcessor:
     def _set_override_element(
         self,
         parent: "ET.Element",
-        mapping: Dict[str, Any],
+        mapping: dict[str, Any],
         prefix: str,
         path: str,
     ) -> None:
@@ -4813,7 +4811,7 @@ class ScheduleProcessor:
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        overhead: Optional[OverheadTiming] = None,
+        overhead: OverheadTiming | None = None,
         override_fields: Any = (),
         visit_id: Any = None,
     ) -> ObservationSequence:
@@ -4895,7 +4893,7 @@ class ScheduleProcessor:
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        overhead: Optional[OverheadTiming] = None,
+        overhead: OverheadTiming | None = None,
         override_fields: Any = (),
         visit_id: Any = None,
     ) -> ObservationSequence:
@@ -4993,7 +4991,7 @@ class ScheduleProcessor:
 
     def validate_visibility(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate that all sequences have good visibility.
 
         Returns a list of issue dicts. Each dict contains:
@@ -5281,7 +5279,7 @@ class ScheduleProcessor:
         """Assign an observation to the UTC day with the largest overlap."""
         if stop_dt <= start_dt:
             return start_dt.date().isoformat()
-        day_seconds: Dict[str, float] = defaultdict(float)
+        day_seconds: dict[str, float] = defaultdict(float)
         cursor = start_dt
         while cursor < stop_dt:
             next_midnight = datetime(
@@ -5298,11 +5296,11 @@ class ScheduleProcessor:
     def _fits_files_for_sequence(
         seq: ObservationSequence,
         overhead: OverheadTiming,
-        nirda: Optional[NirdaData],
+        nirda: NirdaData | None,
         sc_integrations: int,
-        visda: Optional[VisdaData],
+        visda: VisdaData | None,
         num_total_frames: int,
-    ) -> List[str]:
+    ) -> list[str]:
         """Return the FITS product filenames packaged in a sequence's ``.bin``.
 
         Names follow the Pandora flight-software conventions (InfImg from
@@ -5310,7 +5308,7 @@ class ScheduleProcessor:
         observation's payload parameters. The per-detector capture-start
         timestamps are the sequence start plus the detector pre-overhead.
         """
-        files: List[str] = []
+        files: list[str] = []
         target = seq.target
 
         # NIRDA: InfImg cube (only if integrations were scheduled).
@@ -5351,8 +5349,8 @@ class ScheduleProcessor:
     def generate_diagnostics(
         self,
         calendar: ScienceCalendar,
-        output_path: Optional[Any] = None,
-        pass_data_volume_mb: Optional[float] = None,
+        output_path: Any | None = None,
+        pass_data_volume_mb: float | None = None,
     ) -> str:
         """Build a per-day ``.diag`` report and (optionally) write it.
 
@@ -5403,7 +5401,7 @@ class ScheduleProcessor:
             except (TypeError, ValueError):
                 return 0
 
-        def new_bucket() -> Dict[str, Any]:
+        def new_bucket() -> dict[str, Any]:
             return {
                 "count": 0,
                 "priority_counts": {0: 0, 1: 0, 2: 0},
@@ -5418,7 +5416,7 @@ class ScheduleProcessor:
                 "manifest": [],
             }
 
-        daily: Dict[str, Dict[str, Any]] = {}
+        daily: dict[str, dict[str, Any]] = {}
 
         # Per-detector capture-start offsets for FITS filenames.
         overhead = getattr(self, "overhead", None) or OverheadTiming()
@@ -5509,8 +5507,8 @@ class ScheduleProcessor:
 
     @staticmethod
     def _diag_observing_and_gaps(
-        timelines: List[Tuple],
-    ) -> Tuple[float, float]:
+        timelines: list[tuple],
+    ) -> tuple[float, float]:
         """Return (observing_minutes, gap_minutes) for a day's timelines."""
         observing = 0.0
         gaps = 0.0
@@ -5563,7 +5561,7 @@ class ScheduleProcessor:
             summary["observing"] += observing
             summary["gaps"] += gaps
 
-        lines: List[str] = []
+        lines: list[str] = []
 
         # ── Week summary ───────────────────────────────────────────
         sum_total = summary["nir_data"] + summary["vis_data"]
@@ -5639,7 +5637,7 @@ class ScheduleProcessor:
 
     def validate_target_names(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate that all target names do not contain spaces.
 
         Parameters
@@ -5679,7 +5677,7 @@ class ScheduleProcessor:
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
-    def _settings_for_header(self) -> Dict[str, str]:
+    def _settings_for_header(self) -> dict[str, str]:
         """The keepouts and tolerances this run actually applied.
 
         Read back off the ``Visibility`` instances rather than off the
@@ -5829,7 +5827,7 @@ class ScheduleProcessor:
         self,
         calendar: ScienceCalendar,
         verbose: bool,
-        log_path: Optional[Any] = None,
+        log_path: Any | None = None,
     ) -> None:
         """Configure ``self.logger`` for a processing run.
 
@@ -5891,7 +5889,7 @@ class ScheduleProcessor:
             # Write a header recording the run start time in UTC and US
             # Eastern, so individual entries need not carry timestamps. The
             # FileHandler below then appends to this file.
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             utc_str = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
             if ZoneInfo is not None:
                 eastern = now_utc.astimezone(ZoneInfo("America/New_York"))
@@ -5938,7 +5936,7 @@ class ScheduleProcessor:
             start = str(getattr(seq, "start_time", "?"))
         return f"{start}-{seq.target}-{visit_id}-{seq.id}"
 
-    def _progress(self, iterable, desc: str, total: Optional[int] = None):
+    def _progress(self, iterable, desc: str, total: int | None = None):
         """Wraps iterables in a tqdm progress bar when available.
 
         Falls back to the plain iterable if ``tqdm`` is not installed. The
@@ -6102,7 +6100,7 @@ class ScheduleProcessor:
             }
         )
 
-    def get_gap_report(self) -> Dict[str, Any]:
+    def get_gap_report(self) -> dict[str, Any]:
         """Return comprehensive gap analysis report."""
         return self.gap_report
 
@@ -6177,8 +6175,8 @@ class ScheduleProcessor:
         self,
         calendar: ScienceCalendar,
         sequence_id: str,
-        target_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        target_name: str | None = None,
+    ) -> dict[str, Any]:
         """Debug visibility for a specific sequence."""
         # Find the sequence
         target_seq = None
@@ -6240,7 +6238,7 @@ class ScheduleProcessor:
 
     def validate_no_overlaps_astropy(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Detect overlapping sequences using Astropy time comparison.
 
         Returns a list of overlap dicts containing:
@@ -6318,7 +6316,7 @@ class ScheduleProcessor:
 
     def validate_sequence_timing(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Comprehensive timing validation.
 
         Checks for overlaps, short sequences, observations reaching outside
@@ -6332,7 +6330,7 @@ class ScheduleProcessor:
             Keys: ``overlaps``, ``short_sequences``, ``outside_window``,
             ``large_gaps``, ``timing_summary``.
         """
-        issues: Dict[str, Any] = {
+        issues: dict[str, Any] = {
             "overlaps": [],
             "short_sequences": [],
             "outside_window": [],
@@ -6542,7 +6540,7 @@ class ScheduleProcessor:
 
     def validate_payload_exposures(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate payload exposure times against sequence duration.
 
         Checks that single-frame exposure, total-frame exposure, and
@@ -6788,7 +6786,7 @@ class ScheduleProcessor:
 
     def validate_star_roi_consistency(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Validate MaxNumStarRois/numPredefinedStarRois consistency.
 
@@ -6983,7 +6981,7 @@ class ScheduleProcessor:
         calendar: ScienceCalendar,
         report_issues: bool = True,
         tolerance_deg: float = 0.001,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate roll-angle consistency per target within each visit.
 
         Returns
@@ -6995,7 +6993,7 @@ class ScheduleProcessor:
         issues = []
 
         for visit in calendar.visits:
-            target_sequences: Dict[str, List[ObservationSequence]] = {}
+            target_sequences: dict[str, list[ObservationSequence]] = {}
             for seq in visit.sequences:
                 if seq.target not in target_sequences:
                     target_sequences[seq.target] = []
@@ -7007,7 +7005,7 @@ class ScheduleProcessor:
 
                 roll_values = []
                 seq_ids = []
-                roll_map: Dict[str, float] = {}
+                roll_map: dict[str, float] = {}
                 for seq in sequences:
                     if seq.roll is not None:
                         roll_values.append(seq.roll)
@@ -7059,7 +7057,7 @@ class ScheduleProcessor:
         return issues
 
     def _print_issue_details(
-        self, category: str, item: Dict[str, Any]
+        self, category: str, item: dict[str, Any]
     ) -> None:
         """Print structured requirement-vs-actual detail for one issue."""
         indent = "      "
@@ -7183,7 +7181,7 @@ class ScheduleProcessor:
 
     def print_validation_summary(
         self, calendar: ScienceCalendar
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run all validators and print a unified actionable report.
 
         Returns
@@ -7193,8 +7191,8 @@ class ScheduleProcessor:
             "details": {...}}`` where *details* maps each category
             to the raw issue list.
         """
-        results: Dict[str, Any] = {}
-        counts: Dict[str, int] = {}
+        results: dict[str, Any] = {}
+        counts: dict[str, int] = {}
 
         # --- target names ---
         target_issues = self.validate_target_names(

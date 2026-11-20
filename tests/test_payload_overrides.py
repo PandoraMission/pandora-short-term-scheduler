@@ -10,8 +10,8 @@ Covers ScheduleProcessor(override_payload_parameters=...):
 """
 
 # Standard library
-import unittest.mock as mock
 import xml.etree.ElementTree as ET
+from unittest import mock
 
 # Third-party
 from astropy.time import Time, TimeDelta

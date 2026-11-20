@@ -10,7 +10,6 @@ the trims cut off.
 
 # Third-party
 import numpy as np
-from astropy import units as u
 
 # First-party/Local
 from shortschedule.models import ScienceCalendar, Visit

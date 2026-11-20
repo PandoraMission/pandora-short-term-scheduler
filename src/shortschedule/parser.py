@@ -14,7 +14,7 @@ without losing attributes or nested elements.
 
 # Standard library
 import xml.etree.ElementTree as ET
-from typing import Dict, Optional
+from typing import Optional
 
 # Third-party
 import numpy as np
@@ -136,7 +136,7 @@ def parse_science_calendar(
 
 
 def _parse_observation_sequence(
-    seq_elem: ET.Element, namespace: Dict[str, str]
+    seq_elem: ET.Element, namespace: dict[str, str]
 ) -> Optional["ObservationSequence"]:
     """Parse a single `Observation_Sequence` XML element into an
     `ObservationSequence` object.
@@ -260,11 +260,11 @@ def _create_clean_element_copy(element: ET.Element) -> ET.Element:
 
 
 def _get_element_text(
-    element: Optional[ET.Element],
+    element: ET.Element | None,
     child_path: str,
-    namespace: Optional[Dict[str, str]] = None,
-    default: Optional[str] = None,
-) -> Optional[str]:
+    namespace: dict[str, str] | None = None,
+    default: str | None = None,
+) -> str | None:
     """Safely get text content from an element's child."""
     if element is None:
         return default

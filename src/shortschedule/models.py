@@ -18,7 +18,7 @@ Notes
 # Standard library
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 # Third-party
 import astropy.units as u
@@ -66,8 +66,8 @@ class ObservationSequence:
         stop_time: Time,
         ra: float,
         dec: float,
-        payload_params: Dict[str, Any],
-        roll: Optional[float] = None,
+        payload_params: dict[str, Any],
+        roll: float | None = None,
         is_main: bool = False,
         is_added: bool = False,
     ):
@@ -214,7 +214,7 @@ class ObservationSequence:
             return True
         return False
 
-    def get_all_payload_parameters(self) -> Dict[str, Any]:
+    def get_all_payload_parameters(self) -> dict[str, Any]:
         """Return all payload parameters as a nested dictionary.
 
         The returned structure converts XML elements into Python-native types
@@ -263,7 +263,7 @@ class ObservationSequence:
 
         return result
 
-    def get_flat_payload_parameters(self) -> Dict[str, Any]:
+    def get_flat_payload_parameters(self) -> dict[str, Any]:
         """Return a flattened mapping of payload parameters.
 
         Keys use dot-notation to represent nesting (e.g.
@@ -281,7 +281,7 @@ class ObservationSequence:
         return flat_params
 
     def _flatten_xml_element(
-        self, element: ET.Element, prefix: str, result_dict: Dict[str, Any]
+        self, element: ET.Element, prefix: str, result_dict: dict[str, Any]
     ) -> None:
         """Flatten XML element to dot-notation dictionary."""
         # Add element text if it exists
@@ -306,7 +306,7 @@ class Visit:
 
     def __init__(self, id, sequences):
         self.id: str = id
-        self.sequences: List["ObservationSequence"] = sequences
+        self.sequences: list[ObservationSequence] = sequences
 
     @property
     def total_duration(self):
@@ -333,7 +333,7 @@ class Visit:
         return np.max([seq.stop_time for seq in self.sequences])
 
     def copy(
-        self, sequences: Optional[List["ObservationSequence"]] = None
+        self, sequences: list["ObservationSequence"] | None = None
     ) -> "Visit":
         """Create a copy of this visit, optionally with different sequences."""
         if sequences is None:
@@ -349,12 +349,12 @@ class ScienceCalendar:
 
     def __init__(
         self,
-        metadata: Optional[Dict[str, Any]],
-        visits: List[Visit],
+        metadata: dict[str, Any] | None,
+        visits: list[Visit],
         visibility: Any = None,
     ):
-        self.metadata: Dict[str, Any] = metadata or {}
-        self.visits: List[Visit] = visits
+        self.metadata: dict[str, Any] = metadata or {}
+        self.visits: list[Visit] = visits
         self.visibility = visibility
 
     def set_visibility_calculator(self, visibility: Any) -> None:
@@ -362,7 +362,7 @@ class ScienceCalendar:
         self.visibility = visibility
 
     @property
-    def source_path(self) -> Optional[Path]:
+    def source_path(self) -> Path | None:
         """Path of the long-term calendar this one was parsed from.
 
         Everything the scheduler produces for a calendar, the delivered
@@ -469,7 +469,7 @@ class ScienceCalendar:
 
         return np.min(all_times), np.max(all_times)
 
-    def get_summary_stats(self) -> Dict[str, Any]:
+    def get_summary_stats(self) -> dict[str, Any]:
         """Get comprehensive summary statistics."""
         start_date, end_date = self.date_range
         priority_stats = self.priority_breakdown

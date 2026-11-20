@@ -16,7 +16,6 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 # Third-party
 import numpy as np
@@ -47,8 +46,8 @@ def planet_key(name: str) -> str:
 
 
 def load_ephemerides(
-    target_list_dir, reference_time: Optional[Time] = None
-) -> Dict[str, dict]:
+    target_list_dir, reference_time: Time | None = None
+) -> dict[str, dict]:
     """Transit ephemeris of every planet in one PandoraTargetList tree.
 
     Every ``*_target_definition.json`` in the checkout's own
@@ -112,7 +111,7 @@ def load_ephemerides(
         tracked = set(listed.split("\0"))
         paths = [p for p in paths if p.relative_to(tree).as_posix() in tracked]
 
-    ephemerides: Dict[str, dict] = {}
+    ephemerides: dict[str, dict] = {}
     for path in paths:
         try:
             info = json.loads(path.read_text(encoding="utf-8"))
@@ -157,7 +156,7 @@ def transit_epoch(ephemeris: dict, near: Time) -> int:
 
 def transit_core(
     ephemeris: dict, epoch: int, middle_frac: float
-) -> Tuple[Time, Time]:
+) -> tuple[Time, Time]:
     """The middle of one transit, in geocentric UTC.
 
     The predicted mid-transit (BJD_TDB) is moved from the solar system

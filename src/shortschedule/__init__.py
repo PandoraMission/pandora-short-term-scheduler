@@ -9,27 +9,27 @@ from importlib.metadata import PackageNotFoundError, version
 
 # Import core modules (keep imports at top-level)
 from .models import ObservationSequence, ScienceCalendar, Visit
+from .nirda import NirdaData
 from .parser import parse_science_calendar
 from .roll import get_best_roll_per_visit
 from .scheduler import ScheduleProcessor
 from .writer import XMLWriter
-from .nirda import NirdaData
 
 # Package directory
 PACKAGEDIR = os.path.abspath(os.path.dirname(__file__))
 
 # Define public API
 __all__ = [
-    "parse_science_calendar",
-    "ScienceCalendar",
-    "Visit",
+    "NirdaData",
     "ObservationSequence",
     "ScheduleProcessor",
+    "ScienceCalendar",
+    "Visit",
     "XMLWriter",
     "get_best_roll_per_visit",
     "get_version",
+    "parse_science_calendar",
     "setup_logging",
-    "NirdaData",
 ]
 
 

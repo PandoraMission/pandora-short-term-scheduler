@@ -180,7 +180,7 @@ class XMLWriter:
         }
 
         for internal_name, xml_attr in meta_mapping.items():
-            if internal_name in metadata and metadata[internal_name]:
+            if metadata.get(internal_name):
                 meta.set(xml_attr, str(metadata[internal_name]))
 
         # Add TLE information if present

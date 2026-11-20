@@ -11,7 +11,7 @@ the documentation and analysis notebooks.
 
 # Standard library
 from datetime import timedelta
-from typing import Any, Optional, Tuple
+from typing import Any
 
 # Third-party
 import matplotlib.dates as mdates
@@ -45,7 +45,7 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        figsize: Tuple[int, int] = (16, 10),
+        figsize: tuple[int, int] = (16, 10),
     ) -> Figure:
         """Create a proper Gantt chart style timeline."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
@@ -97,7 +97,7 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        figsize: Tuple[int, int] = (20, 14),
+        figsize: tuple[int, int] = (20, 14),
         show_sequence_labels: bool = False,
         processed_only: bool = False,
     ) -> Figure:
@@ -360,7 +360,7 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        figsize: Tuple[int, int] = (16, 8),
+        figsize: tuple[int, int] = (16, 8),
         processed_only: bool = False,
     ) -> Figure:
         """Create a high-level timeline showing just visits and their overall spans."""
@@ -530,10 +530,10 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        save_path: Optional[str] = None,
+        save_path: str | None = None,
         show_sequence_labels: bool = False,
         processed_only: bool = False,
-    ) -> Tuple[Figure, Figure, Figure, pd.DataFrame]:
+    ) -> tuple[Figure, Figure, Figure, pd.DataFrame]:
         """Generate complete visualization report with options."""
 
         # Create visit-organized Gantt chart
