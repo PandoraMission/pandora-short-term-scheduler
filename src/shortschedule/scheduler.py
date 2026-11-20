@@ -150,7 +150,9 @@ class ScheduleProcessor:
         nirda_post_sequence_overhead: u.Quantity | None = None,
         override_nirda_parameters: dict[int, dict[str, Any]] | None = None,
         override_visda_parameters: dict[int, dict[str, Any]] | None = None,
-        override_payload_parameters: dict[Any, dict[str, dict[str, Any]]] | None = None,
+        override_payload_parameters: (
+            dict[Any, dict[str, dict[str, Any]]] | None
+        ) = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
