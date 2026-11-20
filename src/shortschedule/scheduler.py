@@ -37,7 +37,7 @@ from .models import (  # BAD_NAME_SYMBOLS re-exported for existing imports
     clean_target_name,
 )
 from .nirda import NirdaData
-from .overhead import OverheadTiming
+from .overhead import VITL_SETTLING_TIME, OverheadTiming
 from .roll import get_best_roll_per_visit
 from .transit import (
     load_ephemerides,
@@ -156,7 +156,7 @@ class ScheduleProcessor:
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
-        vitl_settling_time: u.Quantity = 60.0 * u.s,
+        vitl_settling_time: u.Quantity = VITL_SETTLING_TIME,
         convert_single_roi_to_predefined: bool = True,
         fix_bad_data: bool = True,
         moon_min: float | None = None,
@@ -199,6 +199,8 @@ class ScheduleProcessor:
         high_priority_adds_min_observations: int = 5,
         high_priority_adds_transit_buffer_min: float = 40.0,
         high_priority_adds_exclude: list[str] | None = None,
+        pointing_pad_before_start: u.Quantity | None = None,
+        pointing_pad_after_stop: u.Quantity | None = None,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -208,13 +210,19 @@ class ScheduleProcessor:
         tle_line1, tle_line2 : str
             TLE lines for satellite
         vda_pre_sequence_overhead : Quantity, optional
-            VDA pre-sequence overhead (default is None which will use the overhead defaults).
+            Time from an observation's start to the VDA start (default
+            None, the ``OverheadTiming`` model: 2 s).
         vda_post_sequence_overhead : Quantity, optional
-            VDA post-sequence overhead (default is None which will use the overhead defaults).
+            Time between the last VDA frame and the observation's stop
+            (default None, the model: 0 s, so frames end by payload control
+            off).
         nirda_pre_sequence_overhead : Quantity, optional
-            NIRDA pre-sequence overhead (default is None which will use the overhead defaults).
+            Time from an observation's start to the NIRDA start (default
+            None, the model: 0 s, as the MOC starts NIRDA at the start).
         nirda_post_sequence_overhead : Quantity, optional
-            NIRDA post-sequence overhead (default is None which will use the overhead defaults).
+            Time between the last NIRDA integration and the observation's
+            stop (default None, the model: 0 s, so integrations end by
+            payload control off).
         override_nirda_parameters : dict, optional
             Per-priority NIRDA payload overrides applied during the
             payload-update step. Maps an observation priority to a mapping of
@@ -475,6 +483,18 @@ class ScheduleProcessor:
             or with its invalid symbols replaced (``+`` and space -> ``_``);
             one that is not a priority 1/2 target in the window is a
             warning. Default ``None``.
+        pointing_pad_before_start : Quantity, optional
+            The MOC slews before an observation's start, so the spacecraft
+            is settled on the target before it. A last pass moves a start
+            later, to the second, until the target is inside its keepouts
+            (at its roll, under the model it is judged by) for this long
+            before the start. Default None, the ``OverheadTiming`` model:
+            50 s. Zero turns this side off.
+        pointing_pad_after_stop : Quantity, optional
+            The same after an observation's stop, where the spacecraft stays
+            on the target until it slews to idle: a stop moves earlier until
+            the target is inside its keepouts for this long after it.
+            Default None, the model: 64 s. Zero turns this side off.
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -610,6 +630,8 @@ class ScheduleProcessor:
             "vda_post_sequence_overhead": vda_post_sequence_overhead,
             "nirda_pre_sequence_overhead": nirda_pre_sequence_overhead,
             "nirda_post_sequence_overhead": nirda_post_sequence_overhead,
+            "pointing_pad_before_start": pointing_pad_before_start,
+            "pointing_pad_after_stop": pointing_pad_after_stop,
         }
         for _name, _val in _overhead_params.items():
             if _val is None or isinstance(_val, TimeDelta):
@@ -637,6 +659,8 @@ class ScheduleProcessor:
             visda_post_overhead_time=vda_post_sequence_overhead,
             nirda_pre_overhead_time=nirda_pre_sequence_overhead,
             nirda_post_overhead_time=nirda_post_sequence_overhead,
+            settled_before_start_time=pointing_pad_before_start,
+            on_target_after_stop_time=pointing_pad_after_stop,
         )
 
         # Per-priority payload overrides applied during the payload-update
@@ -1492,6 +1516,9 @@ class ScheduleProcessor:
             placed.values()
         ):
             self._refine_edges_to_second(calendar, {}, added_only=True)
+        # And the same pointing pad.
+        if any(placed.values()):
+            self._pad_edges_for_pointing(calendar, added_only=True)
 
         added = [
             (visit.id, seq)
@@ -2162,6 +2189,11 @@ class ScheduleProcessor:
             working_calendar = self._refine_edges_to_second(
                 working_calendar, original_timing
             )
+
+        # The MOC has the spacecraft on the target just before each start
+        # and just after each stop; keep the target inside its keepouts
+        # then too. Only moves boundaries in.
+        working_calendar = self._pad_edges_for_pointing(working_calendar)
 
         # A transit can end up short only if the long-term calendar left it
         # short or overlap repair cut it; either needs a look.
@@ -3660,6 +3692,220 @@ class ScheduleProcessor:
         )
         return calendar
 
+    # Seconds past a pad searched for a boundary that clears it.
+    _POINTING_PAD_SEARCH_SEC = 120
+
+    def _pad_edges_for_pointing(
+        self, calendar: ScienceCalendar, added_only: bool = False
+    ) -> ScienceCalendar:
+        """Keep the target inside its keepouts while the spacecraft is on it.
+
+        The MOC slews before an observation's start and leaves after its
+        stop, so the spacecraft is settled on the target for
+        ``overhead.settled_before_start_time`` before the start and stays
+        on it for ``overhead.on_target_after_stop_time`` after the stop.
+        Every other pass judges only start to stop. This one checks those
+        two stretches at 1 s, at the roll the observation flies and under
+        the model it is judged by, with no gap tolerance:
+
+        - a start moves later, to the first second with the target inside
+          its keepouts for the whole pad before it;
+        - a stop moves earlier, to the last second with the target inside
+          its keepouts for the whole pad after it.
+
+        Boundaries only move in, so this cannot create an overlap, and it
+        only bites where a boundary sits on the edge of the target's
+        visibility. A boundary whose own second is dark (the observation
+        opens or ends inside a gap the tolerances let it ride through) was
+        left there on purpose and is not touched, as in
+        ``_refine_edges_to_second``. A boundary that clears nowhere within
+        ``_POINTING_PAD_SEARCH_SEC`` of its pad is left alone and logged as
+        a warning. A cut under ``min_sequence_duration`` is a warning; with
+        ``drop_priority0`` a priority 0 cut that short is dropped instead
+        (and a visit left empty with it), while any other is kept short.
+        Times are modified in place.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar after the edges are refined.
+        added_only : bool, optional
+            Pad only high-priority additions (``is_added``), as everything
+            else was padded already. Default False.
+
+        Returns
+        -------
+        ScienceCalendar
+            The same calendar, boundaries padded.
+        """
+        overhead = getattr(self, "overhead", None)
+        if overhead is None:
+            return calendar
+        pre = int(np.ceil(overhead.settled_before_start_time.to(u.s).value))
+        post = int(np.ceil(overhead.on_target_after_stop_time.to(u.s).value))
+        if pre <= 0 and post <= 0:
+            return calendar
+        pre, post = max(pre, 0), max(post, 0)
+        search = self._POINTING_PAD_SEARCH_SEC
+        # [start-pre, start+search] then [stop-search, stop+post], 1 s steps.
+        start_offsets = np.arange(-pre, search + 1)
+        stop_offsets = np.arange(-search, post + 1)
+        n_start = start_offsets.size
+        seconds_cut = boundaries = in_gaps = 0
+        dropped = set()
+
+        def first_clear(ok: np.ndarray, width: int) -> int | None:
+            # First index i with ok[i : i + width] all True.
+            if width <= 0:
+                return 0
+            run = np.convolve(ok.astype(int), np.ones(width, int), "valid")
+            hits = np.flatnonzero(run == width)
+            return int(hits[0]) if hits.size else None
+
+        for visit_id, seq in self._progress(
+            self._ordered_sequences(calendar),
+            desc="Padding edges for pointing",
+            total=sum(len(visit.sequences) for visit in calendar.visits),
+        ):
+            if added_only and not getattr(seq, "is_added", False):
+                continue
+            start, stop = seq.start_time, seq.stop_time
+            coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+            deltas = np.concatenate(
+                [start_offsets, (stop - start).sec + stop_offsets]
+            )
+            vis = np.asarray(
+                self._visibility_for_sequence(
+                    seq, coord, start + deltas * u.s
+                ),
+                dtype=bool,
+            )
+            at_start, at_stop = vis[:n_start], vis[n_start:]
+            prefix = self._seq_prefix(visit_id, seq)
+
+            # Start: the window [t - pre, t] for t = start + k, k >= 0.
+            # at_start[pre] is the start second itself.
+            new_start = start
+            if pre > 0 and not at_start[pre]:
+                in_gaps += 1
+            elif pre > 0:
+                k = first_clear(at_start, pre + 1)
+                if k is None:
+                    self._print(
+                        f"WARNING: {prefix} | POINTING PAD: the target is not "
+                        f"inside its keepouts for {pre} s anywhere in the "
+                        f"{search} s after the start; the start is left at "
+                        f"{start.isot[:19]}."
+                    )
+                else:
+                    new_start = start + k * u.s
+
+            # Stop: the window [t, t + post) for t = stop - k, k >= 0 (a stop
+            # is an exclusive end, the observation's own last second being
+            # t - 1); the latest such t ends the last full run in at_stop.
+            # at_stop[-1] is stop + post itself, outside every window, and
+            # at_stop[search - 1] the observation's last second.
+            new_stop = stop
+            if post > 0 and not at_stop[search - 1]:
+                in_gaps += 1
+            elif post > 0:
+                k = first_clear(at_stop[-2::-1], post)
+                if k is None:
+                    self._print(
+                        f"WARNING: {prefix} | POINTING PAD: the target is not "
+                        f"inside its keepouts for {post} s anywhere in the "
+                        f"{search} s before the stop; the stop is left at "
+                        f"{stop.isot[:19]}."
+                    )
+                else:
+                    new_stop = stop - k * u.s
+
+            d_start = int(np.rint((new_start - start).sec))
+            d_stop = int(np.rint((stop - new_stop).sec))
+            if d_start == 0 and d_stop == 0:
+                continue
+
+            if new_stop <= new_start or self._below_minimum_duration(
+                new_stop - new_start
+            ):
+                short = (
+                    f"{prefix} | POINTING PAD: keeping the target inside its "
+                    f"keepouts {pre} s before the start and {post} s after "
+                    "the stop leaves "
+                    f"{max(0.0, (new_stop - new_start).sec) / 60:.1f} min, "
+                    f"under {self.min_sequence_duration.sec / 60:.0f} min"
+                )
+                if int(seq.priority or 0) == 0 and getattr(
+                    self, "drop_priority0", False
+                ):
+                    dropped.add((visit_id, seq.id))
+                    self._print(f"WARNING: {short}. Dropped (drop_priority0).")
+                    continue
+                self._print(f"WARNING: {short}.")
+                if new_stop <= new_start:
+                    # Nothing left to fly; leave it for a person to look at.
+                    continue
+            self._transit_allows(
+                calendar,
+                visit_id,
+                seq,
+                new_start,
+                new_stop,
+                "keeping the target inside its keepouts while the spacecraft "
+                "is on it before the start or after the stop",
+                refuse=False,
+            )
+
+            for boundary, change, pad, direction, when in (
+                ("start", d_start, pre, "later", "before the start"),
+                ("stop", d_stop, post, "earlier", "after the stop"),
+            ):
+                if change == 0:
+                    continue
+                seconds_cut += change
+                boundaries += 1
+                self._note_timing(
+                    visit_id,
+                    seq.id,
+                    f"{boundary}: {change} s {direction}, so the target is "
+                    f"inside its keepouts for the {pad} s the spacecraft is "
+                    f"on it {when}",
+                )
+            seq.start_time, seq.stop_time = new_start, new_stop
+
+        if dropped:
+            for visit in calendar.visits:
+                visit.sequences = [
+                    seq
+                    for seq in visit.sequences
+                    if (visit.id, seq.id) not in dropped
+                ]
+            calendar.visits = [
+                visit for visit in calendar.visits if visit.sequences
+            ]
+
+        # Added to, as the pass also runs on the high-priority additions.
+        if getattr(self, "gap_report", None):
+            summary = self.gap_report["processing_summary"]
+            summary["pointing_pad_seconds_cut"] = (
+                summary.get("pointing_pad_seconds_cut", 0) + seconds_cut
+            )
+            summary["pointing_pad_boundaries_moved"] = (
+                summary.get("pointing_pad_boundaries_moved", 0) + boundaries
+            )
+            summary["priority_0_dropped"] = summary.get(
+                "priority_0_dropped", 0
+            ) + len(dropped)
+        self._print(
+            f"Padded edges for pointing"
+            f"{' (high-priority additions)' if added_only else ''} "
+            f"({pre} s before starts, {post} s after stops): {boundaries} "
+            f"boundaries moved in ({seconds_cut} s), {in_gaps} inside a "
+            f"tolerated gap left alone, {len(dropped)} priority-0 "
+            "observation(s) dropped."
+        )
+        return calendar
+
     def _enforce_start_buffers(
         self, calendar: ScienceCalendar
     ) -> ScienceCalendar:
@@ -4949,7 +5195,7 @@ class ScheduleProcessor:
         # those are calculated.
         if getattr(self, "update_nirda_reset1_for_vitl", False):
             vitl_settling_time = getattr(
-                self, "vitl_settling_time", 60.0 * u.s
+                self, "vitl_settling_time", VITL_SETTLING_TIME
             )
             old_resets1 = sequence.get_payload_parameter(
                 "AcquireInfCamImages", "SC_Resets1"
@@ -5700,6 +5946,11 @@ class ScheduleProcessor:
                 return None
             return f"{float(getattr(value, 'value', value)):g}"
 
+        def seconds(name):
+            overhead = getattr(self, "overhead", None)
+            value = getattr(overhead, name, None)
+            return None if value is None else f"{value.to(u.s).value:g}"
+
         nominal = self.visibility
         settings = {
             "Sun_Min_Deg": angle(nominal, "sun_min"),
@@ -5734,6 +5985,12 @@ class ScheduleProcessor:
             "Drop_Priority0": str(getattr(self, "drop_priority0", False)),
             "Refine_Edges_To_Second": str(
                 getattr(self, "refine_edges_to_second", False)
+            ),
+            "Pointing_Pad_Before_Start_Sec": seconds(
+                "settled_before_start_time"
+            ),
+            "Pointing_Pad_After_Stop_Sec": seconds(
+                "on_target_after_stop_time"
             ),
             "Roll_Step_Deg": f"{float(self.roll_step):g}",
             "Min_Power_Frac": f"{float(self.min_power_frac):g}",
@@ -5994,6 +6251,8 @@ class ScheduleProcessor:
                 "merged_at_end": 0,
                 "edge_seconds_cut": 0,
                 "edge_seconds_grown": 0,
+                "pointing_pad_seconds_cut": 0,
+                "pointing_pad_boundaries_moved": 0,
                 "high_pri_added_visits": 0,
                 "high_pri_added_observations": 0,
                 "high_pri_added_minutes": 0,

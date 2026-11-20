@@ -30,6 +30,8 @@ from warnings import warn
 from astropy import units as u
 from astropy.units import Quantity
 
+from .overhead import ADDITIONAL_OVERHEAD_TIME
+
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
@@ -198,7 +200,7 @@ class NirdaData:
     global_reset_method: str = "off"
     global_reset_lbl_rows: int = 256
     global_reset_lbl_time_per_row: Quantity = 10.0e-6 * u.s
-    additional_overhead_time: Quantity = 0 * u.s
+    additional_overhead_time: Quantity = ADDITIONAL_OVERHEAD_TIME
 
     # Derived attributes: computed in _update_derived, not constructor arguments
     pixels_per_frame: int = field(init=False)

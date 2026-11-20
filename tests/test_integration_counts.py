@@ -1245,7 +1245,7 @@ class TestScheduleProcessorOverheadValidation:
         """Default overhead values (Quantity with time units) are accepted."""
         with mock.patch("shortschedule.scheduler.Visibility"):
             proc = ScheduleProcessor("L1", "L2")
-        assert proc.overhead.visda_pre_overhead_time == 260 * u.s
+        assert proc.overhead.visda_pre_overhead_time == 2 * u.s
 
     def test_timedelta_overhead_accepted(self):
         """TimeDelta overhead values must also be accepted without error."""
