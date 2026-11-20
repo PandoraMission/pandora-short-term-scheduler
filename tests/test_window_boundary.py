@@ -28,6 +28,9 @@ def _processor(monkeypatch, *spans, **kwargs):
     )
     kwargs.setdefault("st_gap_tolerance_start_buffer", 0)
     kwargs.setdefault("earthlimb_gap_tolerance_start_buffer", 0)
+    # The pointing pad has its own tests (test_pointing_pad.py).
+    kwargs.setdefault("pointing_pad_before_start", 0 * u.s)
+    kwargs.setdefault("pointing_pad_after_stop", 0 * u.s)
     proc = ScheduleProcessor("L1", "L2", **kwargs)
     proc._initialize_gap_report()
     return proc

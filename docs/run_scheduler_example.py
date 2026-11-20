@@ -104,6 +104,8 @@ scheduler = ScheduleProcessor(
     grow_by_priority=True,  # grow by priority (main target first at equal priority, earlier visit first at equal rank); each may take time from lower-ranked neighbors, or equal-ranked ones in a later visit
     drop_priority0=True,  # let a higher-ranked observation grow past (and drop) a priority 0, or merge across priority-0 filler
     refine_edges_to_second=True,  # last pass: recheck the minute either side of every start/stop at 1 s and move it to the second the target is visible
+    pointing_pad_before_start=None,  # the MOC has the spacecraft settled on the target this long before each start (None = OverheadTiming model, 50 s); starts move later until the target is inside its keepouts then too. 0 * u.s turns it off
+    pointing_pad_after_stop=None,  # ... and on the target this long after each stop (None = model, 64 s); stops move earlier to match. 0 * u.s turns it off
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
     fix_bad_data=True,  # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------

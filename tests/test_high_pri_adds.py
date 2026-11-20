@@ -67,12 +67,15 @@ def _span(lo, hi):
 
 
 def _processor(visible_by_ra, **kwargs):
-    # The 1 s edge pass is off here so the slot rules can be read in whole
-    # minutes; test_additions_get_the_1_s_edge_pass covers it.
+    # The 1 s edge pass and the pointing pad are off here so the slot rules
+    # can be read in whole minutes; test_additions_get_the_1_s_edge_pass and
+    # test_pointing_pad.py cover them.
     settings = dict(
         add_high_pri_observations=True,
         high_priority_adds_min_observations=1,
         refine_edges_to_second=False,
+        pointing_pad_before_start=0 * u.s,
+        pointing_pad_after_stop=0 * u.s,
     )
     settings.update(kwargs)
     proc = ScheduleProcessor(TLE1, TLE2, **settings)

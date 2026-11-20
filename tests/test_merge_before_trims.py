@@ -10,6 +10,7 @@ the trims cut off.
 
 # Third-party
 import numpy as np
+from astropy import units as u
 
 # First-party/Local
 from shortschedule.models import ScienceCalendar, Visit
@@ -68,6 +69,9 @@ def _processor(monkeypatch, spans_by_ra, **kwargs):
     )
     kwargs.setdefault("st_gap_tolerance_start_buffer", 0)
     kwargs.setdefault("earthlimb_gap_tolerance_start_buffer", 0)
+    # The pointing pad has its own tests (test_pointing_pad.py).
+    kwargs.setdefault("pointing_pad_before_start", 0 * u.s)
+    kwargs.setdefault("pointing_pad_after_stop", 0 * u.s)
     proc = ScheduleProcessor(
         "L1", "L2", earthlimb_gap_tolerance=6, st_gap_tolerance=16, **kwargs
     )

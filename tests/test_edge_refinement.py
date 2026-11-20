@@ -319,6 +319,9 @@ def test_pipeline_switch(monkeypatch, refine):
         "L2",
         st_gap_tolerance_start_buffer=0,
         earthlimb_gap_tolerance_start_buffer=0,
+        # The pointing pad has its own tests (test_pointing_pad.py).
+        pointing_pad_before_start=0 * u.s,
+        pointing_pad_after_stop=0 * u.s,
         **kwargs,
     )
     cal = _calendar(_seq(1, _at(10), _at(40)))

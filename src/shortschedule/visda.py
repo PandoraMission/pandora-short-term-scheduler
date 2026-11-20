@@ -27,6 +27,8 @@ from warnings import warn
 from astropy import units as u
 from astropy.units import Quantity
 
+from .overhead import ADDITIONAL_OVERHEAD_TIME
+
 if TYPE_CHECKING:
     from .overhead import OverheadTiming
 
@@ -132,7 +134,7 @@ class VisdaData:
     compression_ratio: float = 0.25
     vissci_bytes_per_pixel: Quantity = 4 * u.byte
     visimg_bytes_per_pixel: Quantity = 2 * u.byte
-    additional_overhead_time: Quantity = 0 * u.s
+    additional_overhead_time: Quantity = ADDITIONAL_OVERHEAD_TIME
     dropped_frames: int = 1  # TODO: As a buffer we drop one VISDA frame
 
     # Derived attributes: computed in _update_derived, not constructor arguments
