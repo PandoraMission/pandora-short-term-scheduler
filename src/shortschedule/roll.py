@@ -77,7 +77,9 @@ def get_best_roll_per_visit(
 
     margin = int(np.rint(growth_margin_minutes))
     # Names are compared cleaned, as the scheduler does.
-    override_names = {clean_target_name(name) for name in occultation_overrides}
+    override_names = {
+        clean_target_name(name) for name in occultation_overrides
+    }
     results: Dict[str, dict] = {}
     for target, sequences in by_target.items():
         sequences = sorted(sequences, key=lambda s: s.start_time)

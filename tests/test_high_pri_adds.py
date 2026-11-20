@@ -183,7 +183,9 @@ def _gap_calendar():
     calendar = ScienceCalendar(
         metadata={},
         visits=[
-            Visit(id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]),
+            Visit(
+                id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]
+            ),
             Visit(
                 id="0002",
                 sequences=[
@@ -202,7 +204,10 @@ def test_a_gap_on_a_tie_joins_the_visit_before():
     """30-60 is closer to 0001, 150-180 closer to 0002: one each, so the
     whole gap joins 0001, at A's roll and main flag there."""
     proc = _processor(
-        {10: lambda m: _span(30, 60)(m) | _span(150, 180)(m), 70: _span(-9, -9)}
+        {
+            10: lambda m: _span(30, 60)(m) | _span(150, 180)(m),
+            70: _span(-9, -9),
+        }
     )
     calendar = _gap_calendar()
 
@@ -380,8 +385,12 @@ def test_a_thin_target_gives_its_time_to_the_others():
     calendar = ScienceCalendar(
         metadata={},
         visits=[
-            Visit(id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]),
-            Visit(id="0002", sequences=[_seq("001", "C", 1, 20, 40, 70.0, 0.0)]),
+            Visit(
+                id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]
+            ),
+            Visit(
+                id="0002", sequences=[_seq("001", "C", 1, 20, 40, 70.0, 0.0)]
+            ),
         ],
     )
 
@@ -399,7 +408,9 @@ def _two_targets(name="NGC 1433 SN"):
     return ScienceCalendar(
         metadata={},
         visits=[
-            Visit(id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]),
+            Visit(
+                id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]
+            ),
             Visit(
                 id="0002",
                 sequences=[_seq("001", name, 2, 20, 40, 70.0, 0.0)],
@@ -467,8 +478,12 @@ def test_a_padded_transit_goes_first_and_is_priority_1(monkeypatch):
     calendar = ScienceCalendar(
         metadata={},
         visits=[
-            Visit(id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]),
-            Visit(id="0002", sequences=[_seq("001", "C", 1, 20, 40, 70.0, 0.0)]),
+            Visit(
+                id="0001", sequences=[_seq("001", "A", 1, 0, 20, 10.0, 0.0)]
+            ),
+            Visit(
+                id="0002", sequences=[_seq("001", "C", 1, 20, 40, 70.0, 0.0)]
+            ),
         ],
     )
 

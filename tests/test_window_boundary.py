@@ -88,9 +88,7 @@ class TestExtraction:
 
     def test_observations_wholly_outside_are_left_out(self, monkeypatch):
         proc = _processor(monkeypatch, (0, 3 * 3600))
-        cal = _visits(
-            [_seq(1, _at(30), _at(60)), _seq(2, _at(120), _at(140))]
-        )
+        cal = _visits([_seq(1, _at(30), _at(60)), _seq(2, _at(120), _at(140))])
 
         assert _all(proc._extract_time_window(cal, START, DAYS, False)) == []
 

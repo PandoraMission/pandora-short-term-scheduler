@@ -234,7 +234,9 @@ class TestChoosingTheMainTarget:
         visit = _visit(("HD 1+2", 1, 100), ("B", 0, 40))
         section = ET.Element("AcquireVisCamScienceData")
         ET.SubElement(section, "TargetID").text = "HD 1+2"
-        visit.sequences[0].payload_params = {"AcquireVisCamScienceData": section}
+        visit.sequences[0].payload_params = {
+            "AcquireVisCamScienceData": section
+        }
         cal = ScienceCalendar(metadata={"keep": 1}, visits=[visit])
         before = [
             (s.target, s.start_time.isot, s.stop_time.isot, s.is_main)
@@ -379,8 +381,7 @@ class TestModelSelection:
         seq = _seq("s0", "A", priority)
 
         assert (
-            scheduler._visibility_for(seq)
-            is scheduler.occultation_visibility
+            scheduler._visibility_for(seq) is scheduler.occultation_visibility
         )
 
     @pytest.mark.parametrize("is_main", [True, False])
@@ -636,7 +637,9 @@ class TestOverrides:
         """No error: the override and the visit's own priority 1/2 target
         are both main."""
         proc = _processor(occultation_overrides=["Titan"])
-        visit = _visit(("TOI-544b", 1, 60), ("Titan", 2, 20), ("G1234567", 0, 30))
+        visit = _visit(
+            ("TOI-544b", 1, 60), ("Titan", 2, 20), ("G1234567", 0, 30)
+        )
 
         main = proc._mark_main_targets(
             ScienceCalendar(metadata={}, visits=[visit])
@@ -699,9 +702,7 @@ class TestOverrides:
 
         proc._mark_main_targets(ScienceCalendar(metadata={}, visits=[visit]))
 
-        warnings = [
-            m for m in proc.printed if m.startswith("WARNING")
-        ]
+        warnings = [m for m in proc.printed if m.startswith("WARNING")]
         assert len(warnings) == 1
         assert "TYPO" in warnings[0]
 
@@ -749,14 +750,16 @@ class TestRowsAreShaded:
         return {labels[y]: kind for y, kind in rows}, legend
 
     @pytest.mark.parametrize(
-        "plot", ["plot_gantt_timeline_by_priority", "plot_gantt_with_visibility"]
+        "plot",
+        ["plot_gantt_timeline_by_priority", "plot_gantt_with_visibility"],
     )
     def test_each_row_gets_its_band(self, monkeypatch, plot):
         shaded, legend = self._shaded(monkeypatch, plot)
 
         kinds = {
-            next(name for name in ("MAIN", "OVR", "OTHER") if name in label):
-            kind
+            next(
+                name for name in ("MAIN", "OVR", "OTHER") if name in label
+            ): kind
             for label, kind in shaded.items()
         }
         assert kinds == {"MAIN": "main", "OVR": "override", "OTHER": "other"}
@@ -801,6 +804,4 @@ class TestRowsAreShaded:
             visualizer._get_priority_colors([0])[0]
         )
         assert priority_0 != matplotlib.colors.to_rgba("lightgray")
-        assert any(
-            patch.get_facecolor() == priority_0 for patch in ax.patches
-        )
+        assert any(patch.get_facecolor() == priority_0 for patch in ax.patches)

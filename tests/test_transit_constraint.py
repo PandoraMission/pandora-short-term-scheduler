@@ -67,9 +67,7 @@ def _seq(sid, start_min, stop_min, priority=2, target="TEST-1b"):
 
 @pytest.fixture
 def processor(monkeypatch):
-    monkeypatch.setattr(
-        "shortschedule.scheduler.Visibility", _AlwaysVisible
-    )
+    monkeypatch.setattr("shortschedule.scheduler.Visibility", _AlwaysVisible)
     scheduler = ScheduleProcessor("LINE1", "LINE2")
     scheduler.transit_ephemerides = {planet_key("TEST-1b"): EPHEMERIS}
     return scheduler
@@ -96,9 +94,7 @@ class TestEphemerides:
         )
         partial = dict(full, **{"Planet Name": "X-1b"})
         del partial["Transit Duration (hrs)"]
-        (tree / "X-1b_target_definition.json").write_text(
-            json.dumps(partial)
-        )
+        (tree / "X-1b_target_definition.json").write_text(json.dumps(partial))
 
         ephemerides = load_ephemerides(tmp_path)
         assert set(ephemerides) == {planet_key("HAT-P-11b")}
@@ -130,8 +126,9 @@ class TestEphemerides:
             json.dumps(definition)
         )
         (tight / "TOI-270d_target_definition.json").write_text(
-            json.dumps(dict(definition, **{"Period (days)": 11.379}))
-            .replace("0.0001", "1e-06")
+            json.dumps(dict(definition, **{"Period (days)": 11.379})).replace(
+                "0.0001", "1e-06"
+            )
         )
         (only_nested / "HD_20329b_target_definition.json").write_text(
             json.dumps(dict(definition, **{"Planet Name": "HD_20329b"}))
@@ -164,7 +161,10 @@ class TestEphemerides:
         subprocess.run(git + ["init", "-q"], cwd=tmp_path, check=True)
         subprocess.run(
             git
-            + ["add", "target_definition_files/exoplanet/A-1b_target_definition.json"],
+            + [
+                "add",
+                "target_definition_files/exoplanet/A-1b_target_definition.json",
+            ],
             cwd=tmp_path,
             check=True,
         )

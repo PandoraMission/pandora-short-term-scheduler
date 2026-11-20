@@ -191,7 +191,9 @@ def test_a_trace_rejected_target_is_dropped_or_reported(
         assert n_kept == 0
         assert all(visit.sequences for visit in processed.visits)
         assert summary["trace_dropped"] == n_rejected
-        assert all("WARNING" in line and "Dropped" in line for line in trace_lines)
+        assert all(
+            "WARNING" in line and "Dropped" in line for line in trace_lines
+        )
     else:
         assert n_kept > 0
         assert summary["trace_dropped"] == 0

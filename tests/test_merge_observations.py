@@ -116,9 +116,12 @@ class TestMergeSimilarObservations:
         merged = proc._merge_similar_observations(cal).visits[0].sequences
 
         assert [(s.id, s.priority) for s in merged] == [("s1", 2)]
-        assert merged[0].get_payload_parameter(
-            "AcquireVisCamScienceData", "FramesPerCoadd"
-        ) == "2"
+        assert (
+            merged[0].get_payload_parameter(
+                "AcquireVisCamScienceData", "FramesPerCoadd"
+            )
+            == "2"
+        )
         # The input observations are left as they were.
         assert (seqA.priority, seqB.priority) == (1, 2)
 

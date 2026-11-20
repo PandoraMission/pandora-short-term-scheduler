@@ -532,7 +532,9 @@ class ScheduleProcessor:
 
         # High-priority additions in free time, with their own flat limb.
         self.add_high_pri_observations = add_high_pri_observations
-        self.high_priority_adds_earthlimb_min = high_priority_adds_earthlimb_min
+        self.high_priority_adds_earthlimb_min = (
+            high_priority_adds_earthlimb_min
+        )
         self.high_priority_adds_visibility = (
             self.visibility
             if high_priority_adds_earthlimb_min is None
@@ -586,14 +588,18 @@ class ScheduleProcessor:
         # Roll sweep configuration
         self.roll_step = roll_step
         self.min_power_frac = min_power_frac
-        self.drop_observations_based_on_trace = drop_observations_based_on_trace
+        self.drop_observations_based_on_trace = (
+            drop_observations_based_on_trace
+        )
 
         # Priority-2 transit constraint; planet key to ephemeris, empty
         # (constraint off) without a PandoraTargetList.
         self.transit_middle_frac = transit_middle_frac
         self.transit_duration_constraint_min = transit_duration_constraint_min
         self.transit_ephemerides = (
-            {} if target_list_dir is None else load_ephemerides(target_list_dir)
+            {}
+            if target_list_dir is None
+            else load_ephemerides(target_list_dir)
         )
 
         # Validate any explicitly supplied overheads carry time units so that
@@ -971,9 +977,7 @@ class ScheduleProcessor:
             else:
                 # sorted() is stable, so a tie goes to the first listed.
                 ranked = sorted(minutes, key=lambda t: -minutes[t])
-                main = next(
-                    (t for t in ranked if not self._is_gaia(t)), None
-                )
+                main = next((t for t in ranked if not self._is_gaia(t)), None)
                 if ranked and self._is_gaia(ranked[0]):
                     self._print(
                         f"WARNING: Visit {visit.id}: Gaia target "
@@ -1365,7 +1369,9 @@ class ScheduleProcessor:
                 transit_epoch(ephemeris, times[0]) - 1,
                 transit_epoch(ephemeris, times[-1]) + 2,
             ):
-                first_contact, last_contact = transit_core(ephemeris, epoch, 1.0)
+                first_contact, last_contact = transit_core(
+                    ephemeris, epoch, 1.0
+                )
                 low = (first_contact - buffer - window_start).to_value(u.min)
                 high = (last_contact + buffer - window_start).to_value(u.min)
                 in_window[target] |= (minute_index + 1 > low) & (
@@ -2047,7 +2053,9 @@ class ScheduleProcessor:
                         f"{result['trace_min_roll_deg']:.1f} deg has "
                         f"{result['trace_min_contamination']:.1e}"
                     )
-                    if getattr(self, "drop_observations_based_on_trace", False):
+                    if getattr(
+                        self, "drop_observations_based_on_trace", False
+                    ):
                         blocked.add(target)
                         self._print(f"WARNING: {failure}. Dropped.")
                     else:
@@ -2303,9 +2311,10 @@ class ScheduleProcessor:
             ``occultation_overrides``, else the nominal model.
         """
         if getattr(seq, "is_added", False):
-            return getattr(
-                self, "high_priority_adds_visibility", None
-            ) or self.visibility
+            return (
+                getattr(self, "high_priority_adds_visibility", None)
+                or self.visibility
+            )
         occultation = getattr(self, "occultation_visibility", None)
         if (
             occultation is not None
@@ -3493,7 +3502,9 @@ class ScheduleProcessor:
 
         for index, (visit_id, seq) in enumerate(
             self._progress(
-                ordered, desc="Refining edges to the second", total=len(ordered)
+                ordered,
+                desc="Refining edges to the second",
+                total=len(ordered),
             )
         ):
             if added_only and not getattr(seq, "is_added", False):
@@ -3504,7 +3515,9 @@ class ScheduleProcessor:
             # stop. Slices are [start-60 s, start), [start, start+60 s),
             # [stop-60 s, stop), [stop, stop+60 s).
             deltas = np.concatenate([offsets, (stop - start).sec + offsets])
-            vis = self._visibility_for_sequence(seq, coord, start + deltas * u.s)
+            vis = self._visibility_for_sequence(
+                seq, coord, start + deltas * u.s
+            )
             outside_start, inside_start = vis[:60], vis[60:120]
             inside_stop, outside_stop = vis[120:180], vis[180:]
             original = original_timing.get((visit_id, seq.id))
@@ -3524,7 +3537,9 @@ class ScheduleProcessor:
                     ):
                         previous -= 1
                     if previous >= 0:
-                        free = room((start - ordered[previous][1].stop_time).sec)
+                        free = room(
+                            (start - ordered[previous][1].stop_time).sec
+                        )
                     if original is not None and limit > 0:
                         free = min(
                             free,
@@ -3544,7 +3559,9 @@ class ScheduleProcessor:
                 else:
                     free = 60
                     if index + 1 < len(ordered):
-                        free = room((ordered[index + 1][1].start_time - stop).sec)
+                        free = room(
+                            (ordered[index + 1][1].start_time - stop).sec
+                        )
                     if original is not None and limit > 0:
                         free = min(
                             free,
@@ -3575,7 +3592,9 @@ class ScheduleProcessor:
                         self, "drop_priority0", False
                     ):
                         dropped.add((visit_id, seq.id))
-                        self._print(f"WARNING: {short}. Dropped (drop_priority0).")
+                        self._print(
+                            f"WARNING: {short}. Dropped (drop_priority0)."
+                        )
                         continue
                     self._print(f"WARNING: {short}.")
                 self._transit_allows(
@@ -3629,9 +3648,9 @@ class ScheduleProcessor:
         summary["edge_seconds_grown"] = (
             summary.get("edge_seconds_grown", 0) + seconds_out
         )
-        summary["priority_0_dropped"] = (
-            summary.get("priority_0_dropped", 0) + len(dropped)
-        )
+        summary["priority_0_dropped"] = summary.get(
+            "priority_0_dropped", 0
+        ) + len(dropped)
         self._print(
             f"Refined edges to the second"
             f"{' (high-priority additions)' if added_only else ''}: "
@@ -6198,7 +6217,9 @@ class ScheduleProcessor:
         deltas = np.arange(n_mins) * u.min
         times = target_seq.start_time + deltas
 
-        vis = self._visibility_for(target_seq).get_visibility(target_coord, times)["visible"]
+        vis = self._visibility_for(target_seq).get_visibility(
+            target_coord, times
+        )["visible"]
 
         self._print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):

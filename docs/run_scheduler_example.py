@@ -28,7 +28,7 @@ from shortschedule.visualizer import ScheduleVisualizer
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
-xml_file_path = Path("Path","To", "Longterm", "calendar.xml")
+xml_file_path = Path("Path", "To", "Longterm", "calendar.xml")
 
 # Base name (without extension) used to label the output plots, e.g.
 # "Pandora_science_calendar".
@@ -87,7 +87,9 @@ scheduler = ScheduleProcessor(
     nirda_roi_x=80,  # NIRDA ROI columns (across the dispersion) the trace check counts light in
     nirda_roi_y=256,  # NIRDA ROI rows (along the dispersion) the trace check counts light in
     drop_observations_based_on_trace=False,  # a target whose every observable roll fails the trace check: True drops it from that visit (warning), False keeps it at its best ranked roll (error)
-    target_list_dir=Path("C:\\", "Gits", "PandoraTargetList_og"),  # PandoraTargetList checkout whose transit ephemerides hold priority-2 observations to their transits; None turns this off
+    target_list_dir=Path(
+        "C:\\", "Gits", "PandoraTargetList_og"
+    ),  # PandoraTargetList checkout whose transit ephemerides hold priority-2 observations to their transits; None turns this off
     transit_middle_frac=0.75,  # the middle fraction of each transit's duration (T14) that forms its core
     transit_duration_constraint_min=15,  # visible minutes of the core a transit's priority-2 observations must keep; shrinks that break this are refused (0 turns it off)
     add_high_pri_observations=True,  # after everything else, fill idle time with extra observations of the week's priority 1/2 targets, each added to the existing visit it falls in (a gap between visits joins the visit most of its additions are closer to), so the calendar stays in time order
@@ -126,9 +128,7 @@ scheduler = ScheduleProcessor(
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2,
             },
-            "AcquireVisCamScienceData": {
-                "StarRoiDimension": 75
-            },
+            "AcquireVisCamScienceData": {"StarRoiDimension": 75},
         },
         "Priority_1": {
             "Observational_Parameters": {
@@ -147,9 +147,7 @@ scheduler = ScheduleProcessor(
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2,
             },
-            "AcquireVisCamScienceData": {
-                "StarRoiDimension": 75
-            },
+            "AcquireVisCamScienceData": {"StarRoiDimension": 75},
         },
         "Priority_2": {
             "Observational_Parameters": {
@@ -166,9 +164,7 @@ scheduler = ScheduleProcessor(
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2,
             },
-            "AcquireVisCamScienceData": {
-                "StarRoiDimension": 75
-            },
+            "AcquireVisCamScienceData": {"StarRoiDimension": 75},
         },
     },
     # Field-name overrides (NirdaData/VisdaData fields; None -> class default)

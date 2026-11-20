@@ -185,7 +185,10 @@ class TestUnderTheMinimum:
         else:
             assert remaining == [2]
             assert "Dropped (drop_priority0)" in out
-            assert proc.gap_report["processing_summary"]["priority_0_dropped"] == 1
+            assert (
+                proc.gap_report["processing_summary"]["priority_0_dropped"]
+                == 1
+            )
 
     def test_a_visit_emptied_by_the_drop_goes_too(self):
         proc = _processor(_SecondsVis((10 * 60, 17 * 60 + 30)))
@@ -248,9 +251,7 @@ class TestStart:
         assert first.stop_time <= second.start_time
 
     def test_pushed_past_a_dark_patch_in_the_first_minute(self):
-        proc = _processor(
-            _SecondsVis((0, 10 * 60 + 5), (10 * 60 + 12, 3600))
-        )
+        proc = _processor(_SecondsVis((0, 10 * 60 + 5), (10 * 60 + 12, 3600)))
         seq = _seq(1, _at(10), _at(30))
         cal = _calendar(seq)
 

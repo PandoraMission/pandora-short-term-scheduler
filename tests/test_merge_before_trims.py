@@ -93,8 +93,11 @@ def _calendar(*sequences):
 
 def _spans(calendar):
     return [
-        (seq.id, round((seq.start_time - T0).sec / 60, 2),
-         round((seq.stop_time - T0).sec / 60, 2))
+        (
+            seq.id,
+            round((seq.start_time - T0).sec / 60, 2),
+            round((seq.stop_time - T0).sec / 60, 2),
+        )
         for visit in calendar.visits
         for seq in sorted(visit.sequences, key=lambda s: s.start_time)
     ]
@@ -132,9 +135,7 @@ class TestTheWY47Case:
     ):
         """A neighbor after it, dark over the freed time: the tail trim
         refuses, and the longest-visible-block trim cuts it instead."""
-        proc = _processor(
-            monkeypatch, {10.0: [(0, 12)], OTHER_RA: [(30, 60)]}
-        )
+        proc = _processor(monkeypatch, {10.0: [(0, 12)], OTHER_RA: [(30, 60)]})
         first, second = _pair((0, 12), (13, 30))
         after = _seq(3, _at(30), _at(60))
         after.target, after.ra = "TOI-544b", OTHER_RA
@@ -172,7 +173,9 @@ class TestTheJoin:
         result = proc._process_all_sequences(cal, merge_first=True)
 
         assert _spans(result) == [(1, 0.0, 15.0), (2, 35.0, 50.0)]
-        assert proc.gap_report["processing_summary"]["merged_before_trims"] == 0
+        assert (
+            proc.gap_report["processing_summary"]["merged_before_trims"] == 0
+        )
 
     def test_a_dark_head_is_merged_and_trimmed(self, monkeypatch):
         proc = _processor(monkeypatch, {10.0: [(18, 40)]})
@@ -228,9 +231,9 @@ def test_nothing_is_dropped_before_the_trims(monkeypatch, capsys):
     late = proc._merge_similar_observations(cal)
 
     assert len(early.visits[0].sequences) == 3
-    assert "dropped priority-0" not in capsys.readouterr().out.split(
-        "Merged"
-    )[0]
+    assert (
+        "dropped priority-0" not in capsys.readouterr().out.split("Merged")[0]
+    )
     assert len(late.visits[0].sequences) == 1
 
 
