@@ -179,25 +179,29 @@ def test_n_scheduled_visible_counts_scheduled_minutes_only():
     assert visit.sequences[0].roll == 30.0
 
 
-def test_priority_0_model_only_when_every_observation_is_priority_0():
+def test_occultation_model_only_for_a_target_that_is_not_main():
+    """Priority plays no part: a priority-1 target that is not main
+    takes the occultation model, a priority-0 main target does not."""
     nominal, strict = _RecordingVisibility(), _RecordingVisibility()
-    all_zero = Visit(
+    not_main = Visit(
+        "v1",
+        [
+            _make_seq("s1", "A", 0, 10, priority=1),
+            _make_seq("s2", "A", 60, 10, priority=1),
+        ],
+    )
+    get_best_roll_per_visit(not_main, nominal, occultation_visibility=strict)
+    assert (len(nominal.calls), len(strict.calls)) == (0, 1)
+
+    nominal, strict = _RecordingVisibility(), _RecordingVisibility()
+    main = Visit(
         "v1",
         [
             _make_seq("s1", "A", 0, 10, priority=0),
             _make_seq("s2", "A", 60, 10, priority=0),
         ],
     )
-    get_best_roll_per_visit(all_zero, nominal, priority_0_visibility=strict)
-    assert (len(nominal.calls), len(strict.calls)) == (0, 1)
-
-    nominal, strict = _RecordingVisibility(), _RecordingVisibility()
-    mixed = Visit(
-        "v1",
-        [
-            _make_seq("s1", "A", 0, 10, priority=0),
-            _make_seq("s2", "A", 60, 10, priority=1),
-        ],
-    )
-    get_best_roll_per_visit(mixed, nominal, priority_0_visibility=strict)
+    for seq in main.sequences:
+        seq.is_main = True
+    get_best_roll_per_visit(main, nominal, occultation_visibility=strict)
     assert (len(nominal.calls), len(strict.calls)) == (1, 0)

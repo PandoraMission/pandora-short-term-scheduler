@@ -70,3 +70,21 @@ def test_parse_science_calendar_skips_free_time_targets(tmp_path):
     assert len(calendar.visits[0].sequences) == 1
     assert calendar.visits[0].sequences[0].id == "seq-target"
     assert calendar.visits[0].sequences[0].target == "WASP-39b"
+
+
+def test_parse_science_calendar_reads_the_max_sequence_duration(tmp_path):
+    """Long-term calendars write Observation_Sequence_Duration_hrs_max."""
+    xml_path = tmp_path / "calendar.xml"
+    xml_path.write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<ScienceCalendar xmlns="/pandora/calendar/">
+  <Meta Valid_From="2026-05-01T00:00:00" Expires="2026-05-02T00:00:00"
+        Observation_Sequence_Duration_hrs_max="1:30:00" />
+</ScienceCalendar>
+""",
+        encoding="utf-8",
+    )
+
+    calendar = parse_science_calendar(str(xml_path))
+
+    assert calendar.metadata["observation_sequence_duration"] == "1:30:00"

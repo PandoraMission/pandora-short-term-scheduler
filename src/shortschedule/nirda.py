@@ -23,13 +23,12 @@ shorter ``reset_frames_2``).
 from __future__ import annotations
 
 import math
-from warnings import warn
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+from warnings import warn
 
 from astropy import units as u
 from astropy.units import Quantity
-
-from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .overhead import OverheadTiming

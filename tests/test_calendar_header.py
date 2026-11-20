@@ -236,18 +236,32 @@ class TestSettingsInTheHeader:
         # pinning it here is the drift this test exists to catch.
         assert float(meta["Moon_Min_Deg"]) > 0
 
-    def test_priority_0_limb_is_absent_when_unused(self, tmp_path):
+    def test_occultation_limb_is_absent_when_unused(self, tmp_path):
         meta = self._meta(tmp_path, ScheduleProcessor(TLE1, TLE2))
 
-        assert "Priority_0_Earthlimb_Min_Deg" not in meta
+        assert "Occultation_Earthlimb_Min_Deg" not in meta
+        assert "Occultation_Overrides" not in meta
 
-    def test_priority_0_limb_is_written_when_set(self, tmp_path):
+    def test_occultation_overrides_are_written_when_set(self, tmp_path):
         meta = self._meta(
             tmp_path,
-            ScheduleProcessor(TLE1, TLE2, priority_0_earthlimb_min=54),
+            ScheduleProcessor(
+                TLE1,
+                TLE2,
+                occultation_earthlimb_min=54,
+                occultation_overrides=["TOI-5349", "HD_29037"],
+            ),
         )
 
-        assert meta["Priority_0_Earthlimb_Min_Deg"] == "54"
+        assert meta["Occultation_Overrides"] == "TOI-5349,HD_29037"
+
+    def test_occultation_limb_is_written_when_set(self, tmp_path):
+        meta = self._meta(
+            tmp_path,
+            ScheduleProcessor(TLE1, TLE2, occultation_earthlimb_min=54),
+        )
+
+        assert meta["Occultation_Earthlimb_Min_Deg"] == "54"
 
     def test_status_reaches_the_header(self, tmp_path):
         scheduler = ScheduleProcessor(TLE1, TLE2)

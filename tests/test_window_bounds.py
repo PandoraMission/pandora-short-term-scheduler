@@ -1,9 +1,8 @@
 """Tests for the processing window's edges.
 
-``window_start`` is hard: the time before it belongs to the previous
-calendar, so nothing that started before it is scheduled and nothing grows
-back into it. ``window_end`` is soft: an observation starting before it keeps
-its full length, and growth may carry it into the next calendar.
+The window is a hard boundary on both sides: an observation the long-term
+calendar runs across either edge is cut at that edge, and growth stops at
+both edges, so the week before and the week after each fly their own part.
 """
 
 # Third-party
@@ -26,8 +25,9 @@ def _minutes(time):
 
 
 class TestExtractTimeWindow:
-    def test_kept_whole_when_it_starts_inside_the_window(self):
-        """A start straddler is left out; an end straddler is kept whole."""
+    def test_straddlers_are_cut_at_the_edges(self):
+        """Observations crossing either edge are kept, cut to the window;
+        ones wholly outside are left out."""
         proc = _processor()
         before = _make_seq("s0", "A", start_min=0, duration_min=20)
         start = _make_seq("s1", "B", start_min=50, duration_min=30)
@@ -43,13 +43,13 @@ class TestExtractTimeWindow:
             (seq.id, _minutes(seq.start_time), _minutes(seq.stop_time))
             for seq in out.visits[0].sequences
         ]
-        assert spans == [("s2", 100, 120), ("s3", 1480, 1520)]
+        assert spans == [("s1", 60, 80), ("s2", 100, 120), ("s3", 1480, 1500)]
 
 
 class TestGrowthAtTheWindowEdges:
-    def test_start_is_a_hard_bound_and_end_is_not(self):
-        """Visibility and the movement limit allow growth either way; only
-        the start of the window stops it."""
+    def test_both_edges_are_hard_bounds(self):
+        """Visibility and the movement limit allow growth either way; the
+        window stops it on both sides."""
         proc = _processor(_PatternVis(np.ones(400, dtype=bool)), limit=45)
         proc.window_start = T0 + 100 * u.min
         proc.window_end = T0 + 300 * u.min
@@ -61,5 +61,4 @@ class TestGrowthAtTheWindowEdges:
 
         a, b = cal.visits[0].sequences
         assert _minutes(a.start_time) == 100
-        # 45 min past its long-term stop at 290, beyond the window end.
-        assert _minutes(b.stop_time) == 335
+        assert _minutes(b.stop_time) == 300

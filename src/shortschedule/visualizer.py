@@ -11,7 +11,7 @@ the documentation and analysis notebooks.
 
 # Standard library
 from datetime import timedelta
-from typing import Any, Optional, Tuple
+from typing import Any
 
 # Third-party
 import matplotlib.dates as mdates
@@ -45,7 +45,7 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        figsize: Tuple[int, int] = (16, 10),
+        figsize: tuple[int, int] = (16, 10),
     ) -> Figure:
         """Create a proper Gantt chart style timeline."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharex=True)
@@ -97,7 +97,7 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        figsize: Tuple[int, int] = (20, 14),
+        figsize: tuple[int, int] = (20, 14),
         show_sequence_labels: bool = False,
         processed_only: bool = False,
     ) -> Figure:
@@ -360,7 +360,7 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        figsize: Tuple[int, int] = (16, 8),
+        figsize: tuple[int, int] = (16, 8),
         processed_only: bool = False,
     ) -> Figure:
         """Create a high-level timeline showing just visits and their overall spans."""
@@ -530,10 +530,10 @@ class ScheduleVisualizer:
         self,
         original_calendar: ScienceCalendar,
         processed_calendar: ScienceCalendar,
-        save_path: Optional[str] = None,
+        save_path: str | None = None,
         show_sequence_labels: bool = False,
         processed_only: bool = False,
-    ) -> Tuple[Figure, Figure, Figure, pd.DataFrame]:
+    ) -> tuple[Figure, Figure, Figure, pd.DataFrame]:
         """Generate complete visualization report with options."""
 
         # Create visit-organized Gantt chart
@@ -2129,7 +2129,7 @@ class ScheduleVisualizer:
         from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         scheduler = self.scheduler
-        priority_colors = self._get_priority_colors([1, 2, 3, 4, 5, 6, 7, 8])
+        priority_colors = self._get_priority_colors(range(9))
 
         roll_cmap = cmr.infinity
         roll_norm = Normalize(vmin=-180.0, vmax=180.0)
@@ -2162,10 +2162,11 @@ class ScheduleVisualizer:
 
                 # The roll written onto the observation is the one flown.
                 roll = seq.roll
-                # Judge each bar by the keepouts its own priority flies,
-                # so a stricter priority-0 Earth limb shows up here rather
-                # than the plot disagreeing with the delivered calendar.
-                model = scheduler._visibility_for_priority(seq.priority)
+                # Judge each bar by the keepouts it flies, so a non-main
+                # target's stricter occultation Earth limb shows up here
+                # rather than the plot disagreeing with the delivered
+                # calendar.
+                model = scheduler._visibility_for(seq)
                 if roll is not None:
                     vis = model.get_visibility(coord, times, roll=roll * u.deg)
                 else:
@@ -2186,11 +2187,25 @@ class ScheduleVisualizer:
         # Build y-axis: one row per (visit, target)
         seen = {}
         y_labels = []
+        row_visits = []
         for vid, seq, _, _ in rows:
             key = (vid, seq.target)
             if key not in seen:
                 seen[key] = len(y_labels)
                 y_labels.append(f"{vid} / {seq.target}")
+                row_visits.append(vid)
+        row_sequences = {}
+        for vid, seq, _, _ in rows:
+            row_sequences.setdefault(seen[(vid, seq.target)], []).append(seq)
+        row_kinds = set()
+        for y, sequences in row_sequences.items():
+            kind = self._row_kind(sequences)
+            self._shade_row(ax, y, kind)
+            row_kinds.add(kind)
+        # A black line between visits; rows are grouped by visit in order.
+        for y in range(1, len(row_visits)):
+            if row_visits[y] != row_visits[y - 1]:
+                ax.axhline(y=y - 0.5, color="black", linewidth=1.5, zorder=2)
 
         # Track x-extent for axis limits
         x_min = float("inf")
@@ -2337,6 +2352,7 @@ class ScheduleVisualizer:
         for p in used_priorities:
             c = priority_colors.get(p, "silver")
             legend_items.append(Patch(facecolor=c, label=f"Priority {p}"))
+        legend_items.extend(self._row_band_patches(row_kinds))
         ax.legend(
             handles=legend_items,
             loc="upper right",
@@ -2355,13 +2371,80 @@ class ScheduleVisualizer:
         fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.98))
         return fig
 
+    # The light band behind each row of a visit, by the keepout it flies:
+    # its main target, a target named in occultation_overrides, or any
+    # other target. Legend order follows this order.
+    _ROW_BANDS = {
+        "main": ("tab:blue", "Main target"),
+        "override": ("magenta", "Occultation override"),
+        "other": ("tab:green", "Non-main target"),
+    }
+    _ROW_BAND_ALPHA = 0.12
+
+    def _row_kind(self, sequences):
+        """Which band a row of one target's observations in a visit gets.
+
+        Parameters
+        ----------
+        sequences : list of ObservationSequence
+            The row's observations, all of one target in one visit.
+
+        Returns
+        -------
+        str
+            ``"main"`` for the visit's main target, ``"override"`` for a
+            target named in the scheduler's ``occultation_overrides``,
+            otherwise ``"other"``.
+        """
+        if any(getattr(seq, "is_main", False) for seq in sequences):
+            return "main"
+        overrides = getattr(self.scheduler, "_overrides_occultation", None)
+        if overrides is not None and overrides(sequences[0].target):
+            return "override"
+        return "other"
+
+    def _shade_row(self, ax, y, kind):
+        """Put the light band for ``kind`` behind row ``y``.
+
+        Parameters
+        ----------
+        ax : matplotlib.axes.Axes
+            The Gantt axes.
+        y : float
+            The row's center; rows are one unit tall.
+        kind : str
+            A key of ``_ROW_BANDS``, from :meth:`_row_kind`.
+        """
+        ax.axhspan(
+            y - 0.5,
+            y + 0.5,
+            facecolor=self._ROW_BANDS[kind][0],
+            alpha=self._ROW_BAND_ALPHA,
+            edgecolor="none",
+            zorder=0,
+        )
+
+    def _row_band_patches(self, kinds):
+        """Legend entries for the row bands in ``kinds``, in a fixed order."""
+        # Third-party
+        from matplotlib.patches import Patch
+
+        return [
+            Patch(facecolor=color, alpha=self._ROW_BAND_ALPHA, label=label)
+            for kind, (color, label) in self._ROW_BANDS.items()
+            if kind in kinds
+        ]
+
     def _get_priority_colors(self, priorities):
         """Generate better color scheme for priorities with more distinct colors."""
         priority_colors = {}
 
         # Define more distinct colors for priorities
         color_map = {
-            0: "lightgray",  # Priority 0 - light gray
+            # Priority 0 - mid gray: neutral so it reads as filler, but dark
+            # enough to show on the light row bands and still clearly lighter
+            # than the black used for non-visible minutes.
+            0: "#8c8c8c",
             1: "crimson",  # Highest priority - bright red (more distinct from red)
             2: "darkorange",  # High priority - dark orange (more distinct from red)
             3: "gold",  # Medium-high priority - gold
@@ -2447,6 +2530,7 @@ class ScheduleVisualizer:
             # Plot each target within this visit
             for target in sorted_targets:
                 sequences = sequences_by_target[target]
+                self._shade_row(ax, y_pos, self._row_kind(sequences))
 
                 # Plot all sequences for this target
                 for seq_idx, seq in enumerate(sequences):
@@ -2511,9 +2595,7 @@ class ScheduleVisualizer:
 
             # Add visit separator line
             if visit_idx < len(sorted_visits) - 1:
-                ax.axhline(
-                    y=y_pos - 0.5, color="black", linewidth=2, alpha=0.7
-                )
+                ax.axhline(y=y_pos - 0.5, color="black", linewidth=2)
 
             y_pos += 0.2  # Small gap between visits
 
@@ -2593,6 +2675,15 @@ class ScheduleVisualizer:
             legend_elements.append(
                 Patch(facecolor=color, alpha=1.0, label=label)
             )
+        rows = {}
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                rows.setdefault((visit.id, seq.target), []).append(seq)
+        legend_elements.extend(
+            self._row_band_patches(
+                {self._row_kind(sequences) for sequences in rows.values()}
+            )
+        )
 
         if legend_elements:
             fig.legend(
@@ -3031,7 +3122,7 @@ class ScheduleVisualizer:
         the dynamic DPC wedge when ``use_dynamic_earthlimb`` is set (110,
         82 and 75 deg from the Earth center at 78, 89 and 90 deg of
         illumination), otherwise its day/night pair or flat limb angle,
-        plus the flat priority-0 limb when one is configured.  A star
+        plus the flat occultation limb when one is configured.  A star
         tracker's Earth-limb keep-out does not vary with illumination, so
         it is a vertical line.
 
@@ -3044,7 +3135,9 @@ class ScheduleVisualizer:
         angular radius over the span.
 
         Dots are transparent so repeated visits to the same phase space
-        stack up visibly.
+        stack up visibly.  The first minute of each observation is an
+        opaque star in the target's color; back-to-back observations of
+        the same target form one run and get one star.
 
         Parameters
         ----------
@@ -3061,6 +3154,7 @@ class ScheduleVisualizer:
         -------
         matplotlib.figure.Figure
         """
+        from matplotlib.lines import Line2D
         from pandoravisibility import Visibility
 
         from .pointing import AXES, IDLE_LABEL
@@ -3095,7 +3189,7 @@ class ScheduleVisualizer:
             )
         }
         strict = getattr(
-            getattr(self.scheduler, "priority_0_visibility", None),
+            getattr(self.scheduler, "occultation_visibility", None),
             "earthlimb_min",
             None,
         )
@@ -3122,6 +3216,23 @@ class ScheduleVisualizer:
                     color=colors[target],
                     alpha=0.35,
                     linewidths=0,
+                )
+                # An opaque star on the first minute of each observation,
+                # so the direction each trail runs can be read.
+                starts = [
+                    start
+                    for start, _, label in timeline.segments
+                    if label == target
+                ]
+                ax.scatter(
+                    timeline.angles[(axis, "earth")][starts],
+                    timeline.illumination[axis][starts],
+                    s=90,
+                    marker="*",
+                    color=colors[target],
+                    edgecolors="black",
+                    linewidths=0.4,
+                    zorder=4,
                 )
             ax.axhline(90.0, color="gray", linestyle=":", linewidth=1.0)
 
@@ -3163,7 +3274,7 @@ class ScheduleVisualizer:
                             np.full_like(illumination, strict_deg + radius),
                             illumination,
                             ":",
-                            f"priority 0: {strict_deg:.0f} deg above the limb",
+                            f"occultation: {strict_deg:.0f} deg above the limb",
                         )
                     )
             elif hasattr(visibility, "_st_earthlimb_min_for"):
@@ -3193,8 +3304,21 @@ class ScheduleVisualizer:
                     zorder=5,
                     label=label,
                 )
-            if lines:
-                ax.legend(loc="lower right", fontsize=7)
+            handles, _ = ax.get_legend_handles_labels()
+            handles.append(
+                Line2D(
+                    [],
+                    [],
+                    linestyle="none",
+                    marker="*",
+                    markersize=9,
+                    color="gray",
+                    markeredgecolor="black",
+                    markeredgewidth=0.4,
+                    label="observation start",
+                )
+            )
+            ax.legend(handles=handles, loc="lower right", fontsize=7)
 
             ax.set_title(axis, fontsize=11, fontweight="bold")
             ax.set_xlabel("Angle to Earth center (deg)")
@@ -3230,4 +3354,140 @@ class ScheduleVisualizer:
         )
         self._add_pointing_legend(fig, timeline, colors)
         fig.tight_layout(rect=(0.0, 0.1, 1.0, 0.93))
+        return fig
+
+    def plot_target_fields(
+        self,
+        calendar,
+        targets_per_row=4,
+        panel_height=5.0,
+        title="Simulated NIRDA and VISDA Fields",
+    ):
+        """Simulated NIRDA subarray and VISDA frame of every target.
+
+        Each target gets two panels side by side: its NIRDA ROI with the
+        neighbor star traces (``pandoravisibility.trace.plot_trace``, title
+        ``c`` = trace contamination) and one uncoadded VISDA frame
+        (``pandoravisibility.visda.plot_visible_field`` with its defaults).
+        Both are drawn at the target's mean roll over the calendar, the
+        circular mean of its observations' rolls weighted by duration, with
+        stars moved to the epoch of its first observation. When its visits
+        fly different rolls, the NIRDA title gives their span about that
+        mean, since the contamination depends on roll. Stars come from the
+        gaiaoffline database that the roll search's trace check reads.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Processed calendar to plot.
+        targets_per_row : int, optional
+            Targets (panel pairs) per figure row.
+        panel_height : float, optional
+            Height of each row in inches.
+        title : str
+            Plot title.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+        """
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+        from pandoravisibility import star_field, trace, visda
+
+        # Targets in the order they are first observed
+        by_target = {}
+        for seq in sorted(
+            (
+                seq
+                for visit in calendar.visits
+                for seq in visit.sequences
+                if seq.roll is not None
+            ),
+            key=lambda seq: seq.start_time,
+        ):
+            by_target.setdefault(seq.target, []).append(seq)
+
+        visibility = self.scheduler.visibility
+        roi_x, roi_y = visibility.nirda_roi_x, visibility.nirda_roi_y
+        n_rows = max(1, int(np.ceil(len(by_target) / targets_per_row)))
+        # The NIRDA panel keeps its ROI's aspect next to the square VISDA
+        # frame, which also carries a colorbar.
+        nirda_width = roi_x / roi_y
+        fig = plt.figure(
+            figsize=(
+                targets_per_row * panel_height * (nirda_width + 1.0) * 1.3,
+                n_rows * panel_height + 1.0,
+            ),
+            layout="constrained",
+        )
+        grid = fig.add_gridspec(
+            n_rows,
+            2 * targets_per_row,
+            width_ratios=[nirda_width, 1.0] * targets_per_row,
+        )
+
+        for index, (target, sequences) in enumerate(by_target.items()):
+            row, col = divmod(index, targets_per_row)
+            nirda_ax = fig.add_subplot(grid[row, 2 * col])
+            visda_ax = fig.add_subplot(grid[row, 2 * col + 1])
+
+            minutes = np.array([seq.duration.sec / 60.0 for seq in sequences])
+            rolls = np.deg2rad([seq.roll for seq in sequences])
+            mean_roll = np.rad2deg(
+                np.arctan2(
+                    np.sum(minutes * np.sin(rolls)),
+                    np.sum(minutes * np.cos(rolls)),
+                )
+            )
+            offsets = (np.rad2deg(rolls) - mean_roll + 180.0) % 360.0 - 180.0
+            nirda_title = f"{target} NIRDA"
+            if np.ptp(offsets) > 0.05:
+                nirda_title += (
+                    f"\nvisits {offsets.min():+.1f} to {offsets.max():+.1f}°"
+                    " from mean"
+                )
+            coord = SkyCoord(
+                sequences[0].ra, sequences[0].dec, unit="deg", frame="icrs"
+            )
+            epoch = sequences[0].start_time
+
+            field = star_field.query_field(coord, epoch)
+            if field is None:
+                # No Gaia star at the target, so the trace check was skipped
+                nirda_ax.text(
+                    0.5,
+                    0.5,
+                    "no Gaia star\nat the target",
+                    ha="center",
+                    va="center",
+                    transform=nirda_ax.transAxes,
+                )
+                nirda_ax.set_title(nirda_title, fontsize=9)
+            else:
+                trace.plot_trace(
+                    field,
+                    mean_roll * u.deg,
+                    roi_x,
+                    roi_y,
+                    ax=nirda_ax,
+                    title=nirda_title,
+                )
+            visda.plot_visible_field(
+                star_field.query_visible_field(
+                    coord, epoch, visda.field_radius_arcmin()
+                ),
+                mean_roll * u.deg,
+                ax=visda_ax,
+                title=f"{target} VISDA",
+            )
+
+        if not by_target:
+            fig.text(0.5, 0.5, "No observations", ha="center", va="center")
+        fig.suptitle(
+            f"{title}\nEach target at its duration-weighted mean roll; NIRDA "
+            "c is the trace contamination (tolerance "
+            f"{getattr(visibility, 'trace_contamination_tol', np.nan):g})",
+            fontsize=14,
+        )
         return fig

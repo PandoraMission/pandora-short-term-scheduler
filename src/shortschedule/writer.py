@@ -180,7 +180,7 @@ class XMLWriter:
         }
 
         for internal_name, xml_attr in meta_mapping.items():
-            if internal_name in metadata and metadata[internal_name]:
+            if metadata.get(internal_name):
                 meta.set(xml_attr, str(metadata[internal_name]))
 
         # Add TLE information if present
@@ -224,6 +224,11 @@ class XMLWriter:
         # Priority
         priority_elem = ET.SubElement(obs_params, "Priority")
         priority_elem.text = str(sequence.priority)
+
+        # Whether this is its visit's main target, which decides the
+        # keepouts it flies (see ScheduleProcessor._mark_main_targets).
+        visit_main_elem = ET.SubElement(obs_params, "VisitMain")
+        visit_main_elem.text = str(bool(getattr(sequence, "is_main", False)))
 
         # Timing
         timing_elem = ET.SubElement(obs_params, "Timing")

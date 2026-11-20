@@ -8,22 +8,27 @@ how much each counts, and which keepout model applies.
 """
 
 # Standard library
-from typing import Any, Dict, Optional
+from collections.abc import Collection
+from typing import Any
 
 # Third-party
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 
+# First-party/Local
+from .models import clean_target_name
+
 
 def get_best_roll_per_visit(
     visit: Any,
     visibility: Any,
     roll_step: float = 1.0,
-    min_power_frac: Optional[float] = None,
-    priority_0_visibility: Any = None,
+    min_power_frac: float | None = None,
+    occultation_visibility: Any = None,
+    occultation_overrides: Collection[str] = (),
     growth_margin_minutes: float = 0.0,
-) -> Dict[str, dict]:
+) -> dict[str, dict]:
     """Choose one roll per target in ``visit`` and write it onto its sequences.
 
     The minutes scored are every scheduled minute of the target in this
@@ -43,11 +48,14 @@ def get_best_roll_per_visit(
         Sweep resolution in degrees.
     min_power_frac : float, optional
         Rolls whose mean solar power is below this are not considered.
-    priority_0_visibility : pandoravisibility.Visibility, optional
-        Stricter model used when every observation of a target in this
-        visit is priority 0. A target with mixed priorities keeps
-        ``visibility``, since one roll has to serve the whole visit and the
-        strictest member would over-constrain the rest.
+    occultation_visibility : pandoravisibility.Visibility, optional
+        Stricter model used for a target that is not the visit's main
+        target (``is_main`` False on its observations). The main target
+        keeps ``visibility``.
+    occultation_overrides : collection of str, optional
+        Target names that keep ``visibility`` though not main. Matched
+        with :func:`~shortschedule.models.clean_target_name` applied to
+        both sides.
     growth_margin_minutes : float, optional
         Minutes on each side of every observation the roll should also try
         to keep visible, so growth has somewhere to go.
@@ -56,17 +64,24 @@ def get_best_roll_per_visit(
     -------
     dict
         Target name to the ``get_visibility`` result, with ``roll_deg``
-        reduced to the one roll held, and ``scheduled`` (which scored
-        minutes were scheduled) and ``n_scheduled_visible`` added. Zero
-        scheduled minutes visible means no roll can observe the target and
-        the fallback attitude was written.
+        and the trace fields reduced to the one roll held, and
+        ``scheduled`` (which scored minutes were scheduled),
+        ``n_scheduled_visible`` and ``trace_blocked`` added. Zero scheduled
+        minutes visible means no roll can observe the target and the
+        fallback attitude was written. ``trace_blocked`` is True when some
+        roll sees a scored minute but every such roll fails the NIRDA
+        trace check.
     """
-    by_target: Dict[str, list] = {}
+    by_target: dict[str, list] = {}
     for seq in visit.sequences:
         by_target.setdefault(seq.target, []).append(seq)
 
     margin = int(np.rint(growth_margin_minutes))
-    results: Dict[str, dict] = {}
+    # Names are compared cleaned, as the scheduler does.
+    override_names = {
+        clean_target_name(name) for name in occultation_overrides
+    }
+    results: dict[str, dict] = {}
     for target, sequences in by_target.items():
         sequences = sorted(sequences, key=lambda s: s.start_time)
         origin = sequences[0].start_time
@@ -82,10 +97,12 @@ def get_best_roll_per_visit(
         weights = np.where(scheduled, int((~scheduled).sum()) + 1, 1)
 
         model = visibility
-        if priority_0_visibility is not None and all(
-            seq.priority == 0 for seq in sequences
+        if (
+            occultation_visibility is not None
+            and clean_target_name(target) not in override_names
+            and not any(getattr(seq, "is_main", False) for seq in sequences)
         ):
-            model = priority_0_visibility
+            model = occultation_visibility
         coord = SkyCoord(
             sequences[0].ra, sequences[0].dec, unit="deg", frame="icrs"
         )
@@ -98,12 +115,30 @@ def get_best_roll_per_visit(
             weights=weights,
         )
         # The search holds one roll over every scored minute and echoes it
-        # per timestep; the visit rule wants that one number.
-        result["roll_deg"] = float(np.atleast_1d(result["roll_deg"])[0])
+        # per timestep; the visit rule wants that one number. The trace
+        # fields (pandoravisibility v2.1.0) are echoed the same way.
+        for key in (
+            "roll_deg",
+            "trace_contamination",
+            "trace_ok",
+            "trace_min_contamination",
+            "trace_min_roll_deg",
+        ):
+            if key in result:
+                result[key] = np.atleast_1d(result[key])[0].item()
         result["scheduled"] = scheduled
         result["n_scheduled_visible"] = int(
             np.asarray(result["visible"])[scheduled].sum()
         )
+        # A roll failing the NIRDA trace check is reported with nothing
+        # visible. Asking again at that fixed roll, which skips the trace
+        # check, tells a trace rejection from a target no roll can see.
+        result["trace_blocked"] = False
+        if not result.get("trace_ok", True):
+            fixed = model.get_visibility(
+                coord, times, roll=result["roll_deg"] * u.deg
+            )
+            result["trace_blocked"] = bool(np.any(fixed["visible"]))
         for seq in sequences:
             seq.roll = result["roll_deg"]
         results[target] = result

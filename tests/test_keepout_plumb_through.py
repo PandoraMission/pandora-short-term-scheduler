@@ -84,16 +84,16 @@ def test_explicit_dynamic_earthlimb_is_applied_verbatim(wedge):
     assert scheduler.use_dynamic_earthlimb is wedge
 
 
-def test_priority_0_limb_is_not_overridden_by_library_day_night():
-    """The priority-0 limb stays the flat angle the caller asked for.
+def test_occultation_limb_is_not_overridden_by_library_day_night():
+    """The occultation limb stays the flat angle the caller asked for.
 
     The day/night pair has to be sent as an explicit ``None``. Dropping
     the keys instead lets Visibility fall back to its own defaults, which
     are real angles since v1.3.0, and those would then decide the
-    threshold rather than ``priority_0_earthlimb_min``.
+    threshold rather than ``occultation_earthlimb_min``.
     """
-    processor = ScheduleProcessor(TLE1, TLE2, priority_0_earthlimb_min=54)
-    strict = processor.priority_0_visibility
+    processor = ScheduleProcessor(TLE1, TLE2, occultation_earthlimb_min=54)
+    strict = processor.occultation_visibility
 
     assert strict.use_dynamic_earthlimb is False
     assert strict.earthlimb_day_min is None

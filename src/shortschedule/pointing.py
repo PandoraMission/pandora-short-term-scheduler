@@ -9,7 +9,8 @@ from `pandoravisibility` rather than being restated.
 """
 
 # Standard library
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
+from typing import Any
 
 # Third-party
 import numpy as np
@@ -212,12 +213,12 @@ class PointingTimeline:
         self,
         times: Time,
         labels: np.ndarray,
-        angles: Dict[Tuple[str, str], np.ndarray],
-        illumination: Dict[str, np.ndarray],
+        angles: dict[tuple[str, str], np.ndarray],
+        illumination: dict[str, np.ndarray],
         earth_radius_deg: float,
-        ra: Dict[str, np.ndarray],
-        dec: Dict[str, np.ndarray],
-        unresolved: List[str],
+        ra: dict[str, np.ndarray],
+        dec: dict[str, np.ndarray],
+        unresolved: list[str],
     ) -> None:
         self.times = times
         self.labels = labels
@@ -253,7 +254,7 @@ def build_pointing_timeline(
     visibility: Any,
     step_minutes: int = 1,
     idle_euler_deg: Sequence[float] = DARK_IDLE_EULER_DEG,
-    progress: Optional[Callable] = None,
+    progress: Callable | None = None,
     verbose: bool = False,
 ) -> PointingTimeline:
     """Reconstruct where the spacecraft points for every minute of a week.
@@ -313,7 +314,7 @@ def build_pointing_timeline(
     # groups that share a pointing, so each group costs one call rather
     # than one call per observation.
     labels = np.full(n_steps, IDLE_LABEL, dtype=object)
-    groups: Dict[Tuple[float, float, Optional[float]], List[int]] = {}
+    groups: dict[tuple[float, float, float | None], list[int]] = {}
     for visit_id, seq in observations:
         first = int(
             np.rint((seq.start_time - span_start).sec / 60.0 / step_minutes)
@@ -350,7 +351,7 @@ def build_pointing_timeline(
     body_units = {"sun": sun_unit, "earth": nadir_unit, "moon": moon_unit}
 
     pointing = {axis: np.full((3, n_steps), np.nan) for axis in AXES}
-    unresolved: List[str] = []
+    unresolved: list[str] = []
 
     # Observation minutes
     original_roll = getattr(visibility, "roll", None)

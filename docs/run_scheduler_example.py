@@ -28,7 +28,7 @@ from shortschedule.visualizer import ScheduleVisualizer
 # ---------------------------------------------------------------------------
 # Inputs — UPDATE ME between runs
 # ---------------------------------------------------------------------------
-xml_file_path = Path("Path", "To", "Long-term", "Calendar.xml")
+xml_file_path = Path("Path", "To", "Longterm", "calendar.xml")
 
 # Base name (without extension) used to label the output plots, e.g.
 # "Pandora_science_calendar".
@@ -36,8 +36,8 @@ calendar_name = xml_file_path.stem
 
 # Observing window: the short-term schedule is built starting at ``window_start``
 # and spanning ``window_duration_days``.
-window_start = Time("2026-08-17T00:00:00Z")
-window_duration_days = 7
+window_start = Time("2026-11-23T00:00:00Z")
+window_duration_days = 7.0
 
 # Whether the visibility Gantt also paints the prescribed roll of each
 # observation on the lower half of its bar, with a colorbar.
@@ -46,10 +46,10 @@ plot_rolls = False
 # Spacecraft two-line element set (TLE) describing the orbit used for
 # visibility, power, and gap calculations. Refresh this for each new run.
 new_tle1 = (
-    "1 67395U 80229J   26223.79570602  .00000000  00000-0  37770-3 0    02"
+    "1 67395U 26004AJ  26320.26168606  .00000672  00000-0  78625-4 0  9997"
 )
 new_tle2 = (
-    "2 67395  97.8072 221.5977 0003967 320.1766 134.7478 14.88176196    03"
+    "2 67395  97.8127 316.6539 0005210   5.0283 355.0985 14.88269058 45897"
 )
 
 # ---------------------------------------------------------------------------
@@ -69,22 +69,41 @@ scheduler = ScheduleProcessor(
     new_tle1,
     new_tle2,
     earthlimb_gap_tolerance=6,  # max allowed Earth-limb gap (minutes)
-    st_gap_tolerance=12,  # max allowed star-tracker gap (minutes)
+    st_gap_tolerance=16,  # max allowed star-tracker gap (minutes)
     st_gap_tolerance_start_buffer=7.5,  # buffer time at the start of an observation before a ST gap is tolerated.
     earthlimb_gap_tolerance_start_buffer=7.5,  # buffer time at the start of an observation before a Earth-limb gap is tolerated.
     earthlimb_day_min=44,  # min Earth-limb angle, daytime (deg)
     earthlimb_night_min=13,  # min Earth-limb angle, nighttime (deg)
-    priority_0_earthlimb_min=69,  # if not `None`: min Earth-limb angle applied only to priority-0 targets so they can be used to dissipate heat. No day/night or dynamic illumination angle is used. All other keepouts are left the same.
+    occultation_earthlimb_min=69,  # if not `None`: min Earth-limb angle for every target except each visit's main target (its priority 1/2 target, else its non-Gaia target with the most minutes), so they can be used to dissipate heat. No day/night or dynamic illumination angle is used. All other keepouts are left the same.
+    occultation_overrides=[],  # list of target names that fly the standard keepouts even when not their visit's main target. Growth order is unchanged (still by priority).
     sun_min=91,  # min payload Sun keel angle (deg)
-    moon_min=20,  # min payload Moon keel angle (deg)
+    moon_min=15,  # min payload Moon keel angle (deg)
     st_sun_min=50,  # min star-tracker Sun angle (deg)
-    st_moon_min=20,  # min star-tracker Moon angle (deg)
+    st_moon_min=15,  # min star-tracker Moon angle (deg)
     st_earthlimb_min=30,  # min star-tracker Earth-limb angle (deg)
     use_dynamic_earthlimb=True,  # Use dynamic DPC Earth Limb keepout flag.
+    use_trace_sweep=True,  # reject rolls where neighbor stars' NIRDA traces contaminate the target. Needs the gaiaoffline database.
+    trace_contamination_tol=1e-3,  # max worst-row neighbor/target flux in the NIRDA extraction aperture
+    nirda_roi_x=80,  # NIRDA ROI columns (across the dispersion) the trace check counts light in
+    nirda_roi_y=256,  # NIRDA ROI rows (along the dispersion) the trace check counts light in
+    drop_observations_based_on_trace=False,  # a target whose every observable roll fails the trace check: True drops it from that visit (warning), False keeps it at its best ranked roll (error)
+    target_list_dir=Path(
+        "C:\\", "Gits", "PandoraTargetList_og"
+    ),  # PandoraTargetList checkout whose transit ephemerides hold priority-2 observations to their transits; None turns this off
+    transit_middle_frac=0.75,  # the middle fraction of each transit's duration (T14) that forms its core
+    transit_duration_constraint_min=15,  # visible minutes of the core a transit's priority-2 observations must keep; shrinks that break this are refused (0 turns it off)
+    add_high_pri_observations=True,  # after everything else, fill idle time with extra observations of the week's priority 1/2 targets, each added to the existing visit it falls in (a gap between visits joins the visit most of its additions are closer to), so the calendar stays in time order
+    high_priority_adds_earthlimb_min=None,  # flat Earth-limb keepout (deg) for those additions; None uses the standard keepouts
+    high_priority_adds_min_duration=10,  # shortest addition (minutes)
+    high_priority_adds_max_duration=90,  # longest addition (minutes); longer idle stretches are split
+    high_priority_adds_min_observations=3,  # a target with fewer additions gets none, and its time goes to the other targets
+    high_priority_adds_transit_buffer_min=40,  # an addition overlapping T1 - this .. T4 + this is priority 1, otherwise 0
+    high_priority_adds_exclude=[],  # target names never given additions; None adds every priority 1/2 target
     roll_step=1.0,  # roll search step size (deg)
     min_power_frac=0.68,  # min acceptable orbit-average power fraction
-    grow_by_priority=True,  # higher priorities grow first and may take time from lower-priority neighbors
-    drop_priority0=False,  # let a priority 1/2 grow past (and drop) a priority 0, or merge across priority-0 filler
+    grow_by_priority=True,  # grow by priority (main target first at equal priority, earlier visit first at equal rank); each may take time from lower-ranked neighbors, or equal-ranked ones in a later visit
+    drop_priority0=True,  # let a higher-ranked observation grow past (and drop) a priority 0, or merge across priority-0 filler
+    refine_edges_to_second=True,  # last pass: recheck the minute either side of every start/stop at 1 s and move it to the second the target is visible
     convert_single_roi_to_predefined=True,  # single auto-detect ROI -> predefined ROI at target RA/Dec
     fix_bad_data=True,  # replace invalid name symbols (e.g. "+") and report NaN-like values
     # ----------------------------------------------------------------------
@@ -109,10 +128,7 @@ scheduler = ScheduleProcessor(
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2,
             },
-            "AcquireVisCamScienceData": {
-                "FramesPerCoadd": 50,
-                "StarRoiDimension": 50,
-            },
+            "AcquireVisCamScienceData": {"StarRoiDimension": 75},
         },
         "Priority_1": {
             "Observational_Parameters": {
@@ -131,10 +147,7 @@ scheduler = ScheduleProcessor(
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2,
             },
-            "AcquireVisCamScienceData": {
-                "StarRoiDimension": 50,
-                "FramesPerCoadd": 50,
-            },
+            "AcquireVisCamScienceData": {"StarRoiDimension": 75},
         },
         "Priority_2": {
             "Observational_Parameters": {
@@ -151,10 +164,7 @@ scheduler = ScheduleProcessor(
                 "SC_DropFrames1": 1,
                 "SC_Groups": 2,
             },
-            "AcquireVisCamScienceData": {
-                "StarRoiDimension": 50,
-                "FramesPerCoadd": 50,
-            },
+            "AcquireVisCamScienceData": {"StarRoiDimension": 75},
         },
     },
     # Field-name overrides (NirdaData/VisdaData fields; None -> class default)
@@ -197,7 +207,7 @@ scheduler.generate_diagnostics(
 # Write the scheduled calendar back out as XML
 # ---------------------------------------------------------------------------
 print("\n\nWriting calendar...")
-XMLWriter().write_calendar(processed_calendar, mission_phase="COM")
+XMLWriter().write_calendar(processed_calendar, mission_phase="SCI")
 
 
 # ---------------------------------------------------------------------------
@@ -264,6 +274,16 @@ illumination_fig = visualizer.plot_earth_illumination(
 illumination_fig.savefig(
     output_dir / f"{calendar_name}_earth_illumination.png", dpi=300
 )
+
+# ---------------------------------------------------------------------------
+# Simulated detector fields
+# ---------------------------------------------------------------------------
+# One NIRDA subarray (neighbor traces, contamination) and one VISDA frame per
+# target, each at the target's duration-weighted mean roll for the week.
+# Reads the gaiaoffline database.
+print("\n\nCreating simulated NIRDA/VISDA fields...")
+fields_fig = visualizer.plot_target_fields(processed_calendar)
+fields_fig.savefig(output_dir / f"{calendar_name}_target_fields.png", dpi=150)
 
 # Display all open figures.
 plt.show()

@@ -18,28 +18,41 @@ observation around the time the long-term calendar chose for it rather
 than sliding observations to close gaps.
 """
 
-from .models import ObservationSequence, ScienceCalendar, Visit
-from .nirda import NirdaData
-from .overhead import OverheadTiming
-from .roll import get_best_roll_per_visit
-from .visda import VisdaData
-
 # Standard library
 import copy
 import logging
+import re
 import uuid
 import warnings
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
+from .models import (  # BAD_NAME_SYMBOLS re-exported for existing imports
+    BAD_NAME_SYMBOLS,  # noqa: F401
+    ObservationSequence,
+    ScienceCalendar,
+    Visit,
+    clean_target_name,
+)
+from .nirda import NirdaData
+from .overhead import OverheadTiming
+from .roll import get_best_roll_per_visit
+from .transit import (
+    load_ephemerides,
+    planet_key,
+    transit_core,
+    transit_epoch,
+)
+from .visda import VisdaData
 
 try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover - zoneinfo is stdlib on 3.9+
     ZoneInfo = None
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 # Third-party
 import numpy as np
@@ -63,15 +76,6 @@ class _NullProgress:
     def close(self) -> None:
         pass
 
-
-# Characters that are not allowed in target name fields (``Target`` /
-# ``TargetID``) because they break downstream filename and identifier
-# handling. Each bad symbol is mapped to its safe replacement and substituted
-# by the ``fix_bad_data`` pass.
-BAD_NAME_SYMBOLS = {
-    "+": "_",
-    " ": "_",
-}
 
 # Tag names whose values are expected to be non-numeric (names, IDs,
 # timestamps, TLE lines). They are excluded from the NaN-like value scan run
@@ -125,8 +129,8 @@ class ScheduleProcessor:
 
     @staticmethod
     def _to_deg(
-        value: Optional[float],
-    ) -> Optional[u.Quantity]:
+        value: float | None,
+    ) -> u.Quantity | None:
         """Convert a plain float (degrees) to an astropy Quantity.
 
         Returns *None* unchanged so callers can use ``None`` to fall back
@@ -144,40 +148,57 @@ class ScheduleProcessor:
         vda_post_sequence_overhead: u.Quantity | None = None,
         nirda_pre_sequence_overhead: u.Quantity | None = None,
         nirda_post_sequence_overhead: u.Quantity | None = None,
-        override_nirda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
-        override_visda_parameters: Optional[Dict[int, Dict[str, Any]]] = None,
-        override_payload_parameters: Optional[
-            Dict[Any, Dict[str, Dict[str, Any]]]
-        ] = None,
+        override_nirda_parameters: dict[int, dict[str, Any]] | None = None,
+        override_visda_parameters: dict[int, dict[str, Any]] | None = None,
+        override_payload_parameters: (
+            dict[Any, dict[str, dict[str, Any]]] | None
+        ) = None,
         max_file_size_uncompressed: u.Quantity = 830.0 * 1000 * 1000 * u.byte,
         max_file_size_compressed: u.Quantity = 255.0 * 1000 * 1000 * u.byte,
         update_nirda_reset1_for_vitl: bool = True,
         vitl_settling_time: u.Quantity = 60.0 * u.s,
         convert_single_roi_to_predefined: bool = True,
         fix_bad_data: bool = True,
-        moon_min: Optional[float] = None,
-        sun_min: Optional[float] = None,
-        earthlimb_min: Optional[float] = None,
-        earthlimb_day_min: Optional[float] = None,
-        earthlimb_night_min: Optional[float] = None,
-        priority_0_earthlimb_min: Optional[float] = None,
-        mars_min: Optional[float] = None,
-        jupiter_min: Optional[float] = None,
-        st_sun_min: Optional[float] = None,
-        st_moon_min: Optional[float] = None,
-        st_earthlimb_min: Optional[float] = None,
-        st1_earthlimb_min: Optional[float] = None,
-        st2_earthlimb_min: Optional[float] = None,
+        moon_min: float | None = None,
+        sun_min: float | None = None,
+        earthlimb_min: float | None = None,
+        earthlimb_day_min: float | None = None,
+        earthlimb_night_min: float | None = None,
+        occultation_earthlimb_min: float | None = None,
+        occultation_overrides: list[str] | None = None,
+        mars_min: float | None = None,
+        jupiter_min: float | None = None,
+        st_sun_min: float | None = None,
+        st_moon_min: float | None = None,
+        st_earthlimb_min: float | None = None,
+        st1_earthlimb_min: float | None = None,
+        st2_earthlimb_min: float | None = None,
         roll_step: float = 1.0,
         min_power_frac: float = 0.7,
         max_movement_minutes: int = 45,
         grow_by_priority: bool = True,
         drop_priority0: bool = False,
+        refine_edges_to_second: bool = True,
         earthlimb_gap_tolerance: int = 0,
         earthlimb_gap_tolerance_start_buffer: int = 7.5,
         st_gap_tolerance: int = 0,
         st_gap_tolerance_start_buffer: int = 7.5,
-        use_dynamic_earthlimb: Optional[bool] = None,
+        use_dynamic_earthlimb: bool | None = None,
+        use_trace_sweep: bool | None = None,
+        trace_contamination_tol: float | None = None,
+        nirda_roi_x: int | None = None,
+        nirda_roi_y: int | None = None,
+        drop_observations_based_on_trace: bool = False,
+        target_list_dir: str | None = None,
+        transit_middle_frac: float = 0.75,
+        transit_duration_constraint_min: float = 15.0,
+        add_high_pri_observations: bool = False,
+        high_priority_adds_earthlimb_min: float | None = None,
+        high_priority_adds_min_duration: float = 10.0,
+        high_priority_adds_max_duration: float = 90.0,
+        high_priority_adds_min_observations: int = 5,
+        high_priority_adds_transit_buffer_min: float = 40.0,
+        high_priority_adds_exclude: list[str] | None = None,
     ) -> None:
         """
         Initialize the scheduler with TLE and parameters.
@@ -273,14 +294,27 @@ class ScheduleProcessor:
             Earth-limb keepout angle (degrees) on the **night** side of the
             terminator.  When ``None`` (default), ``earthlimb_min`` is used
             for both day and night sides (``Visibility`` default behaviour).
-        priority_0_earthlimb_min : float, optional
-            Earth-limb keepout angle (degrees) applied to priority-0
-            observations only, so they can be held further off the Earth
-            and dissipate more heat.
+        occultation_earthlimb_min : float, optional
+            Earth-limb keepout angle (degrees) for every target that is not
+            its visit's main target, so those observations can be held
+            further off the Earth and dissipate more heat. The main target
+            always flies the standard keepouts, whatever its priority.
+            Each visit's main target is its priority 1/2 target; failing
+            that, its non-Gaia target with the most minutes. A visit with
+            two different priority 1/2 targets, or only Gaia targets, has
+            no main target, so all its targets fly this angle.
             It is a flat angle: the day/night split and the dynamic Earth
-            illumination wedge does not apply. Every other keepout, including all the
-            star-tracker ones, are unchanged. When ``None`` (default),
-            priority-0 observations are judged exactly like any other.
+            illumination wedge do not apply. Every other keepout, including
+            all the star-tracker ones, is unchanged. When ``None``
+            (default), every target flies the standard keepouts.
+        occultation_overrides : list of str, optional
+            Target names that fly the standard keepouts even when they are
+            not their visit's main target, so ``occultation_earthlimb_min``
+            never applies to them. A name matches as written or with its
+            invalid symbols replaced (``+`` and space -> ``_``). Only the
+            keepout changes: ``grow_by_priority`` still ranks an override
+            by its priority, behind every main target. A name found in no
+            visit of the long-term calendar is a warning. Default ``None``.
         st_sun_min, st_moon_min, st_earthlimb_min, st1_earthlimb_min,
         st2_earthlimb_min : float, optional
             Additional constraints for star trackers.
@@ -299,14 +333,17 @@ class ScheduleProcessor:
             case it requires further SOC investigation and should not be
             allowed by the short-term scheduler. Set to 0 to disable clamping.
         grow_by_priority : bool, optional
-            Grow observations priority 2 first, then 1, then 0, and let a
-            higher priority take minutes from an adjacent lower-priority
-            observation as long as that one keeps the minimum duration and
-            stays within ``max_movement_minutes`` (default True). False
-            grows in start-time order with every neighbor a hard bound.
+            Grow by rank: priority 2, then 1, then 0, and at equal priority
+            a visit's main target before its other targets (so within a
+            visit the main target grows first). Let an observation take
+            minutes from an adjacent lower-ranked one, or an equal-ranked
+            one in a later visit, as long as that one keeps the minimum
+            duration and stays within ``max_movement_minutes`` (default
+            True). False grows in start-time order with every neighbor a
+            hard bound.
         drop_priority0 : bool, optional
-            With ``grow_by_priority``, let a priority-1 or 2 observation
-            take as much of an adjacent priority-0 one as its own visibility,
+            With ``grow_by_priority``, let an observation take as much of
+            an adjacent lower-ranked priority-0 one as its own visibility,
             gap tolerances and movement limit allow, past that priority 0's
             floor. A priority 0 left unable to fly (under
             ``min_sequence_duration`` once its opening is cleaned, past its
@@ -314,6 +351,19 @@ class ScheduleProcessor:
             warning. Merging also drops priority 0s that are all that
             separates two otherwise mergeable priority-1/2 observations
             (default False).
+        refine_edges_to_second : bool, optional
+            Every other pass judges visibility once a minute, so a target
+            can leave the keepouts anywhere inside an observation's last
+            minute, or still be visible for part of the minute past a
+            boundary. With this on, a final pass rechecks the minute either
+            side of each start and stop at 1 s, at the roll the observation
+            flies, and moves the boundary to the second: in, where the
+            target leaves visibility inside the observation's first or last
+            minute, and out, into free time the target is visible for,
+            within the neighbors and ``max_movement_minutes``. A cut under
+            ``min_sequence_duration`` is logged as a warning, and with
+            ``drop_priority0`` a priority 0 cut that short is dropped
+            (default True).
         earthlimb_gap_tolerance : int, optional
             Maximum number of contiguous minutes of earth-limb
             visibility violations to tolerate within a sequence
@@ -348,6 +398,83 @@ class ScheduleProcessor:
             ``pandoravisibility``, which, currently, defaults to
             switching the wedge on. Passing ``False`` selects the
             flat or day/night limb instead.
+        use_trace_sweep : bool, optional
+            If True, the roll search rejects rolls where neighbor stars'
+            NIRDA traces contaminate the target's spectrum by more than
+            ``trace_contamination_tol``, taking the best ranked roll that
+            passes. A target that some roll could see but no such roll
+            passes is handled by ``drop_observations_based_on_trace``.
+            Needs the gaiaoffline database. ``None`` (default) defers to
+            ``pandoravisibility``, which currently switches it on.
+        trace_contamination_tol : float, optional
+            Largest acceptable trace contamination: the worst extraction
+            row's neighbor flux over the target's, within the roll
+            uncertainty. ``None`` (default) defers to ``pandoravisibility``
+            (currently 1e-3).
+        nirda_roi_x, nirda_roi_y : int, optional
+            NIRDA ROI size in pixels (across and along the dispersion) that
+            clips which neighbor light the trace check counts. ``None``
+            (default) defers to ``pandoravisibility`` (currently 80 x 256).
+        drop_observations_based_on_trace : bool, optional
+            What happens to a target in a visit that some roll could see
+            but where every such roll fails the trace check. True drops
+            its observations from that visit (and the visit if that empties
+            it), logged as a warning, before trimming and growth so
+            neighbors can use the time. False (default) keeps them at the
+            best ranked roll, trace failure and all, logged as an error.
+        target_list_dir : str or Path, optional
+            A PandoraTargetList checkout (or its ``target_definition_files``
+            directory) whose transit ephemerides switch on the transit
+            constraint for priority-2 observations; a planet defined in
+            more than one category takes its most precise ephemeris (see
+            ``transit.load_ephemerides``). ``None`` (default) leaves it off.
+        transit_middle_frac : float, optional
+            Share of a transit's total duration, centered on mid-transit,
+            that forms its core (default 0.75).
+        transit_duration_constraint_min : float, optional
+            Visible minutes of a transit's core its priority-2 observations
+            must keep between them, at the rolls they fly (default 15). A
+            pass that would shrink one of them below this, or further
+            below it for a transit the long-term calendar already left
+            short, is refused; overlap repair still applies but is logged
+            as an error. 0 turns the constraint off.
+        add_high_pri_observations : bool, optional
+            After the final merge, fill idle time with extra observations
+            of the window's priority 1/2 targets (default False). Each
+            addition joins an existing visit, so the calendar stays in time
+            order: the visit it falls in, or for a gap between two visits,
+            the one most of the gap's additions sit closer to. An addition
+            flies its target's roll in that visit if the visit already has
+            the target, otherwise the roll of the target's visit with the
+            most minutes of it, and the payload of its priority 1/2
+            observation there. Additions cover only idle minutes where the
+            target is visible at that roll every minute; where targets
+            compete, one in its padded
+            transit window wins, then the longest stretch. An addition is
+            priority 1 when it overlaps the planet's T1-T4 widened by
+            ``high_priority_adds_transit_buffer_min`` on each side, else
+            priority 0 (always 0 without ``target_list_dir``). The transit
+            core constraint does not apply to additions.
+        high_priority_adds_earthlimb_min : float, optional
+            Flat Earth-limb keepout (degrees) for the additions, with every
+            other keepout standard. ``None`` (default) uses the standard
+            keepouts.
+        high_priority_adds_min_duration : float, optional
+            Shortest addition in minutes (default 10).
+        high_priority_adds_max_duration : float, optional
+            Longest addition in minutes (default 90); a longer free,
+            visible stretch is split.
+        high_priority_adds_min_observations : int, optional
+            A target with fewer additions in the window gets none, and its
+            time is offered to the other targets (default 5).
+        high_priority_adds_transit_buffer_min : float, optional
+            Minutes added before T1 and after T4 for the priority-1 window
+            (default 40).
+        high_priority_adds_exclude : list of str, optional
+            Target names never given additions. A name matches as written
+            or with its invalid symbols replaced (``+`` and space -> ``_``);
+            one that is not a priority 1/2 target in the window is a
+            warning. Default ``None``.
         """
         # Validate TLE format
         if not isinstance(tle_line1, str):
@@ -357,7 +484,7 @@ class ScheduleProcessor:
         self.tle_line1 = tle_line1
         self.tle_line2 = tle_line2
 
-        _kw: Dict[str, Any] = dict(
+        _kw: dict[str, Any] = dict(
             moon_min=self._to_deg(moon_min),
             sun_min=self._to_deg(sun_min),
             earthlimb_min=self._to_deg(earthlimb_min),
@@ -371,30 +498,76 @@ class ScheduleProcessor:
             earthlimb_day_min=self._to_deg(earthlimb_day_min),
             earthlimb_night_min=self._to_deg(earthlimb_night_min),
             use_dynamic_earthlimb=use_dynamic_earthlimb,
+            use_trace_sweep=use_trace_sweep,
+            trace_contamination_tol=trace_contamination_tol,
+            nirda_roi_x=nirda_roi_x,
+            nirda_roi_y=nirda_roi_y,
         )
         # Strip None entries so Visibility uses its own class-level defaults
         # for any constraint the caller left unset.
         _kw = {k: v for k, v in _kw.items() if v is not None}
         self.visibility = Visibility(tle_line1, tle_line2, **_kw)
 
-        # Priority-0 observations may be held further off the Earth limb so
-        # the spacecraft can dissipate more heat.
+        # Targets other than their visit's main target may be held further
+        # off the Earth limb so the spacecraft can dissipate more heat.
         # Every other keepout, the star trackers included, is unchanged
-        self.priority_0_earthlimb_min = priority_0_earthlimb_min
-        self.priority_0_visibility = None
-        if priority_0_earthlimb_min is not None:
-            _pri0_kw = dict(_kw)
+        def _flat_earthlimb_model(angle):
+            flat_kw = dict(_kw)
             # Explicit None, not a pop: dropping the key lets Visibility
             # fall back to its own day/night defaults, which since v1.3.0
             # are real angles rather than None. Those would then override
-            # the flat priority_0_earthlimb_min the caller asked for.
-            _pri0_kw["earthlimb_day_min"] = None
-            _pri0_kw["earthlimb_night_min"] = None
-            _pri0_kw["use_dynamic_earthlimb"] = False
-            _pri0_kw["earthlimb_min"] = self._to_deg(priority_0_earthlimb_min)
-            self.priority_0_visibility = Visibility(
-                tle_line1, tle_line2, **_pri0_kw
-            )
+            # the flat angle the caller asked for.
+            flat_kw["earthlimb_day_min"] = None
+            flat_kw["earthlimb_night_min"] = None
+            flat_kw["use_dynamic_earthlimb"] = False
+            flat_kw["earthlimb_min"] = self._to_deg(angle)
+            return Visibility(tle_line1, tle_line2, **flat_kw)
+
+        self.occultation_earthlimb_min = occultation_earthlimb_min
+        self.occultation_visibility = (
+            None
+            if occultation_earthlimb_min is None
+            else _flat_earthlimb_model(occultation_earthlimb_min)
+        )
+
+        # High-priority additions in free time, with their own flat limb.
+        self.add_high_pri_observations = add_high_pri_observations
+        self.high_priority_adds_earthlimb_min = (
+            high_priority_adds_earthlimb_min
+        )
+        self.high_priority_adds_visibility = (
+            self.visibility
+            if high_priority_adds_earthlimb_min is None
+            else _flat_earthlimb_model(high_priority_adds_earthlimb_min)
+        )
+        self.high_priority_adds_min_duration = high_priority_adds_min_duration
+        self.high_priority_adds_max_duration = high_priority_adds_max_duration
+        self.high_priority_adds_min_observations = (
+            high_priority_adds_min_observations
+        )
+        self.high_priority_adds_transit_buffer_min = (
+            high_priority_adds_transit_buffer_min
+        )
+        if isinstance(high_priority_adds_exclude, str):
+            high_priority_adds_exclude = [high_priority_adds_exclude]
+        self.high_priority_adds_exclude = (
+            None
+            if high_priority_adds_exclude is None
+            else [str(name).strip() for name in high_priority_adds_exclude]
+        )
+        # Targets that keep the standard keepouts though not main. Held
+        # cleaned, and every target is cleaned before it is compared, so
+        # either spelling matches before or after _normalize_target_names.
+        if isinstance(occultation_overrides, str):
+            occultation_overrides = [occultation_overrides]
+        self.occultation_overrides = (
+            None
+            if occultation_overrides is None
+            else [str(name).strip() for name in occultation_overrides]
+        )
+        self._occultation_override_names = frozenset(
+            self._clean_name(name) for name in self.occultation_overrides or ()
+        )
 
         self.min_sequence_duration = TimeDelta(8 * 60 * u.s)
 
@@ -402,6 +575,7 @@ class ScheduleProcessor:
         self.max_movement_minutes = max_movement_minutes
         self.grow_by_priority = grow_by_priority
         self.drop_priority0 = drop_priority0
+        self.refine_edges_to_second = refine_edges_to_second
 
         # Gap tolerance: maximum contiguous non-visible minutes to allow
         self.earthlimb_gap_tolerance = earthlimb_gap_tolerance
@@ -414,6 +588,19 @@ class ScheduleProcessor:
         # Roll sweep configuration
         self.roll_step = roll_step
         self.min_power_frac = min_power_frac
+        self.drop_observations_based_on_trace = (
+            drop_observations_based_on_trace
+        )
+
+        # Priority-2 transit constraint; planet key to ephemeris, empty
+        # (constraint off) without a PandoraTargetList.
+        self.transit_middle_frac = transit_middle_frac
+        self.transit_duration_constraint_min = transit_duration_constraint_min
+        self.transit_ephemerides = (
+            {}
+            if target_list_dir is None
+            else load_ephemerides(target_list_dir)
+        )
 
         # Validate any explicitly supplied overheads carry time units so that
         # downstream .to(u.s) / .to(u.us) calls succeed. ``None`` means "use
@@ -456,15 +643,15 @@ class ScheduleProcessor:
         # step. Structure: { priority: {field_name: value-or-None} }, where a
         # None value means "use the data-class default". An iterable of field
         # names is also accepted (treated as all-default).
-        self._override_nirda_parameters: Dict[int, Any] = (
+        self._override_nirda_parameters: dict[int, Any] = (
             override_nirda_parameters or {}
         )
-        self._override_visda_parameters: Dict[int, Any] = (
+        self._override_visda_parameters: dict[int, Any] = (
             override_visda_parameters or {}
         )
         # General per-priority XML-tag payload overrides (cleaner config.json
         # format). Normalized to int priority keys.
-        self._override_payload_parameters: Dict[int, Any] = (
+        self._override_payload_parameters: dict[int, Any] = (
             self._normalize_priority_keys(override_payload_parameters)
         )
 
@@ -501,10 +688,10 @@ class ScheduleProcessor:
     def process_calendar(
         self,
         calendar: ScienceCalendar,
-        window_start: Optional[Any] = None,
+        window_start: Any | None = None,
         window_duration_days: int = 21,
         merge_similar_observations: bool = True,
-        log_path: Optional[Any] = None,
+        log_path: Any | None = None,
         verbose: bool = False,
     ) -> ScienceCalendar:
         """Process a `ScienceCalendar` and return an updated calendar.
@@ -528,11 +715,18 @@ class ScheduleProcessor:
         window_start : str or astropy.time.Time, optional
             ISO string or Time object indicating the window start.
         window_duration_days : int, optional
-            Number of days to include in the processing window.
+            Number of days to include in the processing window. The window
+            is a hard boundary: an observation the long-term calendar runs
+            across either edge is cut at it, growth stops at it (with a
+            warning when the target would have stayed visible past it), and
+            nothing in the returned calendar reaches outside it.
         merge_similar_observations : bool, optional
             When True, adjacent observation sequences in the same visit that
             share the same target and pointing are merged into a single
-            longer sequence.
+            longer sequence. This happens twice: on the long-term times
+            before any trimming, so a dark observation merged into a
+            visible one across Free Time has its dark time trimmed, and on
+            the final times at the end.
             Defaults to True.
         log_path : str or pathlib.Path, optional
             Base path for the run log files. The ".log" (everything) and
@@ -561,10 +755,21 @@ class ScheduleProcessor:
         self._print(f"  Line 1: {self.tle_line1}")
         self._print(f"  Line 2: {self.tle_line2}")
 
-        # Extract windowed calendar FIRST
+        # Pick each visit's main target from the long-term calendar, before
+        # the window cuts any of its minutes.
+        main_targets = self._mark_main_targets(calendar)
+
+        # Extract windowed calendar FIRST. Every observation in it is a copy,
+        # so nothing below changes the caller's long-term calendar.
         windowed_calendar = self._extract_time_window(
             calendar, window_start, window_duration_days, verbose
         )
+
+        # Flag the main target on the copies; the flag rides on every later
+        # copy. Set before names are cleaned, while they still match.
+        for visit in windowed_calendar.visits:
+            for seq in visit.sequences:
+                seq.is_main = seq.target in main_targets.get(visit.id, ())
 
         # Normalize target names up front, so every pass and log line sees
         # the name the delivered calendar will carry.
@@ -579,24 +784,38 @@ class ScheduleProcessor:
         # Analyze original visibility gaps in the windowed calendar
         self._analyze_original_visibility(windowed_calendar, verbose)
 
-        # Process sequences
+        # Process sequences. With merging on, same-target observations are
+        # first merged on their long-term times, before the trims.
         processed_calendar = self._process_all_sequences(
-            windowed_calendar, verbose
+            windowed_calendar,
+            verbose,
+            merge_first=merge_similar_observations,
         )
 
         # Optionally merge back-to-back same-target sequences within each
-        # visit. This runs *after* all gap-filling, trimming, and other
-        # duration/timing adjustments so it operates on the final scheduled
-        # boundaries. Because merging extends a sequence over its neighbor,
-        # the merged sequences' payload integration counts are recomputed
-        # for their new combined durations.
+        # visit. This second merge runs *after* all gap-filling, trimming,
+        # and other duration/timing adjustments so it operates on the final
+        # scheduled boundaries.
         if merge_similar_observations:
             processed_calendar = self._merge_similar_observations(
                 processed_calendar, verbose
             )
-            processed_calendar = self._update_payload_parameters(
+
+        # Extra observations of the week's priority 1/2 targets in the idle
+        # time left once everything above has settled.
+        if getattr(self, "add_high_pri_observations", False):
+            processed_calendar = self._add_high_priority_observations(
                 processed_calendar
             )
+
+        # Payload overrides, then NIRDA SC_Integrations and VISDA
+        # NumTotalFramesRequested from each observation's duration. Done
+        # once, here, after the last change to any start or stop (the final
+        # merge), so the counts, the data volumes and the .diag report all
+        # match what is delivered.
+        processed_calendar = self._update_payload_parameters(
+            processed_calendar
+        )
 
         # Renumber visit and observation IDs sequentially. This runs last,
         # after any merges/time changes that may have dropped IDs, so the
@@ -612,7 +831,7 @@ class ScheduleProcessor:
         # The validators are run for the report, not for the verdict. Under
         # the gap tolerances a healthy calendar legitimately contains
         # keepout violations, and merging can absorb one deliberately.
-        validation_counts: Dict[str, int] = {}
+        validation_counts: dict[str, int] = {}
 
         target_issues = self.validate_target_names(
             processed_calendar, report_issues=False
@@ -696,20 +915,143 @@ class ScheduleProcessor:
 
         return processed_calendar
 
+    def _mark_main_targets(
+        self, calendar: ScienceCalendar
+    ) -> dict[str, list[str]]:
+        """Choose each visit's main targets.
+
+        A visit's main target is its priority 1/2 target. With none, it is
+        the target with the most minutes in the visit, skipping Gaia
+        targets (``G`` followed by digits) with a warning when one of them
+        has the most. A visit with two different priority 1/2 targets has
+        no main target, which is an error; so does one with only Gaia
+        targets, with a warning. A priority 1/2 target named in
+        ``occultation_overrides`` is a main target as well and does not
+        count toward that error, so a visit can have more than one. Main
+        targets always fly the standard keepouts; every other target flies
+        ``occultation_earthlimb_min`` when it is set.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The long-term calendar, before any time is changed. It is not
+            modified; ``process_calendar`` sets ``is_main`` on its own
+            copies of the observations.
+
+        Returns
+        -------
+        dict
+            Visit ID to the list of its main targets' names, empty when it
+            has none. Also kept as ``self.main_targets``.
+        """
+        main_targets: dict[str, list[str]] = {}
+        for visit in calendar.visits:
+            minutes: dict[str, float] = {}
+            science: list[str] = []
+            for seq in visit.sequences:
+                minutes[seq.target] = (
+                    minutes.get(seq.target, 0.0) + seq.duration.sec / 60.0
+                )
+                if seq.priority in (1, 2) and seq.target not in science:
+                    science.append(seq.target)
+
+            # A priority 1/2 override is main whatever else is in the visit.
+            overridden = [t for t in science if self._overrides_occultation(t)]
+            science = [t for t in science if t not in overridden]
+            main = None
+            if len(science) > 1:
+                self._print(
+                    f"ERROR: Visit {visit.id}: {len(science)} different "
+                    f"priority 1/2 targets ({', '.join(science)}); the visit "
+                    "has no main target"
+                    + (
+                        f" besides the override(s) {', '.join(overridden)}."
+                        if overridden
+                        else "."
+                    )
+                )
+            elif science:
+                main = science[0]
+            elif overridden:
+                pass  # the overrides are the visit's main targets
+            else:
+                # sorted() is stable, so a tie goes to the first listed.
+                ranked = sorted(minutes, key=lambda t: -minutes[t])
+                main = next((t for t in ranked if not self._is_gaia(t)), None)
+                if ranked and self._is_gaia(ranked[0]):
+                    self._print(
+                        f"WARNING: Visit {visit.id}: Gaia target "
+                        f"{ranked[0]} has the most minutes "
+                        f"({minutes[ranked[0]]:.0f}) and would be the main "
+                        "target, but Gaia targets never are; "
+                        + (
+                            f"{main} ({minutes[main]:.0f} min) is instead."
+                            if main
+                            else "the visit has no main target."
+                        )
+                    )
+            mains = ([main] if main is not None else []) + overridden
+            if mains:
+                self._print(
+                    f"Visit {visit.id}: main target(s) {', '.join(mains)}"
+                )
+            main_targets[visit.id] = mains
+
+        # An override naming no target is most likely a typo.
+        cleaned = {
+            self._clean_name(seq.target)
+            for visit in calendar.visits
+            for seq in visit.sequences
+        }
+        for name in getattr(self, "occultation_overrides", None) or ():
+            if self._clean_name(name) not in cleaned:
+                self._print(
+                    f"WARNING: occultation_overrides names {name}, which is "
+                    "not a target in the long-term calendar."
+                )
+
+        self.main_targets = main_targets
+        return main_targets
+
+    @staticmethod
+    def _is_gaia(target: str) -> bool:
+        """Whether ``target`` is a Gaia source name, ``G`` then digits."""
+        return re.fullmatch(r"G\d{6,}", str(target).strip()) is not None
+
     def _extract_time_window(
         self,
         calendar: ScienceCalendar,
-        window_start: Optional[Any],
+        window_start: Any | None,
         window_duration_days: int,
         verbose: bool,
     ) -> ScienceCalendar:
-        """Extract time-based window from calendar.
+        """Extract the observations inside the schedule window.
 
-        A sequence is kept, whole, when it starts inside the window. So
-        ``window_start`` is a hard edge: one that started before it belongs
-        to the previous calendar, which may run it, or grow it, past its own
-        end. ``window_end`` is soft, a sequence starting before it keeps its
-        full length.
+        The window, ``[window_start, window_start + window_duration_days)``,
+        is a hard boundary: the delivered calendar never reaches outside
+        it. Every observation that overlaps the window is kept, and one the
+        long-term calendar runs across either edge is cut at that edge with
+        a warning, so the week before and the week after each fly their own
+        part of it. A cut that leaves less than ``min_sequence_duration`` is
+        a warning too; with ``drop_priority0`` a priority 0 cut that short
+        is dropped instead, while any other is kept short. The input
+        calendar is not modified.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The long-term calendar.
+        window_start : str or astropy.time.Time
+            Start of the window (ISO string or Time, UTC).
+        window_duration_days : float
+            Length of the window in days.
+        verbose : bool
+            Unused; kept for the call signature.
+
+        Returns
+        -------
+        ScienceCalendar
+            A new calendar holding only the window's observations.
         """
         if isinstance(window_start, str):
             window_start = Time(window_start, format="isot", scale="utc")
@@ -723,7 +1065,7 @@ class ScheduleProcessor:
 
         self._print(f"Extracting window: {window_start} to {window_end}")
 
-        # Find sequences within window
+        clipped = dropped = 0
         windowed_visits = []
         for visit in calendar.visits:
             # complain if there are empty visits
@@ -733,18 +1075,445 @@ class ScheduleProcessor:
                 )
             windowed_sequences = []
             for seq in visit.sequences:
-                # Starts inside the window; may run past its end.
-                if window_start <= seq.start_time < window_end:
-                    windowed_sequences.append(seq)
+                # In seconds with a millisecond tolerance: a window end
+                # built from fractional days can sit a few nanoseconds off
+                # an observation that starts or stops exactly on it.
+                if not (
+                    (window_end - seq.start_time).sec > 1e-3
+                    and (seq.stop_time - window_start).sec > 1e-3
+                ):
+                    continue
+                cut_start = (window_start - seq.start_time).sec > 1e-3
+                cut_stop = (seq.stop_time - window_end).sec > 1e-3
+                # Always a copy: later passes change times, names and flags
+                # in place, and the caller's calendar must keep its own.
+                inside = seq.copy()
+                if not (cut_start or cut_stop):
+                    windowed_sequences.append(inside)
+                    continue
+
+                if cut_start:
+                    inside.start_time = window_start
+                if cut_stop:
+                    inside.stop_time = window_end
+                edges = " and ".join(
+                    edge
+                    for edge, cut in (
+                        (
+                            "starts before the window start "
+                            f"{window_start.isot}",
+                            cut_start,
+                        ),
+                        (
+                            f"stops after the window end {window_end.isot}",
+                            cut_stop,
+                        ),
+                    )
+                    if cut
+                )
+                message = (
+                    f"{self._seq_prefix(visit.id, seq)} | WINDOW: the "
+                    f"long-term calendar {edges}; cut to "
+                    f"{inside.start_time.isot} - {inside.stop_time.isot}"
+                )
+                if self._below_minimum_duration(inside.duration):
+                    message += (
+                        f", leaving {inside.duration.sec / 60:.1f} min, "
+                        "under "
+                        f"{self.min_sequence_duration.sec / 60:.0f} min"
+                    )
+                    if int(seq.priority or 0) == 0 and getattr(
+                        self, "drop_priority0", False
+                    ):
+                        self._print(
+                            f"WARNING: {message}. Dropped (drop_priority0)."
+                        )
+                        dropped += 1
+                        continue
+                self._print(f"WARNING: {message}.")
+                windowed_sequences.append(inside)
+                clipped += 1
 
             if windowed_sequences:
                 windowed_visits.append(
                     Visit(id=visit.id, sequences=windowed_sequences)
                 )
 
+        if getattr(self, "gap_report", None):
+            summary = self.gap_report["processing_summary"]
+            summary["window_clipped"] = clipped
+            summary["priority_0_dropped"] = (
+                summary.get("priority_0_dropped", 0) + dropped
+            )
+
         return ScienceCalendar(
             metadata=calendar.metadata, visits=windowed_visits
         )
+
+    # ------------------------------------------------------------------
+    # High-priority additions in free time
+    # ------------------------------------------------------------------
+    def _add_high_priority_observations(
+        self, calendar: ScienceCalendar
+    ) -> ScienceCalendar:
+        """Fill idle time with extra observations of priority 1/2 targets.
+
+        Runs after the final merge, so nothing already scheduled moves, and
+        before the payload update, so the additions get their own
+        integration and frame counts. Each target with a priority 1/2
+        observation in the window is a candidate, unless named in
+        ``high_priority_adds_exclude``. It flies the roll of its
+        visit with the most minutes of it (the earlier visit on a tie) and
+        the payload of its first priority 1/2 observation there, judged
+        under ``high_priority_adds_visibility``, except in a visit that
+        already has the target, where it flies that visit's roll for it.
+
+        A slot is a run of whole idle minutes in the window where the
+        target is visible at both ends of every minute, at the roll it
+        would fly in the visit before and the visit after (whichever it
+        joins), at least
+        ``high_priority_adds_min_duration`` and at most
+        ``high_priority_adds_max_duration`` long. Requiring every minute
+        means the start buffers hold without a separate check. Slots are
+        taken one at a time: one overlapping its padded transit window
+        first, then the longest, then the target with the fewest added
+        minutes so far, then the earliest; every other slot is then
+        clipped to what is still idle. A target left with fewer than
+        ``high_priority_adds_min_observations`` additions is dropped with a
+        warning and the selection is redone without it, so its time can go
+        to the others.
+
+        Each addition joins an existing visit, so the calendar stays in
+        time order: inside a visit, that visit; in a gap between two
+        visits, every addition in the gap joins the same one, the visit
+        before or after, whichever more of them sit closer to (the visit
+        before on a tie). An addition is priority 1 when it overlaps the
+        target's T1-T4 widened by ``high_priority_adds_transit_buffer_min``
+        on each side, else priority 0, and is flagged ``is_added``; it is
+        ``is_main`` when its target is a main target of the visit it
+        joins. With
+        ``refine_edges_to_second`` the additions then get the same 1 s edge
+        pass as everything else (``added_only``), without a movement limit.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            The processed calendar; additions are inserted into its visits
+            in place, each visit kept in time order.
+
+        Returns
+        -------
+        ScienceCalendar
+            The same calendar.
+        """
+        window_start = self.window_start
+        n_minutes = int(
+            np.floor((self.window_end - window_start).to_value(u.min) + 1e-6)
+        )
+        # Every minute edge, so minute i is [times[i], times[i + 1]).
+        times = window_start + np.arange(n_minutes + 1) * u.min
+        min_length = int(np.ceil(self.high_priority_adds_min_duration - 1e-9))
+        max_length = int(np.floor(self.high_priority_adds_max_duration + 1e-9))
+
+        # The observations already scheduled, in time order, with the
+        # minutes each touches (sub-minute edges included).
+        originals = sorted(
+            (
+                (visit, seq)
+                for visit in calendar.visits
+                for seq in visit.sequences
+            ),
+            key=lambda pair: pair[1].start_time,
+        )
+        spans = np.array(
+            [
+                (
+                    int(
+                        np.floor(
+                            (seq.start_time - window_start).to_value(u.min)
+                            + 1e-6
+                        )
+                    ),
+                    int(
+                        np.ceil(
+                            (seq.stop_time - window_start).to_value(u.min)
+                            - 1e-6
+                        )
+                    ),
+                )
+                for _, seq in originals
+            ],
+            dtype=int,
+        ).reshape(-1, 2)
+        occupied = np.zeros(n_minutes, dtype=bool)
+        for first, last in spans:
+            occupied[max(first, 0) : max(min(last, n_minutes), 0)] = True
+
+        # For every minute, the observation before it and the one after it
+        # (indices into ``originals``, -1 for none). An addition joins one
+        # of those two visits, so it must be visible at the roll its target
+        # flies in either.
+        minute_index = np.arange(n_minutes)
+        before = (
+            np.searchsorted(
+                np.maximum.accumulate(spans[:, 1]) if len(spans) else [],
+                minute_index,
+                side="right",
+            )
+            - 1
+        )
+        after = np.searchsorted(spans[:, 0], minute_index + 1, side="left")
+        after[after >= len(originals)] = -1
+        position = {id(visit): k for k, visit in enumerate(calendar.visits)}
+        visit_before = np.array(
+            [-1 if k < 0 else position[id(originals[k][0])] for k in before],
+            dtype=int,
+        )
+        visit_after = np.array(
+            [-1 if k < 0 else position[id(originals[k][0])] for k in after],
+            dtype=int,
+        )
+
+        def _roll_in(target, visit, template):
+            # One roll per target per visit: the one it already flies there.
+            for seq in visit.sequences:
+                if seq.target == target:
+                    return seq.roll
+            return template.roll
+
+        # Each candidate's source visit: the one with the most minutes of
+        # it among those where it is priority 1/2, the earlier on a tie.
+        # Target -> ((seconds, -visit index), template observation, visit).
+        sources: dict[str, tuple[Any, ObservationSequence, str]] = {}
+        for order, visit in enumerate(calendar.visits):
+            by_target: dict[str, list[ObservationSequence]] = {}
+            for seq in visit.sequences:
+                by_target.setdefault(seq.target, []).append(seq)
+            for target, sequences in by_target.items():
+                science = sorted(
+                    (s for s in sequences if int(s.priority or 0) in (1, 2)),
+                    key=lambda s: s.start_time,
+                )
+                if not science:
+                    continue
+                rank = (sum(s.duration.sec for s in sequences), -order)
+                if target not in sources or rank > sources[target][0]:
+                    sources[target] = (rank, science[0], visit.id)
+
+        # Targets the caller asked to leave out; a name matching none of
+        # the candidates is most likely a typo.
+        exclude = {
+            self._clean_name(name)
+            for name in getattr(self, "high_priority_adds_exclude", None) or ()
+        }
+        for name in getattr(self, "high_priority_adds_exclude", None) or ():
+            if not any(
+                self._clean_name(t) == self._clean_name(name) for t in sources
+            ):
+                self._print(
+                    f"WARNING: HIGH-PRI ADD: high_priority_adds_exclude names "
+                    f"{name}, which is not a priority 1/2 target in the "
+                    "window."
+                )
+        for target in [t for t in sources if self._clean_name(t) in exclude]:
+            self._print(
+                f"HIGH-PRI ADD: {target} excluded "
+                "(high_priority_adds_exclude)."
+            )
+            del sources[target]
+
+        if not getattr(self, "transit_ephemerides", None) and sources:
+            self._print(
+                "WARNING: HIGH-PRI ADD: no target_list_dir, so no transit is "
+                "known and every addition is priority 0."
+            )
+        model = self.high_priority_adds_visibility
+        usable: dict[str, np.ndarray] = {}
+        in_window: dict[str, np.ndarray] = {}
+        for target, (_, template, _) in sources.items():
+            coord = SkyCoord(
+                template.ra, template.dec, unit="deg", frame="icrs"
+            )
+            at_roll: dict[Any, np.ndarray] = {}
+            usable[target] = np.ones(n_minutes, dtype=bool)
+            for k, visit in enumerate(calendar.visits):
+                need = (visit_before == k) | (visit_after == k)
+                if not need.any():
+                    continue
+                roll = _roll_in(target, visit, template)
+                if roll not in at_roll:
+                    visible = np.asarray(
+                        model.get_visibility(
+                            coord,
+                            times,
+                            roll=None if roll is None else roll * u.deg,
+                        )["visible"],
+                        dtype=bool,
+                    )
+                    at_roll[roll] = visible[:-1] & visible[1:]
+                usable[target] &= ~need | at_roll[roll]
+
+            # Minutes overlapping T1 - buffer .. T4 + buffer of any transit.
+            in_window[target] = np.zeros(n_minutes, dtype=bool)
+            ephemerides = getattr(self, "transit_ephemerides", None) or {}
+            ephemeris = ephemerides.get(planet_key(target))
+            if ephemeris is None:
+                if ephemerides:
+                    self._print(
+                        f"WARNING: HIGH-PRI ADD: {target} has no transit "
+                        "ephemeris; its additions are priority 0."
+                    )
+                continue
+            buffer = self.high_priority_adds_transit_buffer_min * u.min
+            for epoch in range(
+                transit_epoch(ephemeris, times[0]) - 1,
+                transit_epoch(ephemeris, times[-1]) + 2,
+            ):
+                first_contact, last_contact = transit_core(
+                    ephemeris, epoch, 1.0
+                )
+                low = (first_contact - buffer - window_start).to_value(u.min)
+                high = (last_contact + buffer - window_start).to_value(u.min)
+                in_window[target] |= (minute_index + 1 > low) & (
+                    minute_index < high
+                )
+
+        def _runs(mask):
+            edges = np.flatnonzero(np.diff(np.r_[0, mask.astype(int), 0]))
+            return zip(edges[::2], edges[1::2])
+
+        excluded = set()
+        while True:
+            free = ~occupied
+            placed: dict[str, list[tuple[int, int, bool]]] = {
+                target: [] for target in sources if target not in excluded
+            }
+            while True:
+                best = None
+                for target in placed:
+                    for start, stop in _runs(free & usable[target]):
+                        if stop - start < min_length:
+                            continue
+                        length = min(stop - start, max_length)
+                        # Where a run is longer than an addition may be,
+                        # place the addition on the transit window if any.
+                        transit = np.flatnonzero(in_window[target][start:stop])
+                        if len(transit):
+                            start = min(start + transit[0], stop - length)
+                        has_transit = bool(
+                            in_window[target][start : start + length].any()
+                        )
+                        # Equal lengths go to the target with the fewest
+                        # added minutes so far, so time is spread.
+                        given = sum(b - a for a, b, _ in placed[target])
+                        key = (has_transit, length, -given, -start)
+                        if best is None or key > best[0]:
+                            best = (key, target, start, start + length)
+                if best is None:
+                    break
+                (has_transit, _, _, _), target, start, stop = best
+                free[start:stop] = False
+                placed[target].append((start, stop, has_transit))
+
+            minimum = self.high_priority_adds_min_observations
+            thin = [t for t, adds in placed.items() if 0 < len(adds) < minimum]
+            if not thin:
+                break
+            for target in thin:
+                self._print(
+                    f"WARNING: HIGH-PRI ADD: {target} would get only "
+                    f"{len(placed[target])} addition(s), under "
+                    f"high_priority_adds_min_observations={minimum}; not "
+                    "added, and its time is offered to the other targets."
+                )
+            excluded.update(thin)
+
+        # Each addition joins a visit already in the calendar. All the
+        # additions in one idle gap join the same visit, so visits stay in
+        # time order: the visit before the gap or the one after it,
+        # whichever more of them sit closer to (the one before on a tie).
+        gaps: dict[tuple[int, int], list[tuple[str, int, int, bool]]] = {}
+        for target, adds in placed.items():
+            for start, stop, has_transit in adds:
+                gaps.setdefault(
+                    (int(before[start]), int(after[stop - 1])), []
+                ).append((target, start, stop, has_transit))
+        number = 0
+        for (prev_k, next_k), adds in sorted(
+            gaps.items(), key=lambda item: min(add[1] for add in item[1])
+        ):
+            if next_k < 0:
+                host = originals[prev_k][0]
+            elif prev_k < 0:
+                host = originals[next_k][0]
+            else:
+                closer_before = sum(
+                    start - spans[prev_k, 1] <= spans[next_k, 0] - stop
+                    for _, start, stop, _ in adds
+                )
+                host = originals[
+                    prev_k if 2 * closer_before >= len(adds) else next_k
+                ][0]
+            for target, start, stop, has_transit in sorted(
+                adds, key=lambda add: add[1]
+            ):
+                _, template, source_visit = sources[target]
+                number += 1
+                seq = template.copy()
+                # Unique until _renumber_ids numbers the visit in order.
+                seq.id = f"A{number:03d}"
+                seq.start_time = times[start]
+                seq.stop_time = times[stop]
+                seq.priority = 1 if has_transit else 0
+                seq.roll = _roll_in(target, host, template)
+                seq.is_main = any(
+                    s.is_main for s in host.sequences if s.target == target
+                )
+                seq.is_added = True
+                host.sequences.append(seq)
+                self._print(
+                    f"{self._seq_prefix(host.id, seq)} | HIGH-PRI ADD: "
+                    f"{stop - start} min of idle time, priority "
+                    f"{seq.priority}"
+                    + (" (padded transit window)" if has_transit else "")
+                    + f", joined visit {host.id}"
+                    + (
+                        ""
+                        if seq.roll is None
+                        else f" at roll {seq.roll:.1f} deg"
+                    )
+                    + f", payload from visit {source_visit}."
+                )
+            host.sequences.sort(key=lambda seq: seq.start_time)
+
+        # The same 1 s edge pass as everything else, on the additions only.
+        # They have no long-term time, so no movement limit.
+        if getattr(self, "refine_edges_to_second", False) and any(
+            placed.values()
+        ):
+            self._refine_edges_to_second(calendar, {}, added_only=True)
+
+        added = [
+            (visit.id, seq)
+            for visit in calendar.visits
+            for seq in visit.sequences
+            if getattr(seq, "is_added", False)
+        ]
+        added_visits = len({visit_id for visit_id, _ in added})
+        added_minutes = round(
+            sum(seq.duration.sec for _, seq in added) / 60.0, 1
+        )
+
+        if getattr(self, "gap_report", None):
+            summary = self.gap_report["processing_summary"]
+            summary["high_pri_added_visits"] = added_visits
+            summary["high_pri_added_observations"] = len(added)
+            summary["high_pri_added_minutes"] = added_minutes
+        self._print(
+            f"High-priority additions: {len(added)} observation(s), "
+            f"{added_minutes} min, in {added_visits} existing visit(s)."
+        )
+        return calendar
 
     # Tolerances used when deciding whether two sequences can be merged.
     _MERGE_ADJACENCY_TOL_SEC = 1.0  # max stop-to-start gap (seconds)
@@ -775,7 +1544,7 @@ class ScheduleProcessor:
             The same calendar instance, with IDs renumbered.
         """
         changed = 0
-        visit_id_map: Dict[str, str] = {}
+        visit_id_map: dict[str, str] = {}
         for visit_index, visit in enumerate(calendar.visits, start=1):
             new_visit_id = f"{visit_index:04d}"
             if visit.id is not None:
@@ -802,9 +1571,16 @@ class ScheduleProcessor:
         return calendar
 
     def _merge_similar_observations(
-        self, calendar: ScienceCalendar, verbose: bool = False
+        self,
+        calendar: ScienceCalendar,
+        verbose: bool = False,
+        before_trims: bool = False,
     ) -> ScienceCalendar:
         """Merge same-target sequences within each visit.
+
+        This runs twice in ``process_calendar``: once on the long-term
+        times, right after the roll sweep and before any trimming
+        (``before_trims=True``), and once at the end on the final times.
 
         Two consecutive sequences (in start-time order) are merged when
         all of the following hold:
@@ -830,10 +1606,23 @@ class ScheduleProcessor:
         observations that meet every other point, those priority 0s are
         dropped (and logged as a warning) and the pair is merged.
 
-        The merged sequence keeps the first sequence's identity, priority,
-        and payload parameters, and extends its ``stop_time`` to the second
-        sequence's ``stop_time``. Merging is applied transitively, so a run
-        of three or more eligible sequences collapses into one.
+        Before the trims (``before_trims``), nothing is dropped, and point 5
+        is judged on the whole dark stretch at the join of the merged span,
+        not just the dark minutes in the gap (see
+        :meth:`_join_is_bridgeable`): the trims that follow would otherwise
+        find a dark stretch longer than the tolerance in the middle of the
+        merged observation and keep only one side of it. A dark stretch that
+        runs to either end of the merged span is allowed, since the trims
+        cut it off as a dark head or tail. This is what joins a visible
+        observation to a dark one of the same target across Free Time, so
+        the dark time is trimmed rather than flown.
+
+        The merged sequence keeps the first sequence's identity and extends
+        its ``stop_time`` to the second sequence's ``stop_time``. It takes
+        the higher of the two priorities, and the payload parameters of the
+        sequence that had it (the first's on a tie). Merging is applied
+        transitively, so a run of three or more eligible sequences
+        collapses into one.
 
         Parameters
         ----------
@@ -842,6 +1631,9 @@ class ScheduleProcessor:
             new visits/sequences is returned; the input is not mutated).
         verbose : bool, optional
             If True, print a line for each merge performed.
+        before_trims : bool, optional
+            True for the merge on the long-term times, ahead of the trims.
+            Defaults to False, the merge on the final times.
 
         Returns
         -------
@@ -849,14 +1641,14 @@ class ScheduleProcessor:
             Calendar with eligible sequences merged.
         """
         merged_count = 0
-        new_visits: List[Visit] = []
+        new_visits: list[Visit] = []
 
         # With drop_priority0, priority-0 observations that are all that
         # separates two otherwise mergeable higher-priority observations are
         # dropped first, so the merge below sees an empty gap and joins the
-        # pair. Keyed by (visit_id, seq_id).
+        # pair. Keyed by (visit_id, seq_id). Never before the trims.
         dropped = set()
-        if getattr(self, "drop_priority0", False):
+        if getattr(self, "drop_priority0", False) and not before_trims:
             all_ordered = self._ordered_sequences(calendar)
             kept = [
                 index
@@ -913,20 +1705,38 @@ class ScheduleProcessor:
                 key=lambda s: s.start_time,
             )
 
-            merged_sequences: List[ObservationSequence] = []
+            merged_sequences: list[ObservationSequence] = []
             for seq in ordered:
                 if merged_sequences and self._can_merge(
-                    merged_sequences[-1], seq, occupied
+                    merged_sequences[-1],
+                    seq,
+                    occupied,
+                    judge_join=before_trims,
                 ):
                     # Extend the previous (kept) sequence over this one.
                     previous = merged_sequences[-1]
+                    # The merged observation flies at the higher priority,
+                    # with that piece's payload so the two agree.
+                    raised = int(seq.priority or 0) > int(
+                        previous.priority or 0
+                    )
                     self._print(
-                        f"{self._seq_prefix(visit.id, previous)} | MERGE: "
+                        f"{self._seq_prefix(visit.id, previous)} | MERGE"
+                        f"{' (before trims)' if before_trims else ''}: "
                         f"absorbing sequence {seq.id} "
                         f"({self._seq_prefix(visit.id, seq)}); stop "
                         f"{previous.stop_time_str} -> {seq.stop_time_str}"
+                        + (
+                            f"; priority {previous.priority} -> "
+                            f"{seq.priority}, with its payload"
+                            if raised
+                            else ""
+                        )
                     )
                     previous.stop_time = seq.stop_time
+                    if raised:
+                        previous.priority = seq.priority
+                        previous.payload_params = seq.copy().payload_params
                     merged_count += 1
                 else:
                     # Copy so the returned calendar never aliases the input.
@@ -942,8 +1752,12 @@ class ScheduleProcessor:
             self.gap_report["processing_summary"]["priority_0_dropped"] += len(
                 dropped
             )
+        if getattr(self, "gap_report", None):
+            key = "merged_before_trims" if before_trims else "merged_at_end"
+            self.gap_report["processing_summary"][key] = merged_count
         self._print(
             f"Merged {merged_count} similar observation sequence(s) "
+            f"{'before trimming ' if before_trims else ''}"
             f"across {len(calendar.visits)} visit(s), dropping "
             f"{len(dropped)} priority-0 observation(s) between them."
         )
@@ -958,11 +1772,14 @@ class ScheduleProcessor:
         self,
         first: ObservationSequence,
         second: ObservationSequence,
-        occupied: Optional[List[Tuple[Time, Time]]] = None,
+        occupied: list[tuple[Time, Time]] | None = None,
+        judge_join: bool = False,
     ) -> bool:
         """Return True if ``second`` can be merged into ``first``.
 
         See :meth:`_merge_similar_observations` for the merge criteria.
+        ``judge_join`` applies the before-the-trims rule for point 5
+        (:meth:`_join_is_bridgeable`), to contiguous pairs as well.
         """
         # Same target (case-insensitive, whitespace-insensitive).
         if (first.target or "").strip().lower() != (
@@ -993,6 +1810,8 @@ class ScheduleProcessor:
         if gap_sec < -self._MERGE_ADJACENCY_TOL_SEC:
             return False  # overlapping rather than adjacent
         if gap_sec <= self._MERGE_ADJACENCY_TOL_SEC:
+            if judge_join:
+                return self._join_is_bridgeable(first, second)
             return True
 
         # A real gap between them. It can still be absorbed when nothing
@@ -1005,7 +1824,83 @@ class ScheduleProcessor:
         ):
             return False
 
+        if judge_join:
+            return self._join_is_bridgeable(first, second)
         return self._gap_is_bridgeable(first, second)
+
+    def _join_is_bridgeable(
+        self,
+        first: ObservationSequence,
+        second: ObservationSequence,
+    ) -> bool:
+        """Whether merging leaves the trims a dark stretch they can handle.
+
+        Judged over the merged span ``[first.start_time,
+        second.stop_time)`` once a minute, at the roll and under the
+        keepouts the observation flies. Each dark stretch that touches the
+        join (the first's last minute, the gap, the second's first minute),
+        taken to its full length inside the merged span, must either be
+        within the gap tolerance or run to an end of the merged span. One
+        that runs to an end must leave at least ``min_sequence_duration``
+        from the first to the last visible minute on the other side, so the
+        trims cut it off rather than refuse.
+
+        Parameters
+        ----------
+        first, second : ObservationSequence
+            The earlier and later observation, same target and roll.
+
+        Returns
+        -------
+        bool
+            True when the pair may be merged.
+        """
+        n = int(np.rint((second.stop_time - first.start_time).sec / 60.0))
+        if n <= 0:
+            return True
+        coord = SkyCoord(first.ra, first.dec, frame="icrs", unit="deg")
+        times = first.start_time + np.arange(n) * u.min
+        visible = np.atleast_1d(
+            self._visibility_for_sequence(first, coord, times)
+        ).astype(bool)
+        join_lo = max(
+            int(np.rint((first.stop_time - first.start_time).sec / 60.0)) - 1,
+            0,
+        )
+        join_hi = min(
+            int(np.rint((second.start_time - first.start_time).sec / 60.0)),
+            n - 1,
+        )
+        min_minutes = int(np.rint(self.min_sequence_duration.sec / 60.0))
+        model = self._visibility_for(first)
+
+        def visible_span(part: np.ndarray) -> int:
+            # Minutes from the first to the last visible minute.
+            lit = np.flatnonzero(part)
+            return int(lit[-1] - lit[0] + 1) if lit.size else 0
+
+        for run_start, run_end in self._find_nonvisible_gaps(visible):
+            if run_end <= join_lo or run_start > join_hi:
+                continue  # does not touch the join
+            if self._is_gap_tolerable(
+                coord,
+                times,
+                run_start,
+                run_end - run_start,
+                roll=first.roll,
+                visibility=model,
+            ):
+                continue
+            if run_start == 0 and (
+                visible_span(visible[run_end:]) >= min_minutes
+            ):
+                continue  # a dark head the trims cut off
+            if run_end == n and (
+                visible_span(visible[:run_start]) >= min_minutes
+            ):
+                continue  # a dark tail the trims cut off
+            return False
+        return True
 
     def _gap_is_bridgeable(
         self,
@@ -1034,7 +1929,7 @@ class ScheduleProcessor:
         times = first.stop_time + np.arange(minutes) * u.min
         roll = first.roll
 
-        model = self._visibility_for_priority(first.priority)
+        model = self._visibility_for(first)
         visible = np.atleast_1d(
             np.asarray(
                 model.get_visibility(
@@ -1058,7 +1953,10 @@ class ScheduleProcessor:
         )
 
     def _process_all_sequences(
-        self, calendar: ScienceCalendar, verbose: bool = False
+        self,
+        calendar: ScienceCalendar,
+        verbose: bool = False,
+        merge_first: bool = False,
     ) -> ScienceCalendar:
         """Iterate through sequences and build minute-resolution visibility.
 
@@ -1066,7 +1964,8 @@ class ScheduleProcessor:
         windowed calendar, queries visibility for each sequence target and
         accumulates a boolean minute-array (`all_minutes_bool`) describing
         which minutes are visible. It then calls the visibility-fixing
-        and payload-update steps to produce the final calendar.
+        steps. Payload counts are left to ``process_calendar``, which
+        recomputes them after the final merge.
 
         Parameters
         ----------
@@ -1074,11 +1973,18 @@ class ScheduleProcessor:
             Windowed calendar to operate on.
         verbose : bool, optional
             If True, print progress messages.
+        merge_first : bool, optional
+            Merge same-target observations on the long-term times, after
+            the roll sweep and before any trim, so a dark observation joined
+            to a visible one has its dark time trimmed. The merged span
+            becomes the observation's long-term time for the movement limit
+            and the timing log. Defaults to False.
 
         Returns
         -------
         ScienceCalendar
-            Calendar with adjusted sequences and updated payload parameters.
+            Calendar with adjusted sequences; payload parameters not yet
+            updated for the new durations.
         """
 
         working_calendar = deepcopy(calendar)
@@ -1096,7 +2002,13 @@ class ScheduleProcessor:
 
         # One roll per target per visit, chosen by pandoravisibility and
         # written onto the sequences, so every pass below judges an
-        # observation at the roll it will fly.
+        # observation at the roll it will fly. A target whose every
+        # observable roll fails the NIRDA trace check is reported, and with
+        # drop_observations_based_on_trace dropped from the visit here,
+        # before trimming and growth, so neighbors can use the time. A
+        # fixed roll is not trace checked, so later passes see a kept one
+        # as visible.
+        trace_dropped = 0
         for visit in self._progress(
             working_calendar.visits,
             desc="Roll sweep",
@@ -1107,31 +2019,111 @@ class ScheduleProcessor:
                 self.visibility,
                 roll_step=self.roll_step,
                 min_power_frac=self.min_power_frac,
-                priority_0_visibility=getattr(
-                    self, "priority_0_visibility", None
+                occultation_visibility=getattr(
+                    self, "occultation_visibility", None
+                ),
+                occultation_overrides=getattr(
+                    self, "_occultation_override_names", frozenset()
                 ),
                 growth_margin_minutes=self.max_movement_minutes,
             )
+            blocked = set()
             for target, result in visit_rolls.items():
+                contamination = result.get("trace_contamination", np.nan)
                 self._print(
                     f"  Visit {visit.id} / {target}: roll "
                     f"{result['roll_deg']:.1f} deg, "
                     f"{result['n_scheduled_visible']} of "
                     f"{int(result['scheduled'].sum())} scheduled minutes "
                     "visible"
+                    + (
+                        f", trace contamination {contamination:.1e}"
+                        if np.isfinite(contamination)
+                        else ""
+                    )
                 )
-                if result["n_scheduled_visible"] == 0:
+                if result["trace_blocked"]:
+                    failure = (
+                        f"Visit {visit.id} / {target}: every roll that sees "
+                        "it fails the NIRDA trace check (tolerance "
+                        f"{self.visibility.trace_contamination_tol:g}); "
+                        f"best ranked roll {result['roll_deg']:.1f} deg "
+                        f"has contamination {contamination:.1e}, the "
+                        "cleanest roll "
+                        f"{result['trace_min_roll_deg']:.1f} deg has "
+                        f"{result['trace_min_contamination']:.1e}"
+                    )
+                    if getattr(
+                        self, "drop_observations_based_on_trace", False
+                    ):
+                        blocked.add(target)
+                        self._print(f"WARNING: {failure}. Dropped.")
+                    else:
+                        self._print(
+                            f"ERROR: {failure}. Kept, flying "
+                            f"{result['roll_deg']:.1f} deg "
+                            "(drop_observations_based_on_trace is off)."
+                        )
+                elif result["n_scheduled_visible"] == 0:
                     self._print(
                         f"ERROR: Visit {visit.id} / {target}: no roll "
                         "makes any scheduled minute visible; flying "
                         f"{result['roll_deg']:.1f} deg (best for the star "
                         "trackers alone, then for solar power)"
                     )
+            if blocked:
+                kept = [s for s in visit.sequences if s.target not in blocked]
+                trace_dropped += len(visit.sequences) - len(kept)
+                visit.sequences = kept
+        if trace_dropped:
+            # Only visits the drop emptied can be empty here.
+            working_calendar.visits = [
+                visit for visit in working_calendar.visits if visit.sequences
+            ]
+        if getattr(self, "gap_report", None):
+            self.gap_report["processing_summary"][
+                "trace_dropped"
+            ] = trace_dropped
+
+        # Each priority-2 transit's coverage as the long-term calendar
+        # placed it, at the rolls now held, for the report at the end.
+        transits_before = self._transit_coverages(working_calendar)
+        if getattr(self, "transit_ephemerides", None):
+            for target in sorted(
+                {
+                    seq.target
+                    for visit in working_calendar.visits
+                    for seq in visit.sequences
+                    if seq.priority == 2
+                    and planet_key(seq.target) not in self.transit_ephemerides
+                }
+            ):
+                self._print(
+                    f"WARNING: {target}: no transit ephemeris in the "
+                    "PandoraTargetList, so its priority-2 observations are "
+                    "not held to the transit constraint."
+                )
 
         # Observations keep the times the long-term calendar gave them and
         # are adjusted in place. Idle time between them is expected under
         # the current conops, so no attempt is made to close it by sliding
         # observations earlier.
+
+        # Merge on the long-term times, before anything is trimmed. A dark
+        # observation of a target can sit across Free Time from a visible
+        # one; neither trim can touch an observation with nothing visible,
+        # so merged here its dark time becomes a tail (or head) the trims
+        # below cut off. Nothing has moved yet, so each surviving
+        # observation's span is its long-term time from here on.
+        if merge_first:
+            working_calendar = self._merge_similar_observations(
+                working_calendar, verbose, before_trims=True
+            )
+            original_timing = {
+                (visit.id, seq.id): (seq.start_time, seq.stop_time)
+                for visit in working_calendar.visits
+                for seq in visit.sequences
+            }
 
         # Trim each observation back to the visible time it actually has:
         # first trailing dark minutes, then any dark stretch in the middle
@@ -1159,19 +2151,44 @@ class ScheduleProcessor:
             working_calendar, original_timing
         )
 
-        # Overlaps can never be flown, so this has the last word on timing.
+        # Overlaps can never be flown, so this has the last say on how
+        # observations share time.
         working_calendar = self._repair_overlaps(working_calendar)
 
-        # Report any timing changes (shrink/elongate) made above.
-        self._log_timing_changes(working_calendar, original_timing)
+        # Everything above works in whole minutes; settle each boundary to
+        # the second. Only moves within free time and the target's own
+        # visibility, so it cannot create an overlap.
+        if getattr(self, "refine_edges_to_second", False):
+            working_calendar = self._refine_edges_to_second(
+                working_calendar, original_timing
+            )
 
-        # last thing is to update all the payload parameters
-        working_calendar = self._update_payload_parameters(working_calendar)
+        # A transit can end up short only if the long-term calendar left it
+        # short or overlap repair cut it; either needs a look.
+        needed = getattr(self, "transit_duration_constraint_min", 0)
+        for transit, (target, core_start, covered) in self._transit_coverages(
+            working_calendar
+        ).items():
+            if covered >= needed:
+                continue
+            before = transits_before.get(transit, (None, None, 0))[2]
+            self._print(
+                f"ERROR: {target} transit at {core_start.isot[:16]} (epoch "
+                f"{transit[1]}): its priority-2 observations cover {covered} "
+                f"visible min of the middle "
+                f"{self.transit_middle_frac:.0%} of the transit, under the "
+                f"{needed:g} min required ({before} min as the long-term "
+                "calendar placed them)."
+            )
+
+        # Report any timing changes (shrink/elongate) made above. Payload
+        # counts are recomputed by process_calendar, after the final merge.
+        self._log_timing_changes(working_calendar, original_timing)
 
         return working_calendar
 
     def _log_timing_changes(
-        self, calendar: ScienceCalendar, original_timing: Dict[Any, Any]
+        self, calendar: ScienceCalendar, original_timing: dict[Any, Any]
     ) -> None:
         """Log per-sequence shrink/elongate vs the snapshot in
         original_timing (keyed by ``(visit_id, sequence_id)``).
@@ -1244,7 +2261,7 @@ class ScheduleProcessor:
 
     def _get_synchronized_time_grid(
         self, calendar: ScienceCalendar
-    ) -> Tuple[int, Optional[Time], Optional[Time], Any]:
+    ) -> tuple[int, Time | None, Time | None, Any]:
         """Create a minute-resolution time grid covering all sequences.
 
         Returns a tuple (total_minutes, start_time, end_time, time_grid)
@@ -1273,8 +2290,8 @@ class ScheduleProcessor:
 
         return total_minutes, start_time, end_time, time_grid
 
-    def _visibility_for_priority(self, priority: Any) -> Any:
-        """The visibility model an observation of this priority is judged by.
+    def _visibility_for(self, seq: ObservationSequence) -> Any:
+        """The visibility model an observation is judged by.
 
         Everything goes through here rather than reading ``self.visibility``
         directly, so a pass cannot trim an observation against one set of
@@ -1282,20 +2299,46 @@ class ScheduleProcessor:
 
         Parameters
         ----------
-        priority : int
-            The observation's priority, as read from the long-term
-            calendar.
+        seq : ObservationSequence
+            The observation; its ``is_main`` flag decides the model.
 
         Returns
         -------
         pandoravisibility.Visibility
-            The stricter priority-0 model when one is configured and this
-            is a priority-0 observation, otherwise the nominal model.
+            For a high-priority addition (``is_added``), the additions
+            model. Otherwise the occultation model when one is configured
+            and this is neither its visit's main target nor named in
+            ``occultation_overrides``, else the nominal model.
         """
-        stricter = getattr(self, "priority_0_visibility", None)
-        if stricter is not None and priority == 0:
-            return stricter
+        if getattr(seq, "is_added", False):
+            return (
+                getattr(self, "high_priority_adds_visibility", None)
+                or self.visibility
+            )
+        occultation = getattr(self, "occultation_visibility", None)
+        if (
+            occultation is not None
+            and not getattr(seq, "is_main", False)
+            and not self._overrides_occultation(seq.target)
+        ):
+            return occultation
         return self.visibility
+
+    def _overrides_occultation(self, target: str) -> bool:
+        """Whether ``target`` is named in ``occultation_overrides``.
+
+        Parameters
+        ----------
+        target : str
+            Target name, as read or after name cleaning.
+
+        Returns
+        -------
+        bool
+            True when it flies the standard keepouts though not main.
+        """
+        names = getattr(self, "_occultation_override_names", frozenset())
+        return self._clean_name(str(target)) in names
 
     def _below_minimum_duration(self, duration: TimeDelta) -> bool:
         """Checks if ``duration`` shorter than ``min_sequence_duration``
@@ -1332,7 +2375,7 @@ class ScheduleProcessor:
         working_cal = deepcopy(calendar)
 
         # Collect all sequences globally, sorted by start_time
-        all_sequences: List[Tuple[str, ObservationSequence]] = []
+        all_sequences: list[tuple[str, ObservationSequence]] = []
         for visit in working_cal.visits:
             for seq in visit.sequences:
                 all_sequences.append((visit.id, seq))
@@ -1351,7 +2394,7 @@ class ScheduleProcessor:
             deltas = np.arange(n_mins) * u.min
             times = seq.start_time + deltas
 
-            model = self._visibility_for_priority(seq.priority)
+            model = self._visibility_for(seq)
             vis_arr = self._visibility_for_sequence(seq, target_coord, times)
 
             # Nothing to do if last minute is visible
@@ -1436,6 +2479,7 @@ class ScheduleProcessor:
                 dec=seq.dec,
                 payload_params=deepcopy(seq.payload_params),
                 roll=seq.roll,
+                is_main=seq.is_main,
             )
             working_cal.replace_sequence(visit_id, seq.id, trimmed)
             self._note_timing(
@@ -1484,6 +2528,7 @@ class ScheduleProcessor:
                 dec=next_seq.dec,
                 payload_params=deepcopy(next_seq.payload_params),
                 roll=next_seq.roll,
+                is_main=next_seq.is_main,
             )
             working_cal.replace_sequence(
                 next_visit_id, next_seq.id, extended_next
@@ -1504,7 +2549,7 @@ class ScheduleProcessor:
         self,
         target_coord: SkyCoord,
         time: Time,
-        roll: Optional[float],
+        roll: float | None,
         visibility: Any = None,
     ) -> bool:
         """Whether the star-tracker keepout fails at ``time`` for this roll.
@@ -1547,7 +2592,7 @@ class ScheduleProcessor:
         times: Any,
         gap_start: int,
         gap_length: int,
-        roll: Optional[float] = None,
+        roll: float | None = None,
         visibility: Any = None,
     ) -> bool:
         """Check whether a non-visible gap is short enough to tolerate.
@@ -1623,7 +2668,7 @@ class ScheduleProcessor:
         working_cal = deepcopy(calendar)
 
         # Collect all sequences globally, sorted by start_time.
-        all_sequences: List[Tuple[str, ObservationSequence]] = []
+        all_sequences: list[tuple[str, ObservationSequence]] = []
         for visit in working_cal.visits:
             for seq in visit.sequences:
                 all_sequences.append((visit.id, seq))
@@ -1650,7 +2695,7 @@ class ScheduleProcessor:
                     gap_start,
                     gap_end - gap_start,
                     roll=seq.roll,
-                    visibility=self._visibility_for_priority(seq.priority),
+                    visibility=self._visibility_for(seq),
                 )
                 for gap_start, gap_end in gaps
             ]
@@ -1666,7 +2711,14 @@ class ScheduleProcessor:
                 continue
 
             trimmed = self._build_trimmed_sequence(seq, *best_window)
-            if trimmed is None:
+            if trimmed is None or not self._transit_allows(
+                working_cal,
+                visit_id,
+                seq,
+                trimmed.start_time,
+                trimmed.stop_time,
+                "keeping only the longest visible block",
+            ):
                 continue
 
             working_cal.replace_sequence(visit_id, seq.id, trimmed)
@@ -1705,7 +2757,7 @@ class ScheduleProcessor:
 
     def _ordered_sequences(
         self, calendar: ScienceCalendar
-    ) -> List[Tuple[str, ObservationSequence]]:
+    ) -> list[tuple[str, ObservationSequence]]:
         """Return ``(visit_id, sequence)`` pairs in start-time order."""
         pairs = [
             (visit.id, seq)
@@ -1718,41 +2770,55 @@ class ScheduleProcessor:
     def _grow_into_free_time(
         self,
         calendar: ScienceCalendar,
-        original_timing: Dict[Any, Any],
+        original_timing: dict[Any, Any],
     ) -> ScienceCalendar:
         """Extend observations into adjacent idle time while still visible.
 
         This grows each observation outward into the idle time around it for
         as long as the target stays visible at its scheduled roll, bounded by:
         - the neighboring observations, so growth can never create an
-          overlap,
-        - ``window_start``, so nothing grows back into the previous
-          calendar (``window_end`` is no bound: growth may carry an
-          observation into the next calendar), and
+          overlap, and
         - ``max_movement_minutes`` either side of the long-term start and
-          stop, so an observation grows in place instead of drifting.
+          stop, so an observation grows in place instead of drifting, and
+        - the schedule window, a hard boundary. Growth it stops while the
+          target is still visible is reported as a warning.
 
-        With ``grow_by_priority`` the walk runs priority 2 first, then 1,
-        then 0, and a lower-priority neighbor is a soft bound: the grower
+        With ``grow_by_priority`` the walk runs priority 2, then 1, then 0,
+        the main target first at equal priority and the earlier visit first
+        at equal rank (see ``_growth_rank``), and a lower-ranked neighbor,
+        or an equal-ranked one in a later visit, is a soft bound: the grower
         may take its minutes while the neighbor keeps
         ``min_sequence_duration`` and the moved boundary stays within
         ``max_movement_minutes`` of the neighbor's long-term time. Growth
         that visibility allowed but such a floor refused goes to the error
-        log. With ``drop_priority0`` as well, a priority-0 neighbor has no
-        floor: a priority 1 or 2 may grow past it, and a priority 0 taken
+        log. With ``drop_priority0`` as well, a lower-ranked priority-0
+        neighbor has no floor: the grower may grow past it, and a priority 0 taken
         past its floor is removed from the calendar. Off, the walk is
         start-time order and every neighbor is a hard bound. Either way a
         boundary that has already moved is what the next observation sees.
         Times are modified in place.
         """
         ordered = self._ordered_sequences(calendar)
+        # Long-term visit order, for the earlier-visit tie-break.
+        self._visit_order = {
+            visit.id: index for index, visit in enumerate(calendar.visits)
+        }
         walk = list(range(len(ordered)))
         if getattr(self, "grow_by_priority", False):
-            # Highest priority first; start-time order within a priority.
-            walk.sort(key=lambda i: -int(ordered[i][1].priority or 0))
+            # Highest rank first, then the earlier visit; reverse sorting is
+            # stable, so start-time order holds within a visit and rank.
+            walk.sort(
+                key=lambda i: (
+                    self._growth_rank(ordered[i][1]),
+                    -self._visit_order.get(ordered[i][0], 0),
+                ),
+                reverse=True,
+            )
         gained_starts = gained_stops = taken = 0
         # (visit_id, seq_id) of priority-0 observations eaten by growth.
         self._dropped_by_growth = set()
+        # Boundaries already warned about as held at the window edge.
+        self._window_reported = set()
 
         for index in self._progress(
             walk, desc="Growing into idle time", total=len(walk)
@@ -1793,28 +2859,57 @@ class ScheduleProcessor:
         summary["minutes_grown_at_starts"] = gained_starts
         summary["minutes_grown_at_stops"] = gained_stops
         summary["minutes_taken_from_lower_priority"] = taken
-        summary["priority_0_dropped"] = len(self._dropped_by_growth)
+        # Added to: window extraction may already have dropped some.
+        summary["priority_0_dropped"] = summary.get(
+            "priority_0_dropped", 0
+        ) + len(self._dropped_by_growth)
         self._print(
-            f"Grew observations into idle time: {gained_starts} min added "
+            f"Grew observations into idle time:{gained_starts} min added "
             f"at starts, {gained_stops} min added at stops, {taken} min of "
-            "that taken from lower-priority neighbors, "
+            "that taken from lower-ranked neighbors, "
             f"{len(self._dropped_by_growth)} priority-0 observation(s) "
             "dropped."
         )
         return calendar
 
+    @staticmethod
+    def _growth_rank(seq: ObservationSequence) -> tuple[int, int]:
+        """Where ``seq`` stands in growth under ``grow_by_priority``.
+
+        The higher priority ranks higher; at equal priority a visit's main
+        target outranks any other target. Within a visit this is the same
+        as main target first, since a main target has its visit's highest
+        priority. Across visits priority decides, so a priority-0 main
+        target ranks below a priority-1 target of another visit. Higher
+        ranks grow first and may take minutes from a lower-ranked neighbor;
+        between equal ranks in different visits, the earlier visit may take
+        from the later one (see ``_grow_one_side``).
+
+        Parameters
+        ----------
+        seq : ObservationSequence
+            The observation.
+
+        Returns
+        -------
+        tuple of int
+            ``(priority, 1 if main target else 0)``; compare as tuples.
+        """
+        is_main = bool(getattr(seq, "is_main", False))
+        return int(seq.priority or 0), int(is_main)
+
     def _grow_one_side(
         self,
-        ordered: List[Tuple[str, ObservationSequence]],
+        ordered: list[tuple[str, ObservationSequence]],
         index: int,
         direction: int,
-        original_timing: Dict[Any, Any],
-    ) -> Tuple[int, int]:
+        original_timing: dict[Any, Any],
+    ) -> tuple[int, int]:
         """Grow one boundary of ``ordered[index]``.
 
         ``direction`` -1 grows the start earlier, +1 the stop later; see
         ``_grow_into_free_time`` for the rules. Returns the minutes gained
-        and how many of those came out of a lower-priority neighbor.
+        and how many of those came out of a lower-ranked neighbor.
         """
         limit = getattr(self, "max_movement_minutes", 0) or 0
         visit_id, seq = ordered[index]
@@ -1823,11 +2918,17 @@ class ScheduleProcessor:
             edge, bound = seq.start_time, original[0] - limit * u.min
         else:
             edge, bound = seq.stop_time, original[1] + limit * u.min
-        # Nothing grows back before the window start, which is the previous
-        # calendar's time. The window end is soft, so stops are not bound.
-        window_start = getattr(self, "window_start", None)
-        if direction < 0 and window_start is not None:
-            bound = max(bound, window_start)
+        # The schedule window is a hard boundary. Room the movement limit
+        # would give past it is only looked at, to report it.
+        window_edge = getattr(
+            self, "window_start" if direction < 0 else "window_end", None
+        )
+        past_window = None
+        if (
+            window_edge is not None
+            and direction * (bound - window_edge).sec > 0
+        ):
+            past_window, bound = bound, window_edge
         own_bound = bound
 
         # The neighbor on this side, and how far into it the grower may
@@ -1835,8 +2936,8 @@ class ScheduleProcessor:
         # ranks lower, and then only while the neighbor keeps its minimum
         # duration once the start-buffer pass has cleaned its opening, and
         # its moved boundary stays within the movement limit. With
-        # drop_priority0 a priority-0 neighbor may be taken past that floor,
-        # which drops it.
+        # drop_priority0 a lower-ranked priority-0 neighbor may be taken
+        # past that floor, which drops it.
         neighbor = None
         takeable = may_drop = False
         dropped = self.__dict__.setdefault("_dropped_by_growth", set())
@@ -1853,10 +2954,16 @@ class ScheduleProcessor:
             neighbor_original = original_timing.get(
                 (neighbor_visit, neighbor.id)
             )
+            # Lower ranked, or equal ranked in a later visit.
+            visit_order = getattr(self, "_visit_order", {})
             takeable = (
                 bool(getattr(self, "grow_by_priority", False))
                 and neighbor_original is not None
-                and int(neighbor.priority or 0) < int(seq.priority or 0)
+                and (
+                    self._growth_rank(neighbor),
+                    -visit_order.get(neighbor_visit, 0),
+                )
+                < (self._growth_rank(seq), -visit_order.get(visit_id, 0))
             )
             reach = (
                 neighbor.stop_time if direction < 0 else neighbor.start_time
@@ -1922,19 +3029,27 @@ class ScheduleProcessor:
                     else neighbor.stop_time
                 )
             bound = max(bound, reach) if direction < 0 else min(bound, reach)
+        # The window, not a neighbor, is what stops this side.
+        held_by_window = (
+            past_window is not None and abs((bound - window_edge).sec) < 1e-3
+        )
 
         # Whole seconds before the floor division: a bound built from the
         # neighbor's long-term time can come out a nanosecond short of the
         # minute and would otherwise lose a whole minute of room.
         room = int(np.rint((direction * (bound - edge)).sec) // 60)
         if room <= 0:
+            if held_by_window:
+                self._warn_growth_past_window(
+                    visit_id, seq, direction, window_edge, past_window
+                )
             return 0, 0
         if direction < 0:
             times = edge - np.arange(1, room + 1) * u.min
         else:
             times = edge + np.arange(room) * u.min
         target_coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
-        model = self._visibility_for_priority(seq.priority)
+        model = self._visibility_for(seq)
         gained = self._growable_minutes(
             self._visibility_for_sequence(seq, target_coord, times),
             times,
@@ -1942,6 +3057,10 @@ class ScheduleProcessor:
             seq.roll,
             visibility=model,
         )
+        if held_by_window and gained == room:
+            self._warn_growth_past_window(
+                visit_id, seq, direction, window_edge, past_window
+            )
         if gained <= 0:
             return 0, 0
         new_edge = edge + direction * gained * u.min
@@ -1987,20 +3106,20 @@ class ScheduleProcessor:
             neighbor.start_time = new_edge
         if taken:
             self._print(
-                f"{prefix} | GROWTH: took {taken} min from lower-priority "
+                f"{prefix} | GROWTH: took {taken} min from lower-ranked "
                 f"{neighbor.target} (priority {neighbor.priority})."
             )
             self._note_timing(
                 visit_id,
                 seq.id,
                 f"{boundary}: grew {gained} min, {taken} of them taken from "
-                f"lower-priority {neighbor.target}",
+                f"lower-ranked {neighbor.target}",
             )
             self._note_timing(
                 neighbor_visit,
                 neighbor.id,
                 f"{'stop' if direction < 0 else 'start'}: gave {taken} min "
-                f"to higher-priority {seq.target}",
+                f"to higher-ranked {seq.target}",
             )
         else:
             self._note_timing(
@@ -2009,7 +3128,7 @@ class ScheduleProcessor:
                 f"{boundary}: grew {gained} min into idle time",
             )
 
-        # Growth that reached a bound set by a lower-priority neighbor's
+        # Growth that reached a bound set by a lower-ranked neighbor's
         # floor, with visibility allowing more, is reported. A bound set by
         # the grower's own movement limit, or by an equal or higher
         # neighbor, is the rule working as intended.
@@ -2034,7 +3153,7 @@ class ScheduleProcessor:
             self._print(
                 f"ERROR: {prefix} | GROWTH BLOCKED: visibility allows "
                 f"{extra} more min {side}, but taking them would leave "
-                f"lower-priority {neighbor.target} (priority "
+                f"lower-ranked {neighbor.target} (priority "
                 f"{neighbor.priority}) under "
                 f"{self.min_sequence_duration.sec / 60:.0f} min once its "
                 f"opening is cleaned, or past its {limit} min movement "
@@ -2042,12 +3161,74 @@ class ScheduleProcessor:
             )
         return gained, taken
 
+    def _warn_growth_past_window(
+        self,
+        visit_id: Any,
+        seq: ObservationSequence,
+        direction: int,
+        window_edge: Time,
+        movement_bound: Time,
+    ) -> None:
+        """Warn that visibility would grow an observation past the window.
+
+        Growth has already stopped at the window; this only reports the
+        minutes, up to the movement limit, that the target stays visible
+        beyond it. Reported once per boundary per run.
+
+        Parameters
+        ----------
+        visit_id : str
+            The observation's visit.
+        seq : ObservationSequence
+            The observation, its boundary sitting on the window edge.
+        direction : int
+            -1 for the start (window start), +1 for the stop (window end).
+        window_edge : astropy.time.Time
+            The window edge on this side.
+        movement_bound : astropy.time.Time
+            How far the movement limit alone would have let it grow.
+        """
+        reported = self.__dict__.setdefault("_window_reported", set())
+        key = (visit_id, seq.id, direction)
+        if key in reported:
+            return
+        extra_room = int(
+            np.rint((direction * (movement_bound - window_edge)).sec) // 60
+        )
+        if extra_room <= 0:
+            return
+        if direction < 0:
+            times = window_edge - np.arange(1, extra_room + 1) * u.min
+        else:
+            times = window_edge + np.arange(extra_room) * u.min
+        coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+        extra = self._growable_minutes(
+            self._visibility_for_sequence(seq, coord, times),
+            times,
+            coord,
+            seq.roll,
+            visibility=self._visibility_for(seq),
+        )
+        if extra <= 0:
+            return
+        reported.add(key)
+        side, name = (
+            ("before its start", "window start")
+            if direction < 0
+            else ("after its stop", "window end")
+        )
+        self._print(
+            f"WARNING: {self._seq_prefix(visit_id, seq)} | WINDOW: "
+            f"visibility allows {extra} more min {side}, past the {name} "
+            f"{window_edge.isot}; held to the window."
+        )
+
     def _growable_minutes(
         self,
         visible: np.ndarray,
         times: Any,
         target_coord: SkyCoord,
-        roll: Optional[float],
+        roll: float | None,
         visibility: Any = None,
     ) -> int:
         """How many of ``times`` an observation may absorb, walking outward.
@@ -2092,7 +3273,7 @@ class ScheduleProcessor:
     def _clamp_movement(
         self,
         calendar: ScienceCalendar,
-        original_timing: Dict[Any, Any],
+        original_timing: dict[Any, Any],
     ) -> ScienceCalendar:
         """Hold every boundary within ``max_movement_minutes`` of its plan.
 
@@ -2157,6 +3338,15 @@ class ScheduleProcessor:
                         f"Left unclamped for manual review."
                     )
                     continue
+                if not self._transit_allows(
+                    calendar,
+                    visit.id,
+                    seq,
+                    new_start,
+                    new_stop,
+                    "clamping to the movement limit",
+                ):
+                    continue
                 for boundary, moved in (
                     ("start", new_start != seq.start_time),
                     ("stop", new_stop != seq.stop_time),
@@ -2213,6 +3403,15 @@ class ScheduleProcessor:
                 f"{later.start_time.isot}. This is a scheduler bug, please "
                 f"report it."
             )
+            self._transit_allows(
+                calendar,
+                visit_id,
+                earlier,
+                earlier.start_time,
+                later.start_time,
+                "truncating to end an overlap",
+                refuse=False,
+            )
             earlier.stop_time = later.start_time
             repaired += 1
             self._note_timing(
@@ -2232,6 +3431,233 @@ class ScheduleProcessor:
                 )
 
         self.gap_report["processing_summary"]["overlaps_repaired"] = repaired
+        return calendar
+
+    def _refine_edges_to_second(
+        self,
+        calendar: ScienceCalendar,
+        original_timing: dict[Any, Any],
+        added_only: bool = False,
+    ) -> ScienceCalendar:
+        """Move each start and stop to the second visibility puts it at.
+
+        Every other pass samples visibility once a minute, so a target can
+        leave the keepouts anywhere inside an observation's first or last
+        minute without a sample seeing it, and a boundary stopped at a dark
+        minute sample may have had most of the minute before that sample
+        visible. Each boundary is rechecked at 1 s over the minute either
+        side of it, at the roll the observation flies:
+
+        - In: a stop whose last minute opens visible is pulled back to the
+          first dark second in that minute, and a start whose first minute
+          opens visible is pushed past the last dark second in it.
+        - Out: a boundary with no dark second inside that minute moves
+          outward over the seconds the target stays visible, up to a
+          minute, never past a neighbor, the schedule window, or
+          ``max_movement_minutes`` from its long-term time. A visible
+          second clears both start buffers,
+          so a start moved earlier this way still opens cleanly.
+
+        A boundary whose own minute sample is dark was left there by an
+        earlier pass on purpose and is not touched. Pulling a boundary in
+        is applied even when it costs a transit core a minute (an error),
+        since those seconds cannot be observed. A cut that takes an
+        observation under ``min_sequence_duration`` is a warning; with
+        ``drop_priority0`` a priority 0 cut that short is dropped instead
+        (and a visit left empty with it), while any other is kept short.
+        Times are modified in place.
+
+        Parameters
+        ----------
+        calendar : ScienceCalendar
+            Calendar after overlap repair.
+        original_timing : dict
+            Long-term ``(start, stop)`` per ``(visit_id, sequence_id)``,
+            for the movement limit. An observation without an entry has no
+            movement limit.
+        added_only : bool, optional
+            Refine only high-priority additions (``is_added``); every other
+            observation still bounds its neighbors but is not moved, as it
+            was refined already. Default False.
+
+        Returns
+        -------
+        ScienceCalendar
+            The same calendar, boundaries refined.
+        """
+        limit = getattr(self, "max_movement_minutes", 0) or 0
+        # The schedule window is a hard boundary for moving out.
+        window_start = getattr(self, "window_start", None)
+        window_end = getattr(self, "window_end", None)
+        ordered = self._ordered_sequences(calendar)
+        offsets = np.arange(-60, 60)
+        seconds_in = seconds_out = moved_in = moved_out = 0
+        # (visit_id, seq_id) of priority-0 observations a cut took under
+        # the minimum, with drop_priority0 on.
+        dropped = set()
+
+        def room(seconds: float) -> int:
+            # Whole seconds of free time, never negative or over a minute.
+            return int(min(60, max(0, np.floor(seconds + 1e-6))))
+
+        for index, (visit_id, seq) in enumerate(
+            self._progress(
+                ordered,
+                desc="Refining edges to the second",
+                total=len(ordered),
+            )
+        ):
+            if added_only and not getattr(seq, "is_added", False):
+                continue
+            start, stop = seq.start_time, seq.stop_time
+            coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+            # One query: the minute either side of the start, then of the
+            # stop. Slices are [start-60 s, start), [start, start+60 s),
+            # [stop-60 s, stop), [stop, stop+60 s).
+            deltas = np.concatenate([offsets, (stop - start).sec + offsets])
+            vis = self._visibility_for_sequence(
+                seq, coord, start + deltas * u.s
+            )
+            outside_start, inside_start = vis[:60], vis[60:120]
+            inside_stop, outside_stop = vis[120:180], vis[180:]
+            original = original_timing.get((visit_id, seq.id))
+
+            new_start = start
+            if inside_start[0]:
+                if not inside_start.all():
+                    later = int(np.flatnonzero(~inside_start)[-1]) + 1
+                    new_start = start + later * u.s
+                else:
+                    free = 60
+                    previous = index - 1
+                    while (
+                        previous >= 0
+                        and (ordered[previous][0], ordered[previous][1].id)
+                        in dropped
+                    ):
+                        previous -= 1
+                    if previous >= 0:
+                        free = room(
+                            (start - ordered[previous][1].stop_time).sec
+                        )
+                    if original is not None and limit > 0:
+                        free = min(
+                            free,
+                            room((start - (original[0] - limit * u.min)).sec),
+                        )
+                    if window_start is not None:
+                        free = min(free, room((start - window_start).sec))
+                    dark = np.flatnonzero(~outside_start)
+                    visible = 60 - (int(dark[-1]) + 1) if dark.size else 60
+                    new_start = start - min(visible, free) * u.s
+
+            new_stop = stop
+            if inside_stop[0]:
+                if not inside_stop.all():
+                    first_dark = int(np.flatnonzero(~inside_stop)[0])
+                    new_stop = stop + (first_dark - 60) * u.s
+                else:
+                    free = 60
+                    if index + 1 < len(ordered):
+                        free = room(
+                            (ordered[index + 1][1].start_time - stop).sec
+                        )
+                    if original is not None and limit > 0:
+                        free = min(
+                            free,
+                            room(((original[1] + limit * u.min) - stop).sec),
+                        )
+                    if window_end is not None:
+                        free = min(free, room((window_end - stop).sec))
+                    dark = np.flatnonzero(~outside_stop)
+                    visible = int(dark[0]) if dark.size else 60
+                    new_stop = stop + min(visible, free) * u.s
+
+            d_start = int(np.rint((new_start - start).sec))
+            d_stop = int(np.rint((new_stop - stop).sec))
+            if d_start == 0 and d_stop == 0:
+                continue
+
+            prefix = self._seq_prefix(visit_id, seq)
+            if d_start > 0 or d_stop < 0:
+                if self._below_minimum_duration(new_stop - new_start):
+                    short = (
+                        f"{prefix} | EDGES: the target is not visible at 1 s "
+                        "resolution inside its first or last minute; cutting "
+                        f"that leaves {(new_stop - new_start).sec / 60:.1f} "
+                        "min, under "
+                        f"{self.min_sequence_duration.sec / 60:.0f} min"
+                    )
+                    if int(seq.priority or 0) == 0 and getattr(
+                        self, "drop_priority0", False
+                    ):
+                        dropped.add((visit_id, seq.id))
+                        self._print(
+                            f"WARNING: {short}. Dropped (drop_priority0)."
+                        )
+                        continue
+                    self._print(f"WARNING: {short}.")
+                self._transit_allows(
+                    calendar,
+                    visit_id,
+                    seq,
+                    new_start,
+                    new_stop,
+                    "cutting seconds the target is not visible for",
+                    refuse=False,
+                )
+
+            for boundary, change, pulled_in in (
+                ("start", d_start, d_start > 0),
+                ("stop", d_stop, d_stop < 0),
+            ):
+                if change == 0:
+                    continue
+                if pulled_in:
+                    seconds_in += abs(change)
+                    moved_in += 1
+                    why = "the target is not visible past there (1 s check)"
+                else:
+                    seconds_out += abs(change)
+                    moved_out += 1
+                    why = "the target is visible that far (1 s check)"
+                self._note_timing(
+                    visit_id,
+                    seq.id,
+                    f"{boundary}: {abs(change)} s "
+                    f"{'later' if change > 0 else 'earlier'}, {why}",
+                )
+            seq.start_time, seq.stop_time = new_start, new_stop
+
+        if dropped:
+            for visit in calendar.visits:
+                visit.sequences = [
+                    seq
+                    for seq in visit.sequences
+                    if (visit.id, seq.id) not in dropped
+                ]
+            calendar.visits = [
+                visit for visit in calendar.visits if visit.sequences
+            ]
+
+        # Added to, as the pass also runs on the high-priority additions.
+        summary = self.gap_report["processing_summary"]
+        summary["edge_seconds_cut"] = (
+            summary.get("edge_seconds_cut", 0) + seconds_in
+        )
+        summary["edge_seconds_grown"] = (
+            summary.get("edge_seconds_grown", 0) + seconds_out
+        )
+        summary["priority_0_dropped"] = summary.get(
+            "priority_0_dropped", 0
+        ) + len(dropped)
+        self._print(
+            f"Refined edges to the second"
+            f"{' (high-priority additions)' if added_only else ''}: "
+            f"{moved_in} boundaries pulled in "
+            f"({seconds_in} s), {moved_out} pushed out ({seconds_out} s), "
+            f"{len(dropped)} priority-0 observation(s) dropped."
+        )
         return calendar
 
     def _enforce_start_buffers(
@@ -2308,6 +3734,16 @@ class ScheduleProcessor:
                         f"Left unchanged."
                     )
                     continue
+                if not self._transit_allows(
+                    calendar,
+                    visit.id,
+                    seq,
+                    new_start,
+                    seq.stop_time,
+                    f"moving the start {offset} min later to open cleanly "
+                    f"({reasons})",
+                ):
+                    continue
 
                 self._print(
                     f"{prefix} | START BUFFER: start moved later by "
@@ -2329,7 +3765,7 @@ class ScheduleProcessor:
         seq: ObservationSequence,
         times: Any,
         target_coord: SkyCoord,
-    ) -> List[Tuple[str, int, np.ndarray]]:
+    ) -> list[tuple[str, int, np.ndarray]]:
         """The per-minute checks ``_enforce_start_buffers`` holds ``seq`` to.
 
         Each is ``(reason, buffer_minutes, ok_per_minute)`` over ``times``,
@@ -2343,7 +3779,7 @@ class ScheduleProcessor:
         )
         if not getattr(self.visibility, "_st_constraint_active", False):
             st_buffer = 0
-        model = self._visibility_for_priority(seq.priority)
+        model = self._visibility_for(seq)
         roll = None if seq.roll is None else seq.roll * u.deg
 
         requirements = []
@@ -2381,9 +3817,9 @@ class ScheduleProcessor:
 
     @staticmethod
     def _first_clean_start(
-        requirements: List[Tuple[str, int, np.ndarray]],
+        requirements: list[tuple[str, int, np.ndarray]],
         n_mins: int,
-    ) -> Optional[int]:
+    ) -> int | None:
         """Earliest offset at which every requirement holds for its buffer.
 
         Each requirement is ``(name, buffer_minutes, ok_per_minute)``. The
@@ -2412,7 +3848,7 @@ class ScheduleProcessor:
     def _analyze_mid_sequence_visibility(
         self,
         seq: ObservationSequence,
-    ) -> Optional[Tuple[SkyCoord, Any, np.ndarray]]:
+    ) -> tuple[SkyCoord, Any, np.ndarray] | None:
         """Return per-minute visibility for one sequence, if useful."""
         n_mins = int(np.rint(seq.duration.sec / 60.0))
         if n_mins <= 0:
@@ -2437,18 +3873,156 @@ class ScheduleProcessor:
         Judged under the model its priority flies. A sequence with no roll
         yet is asked at the model's own attitude.
         """
-        model = self._visibility_for_priority(seq.priority)
+        model = self._visibility_for(seq)
         roll = None if seq.roll is None else seq.roll * u.deg
         return np.asarray(
             model.get_visibility(target_coord, times, roll=roll)["visible"]
         )
 
+    def _transit_of(
+        self, seq: ObservationSequence
+    ) -> tuple[str, int, Time, Time] | None:
+        """The transit a priority-2 observation is placed around.
+
+        Returns ``(planet key, epoch, core_start, core_stop)`` for the
+        transit nearest the observation's midpoint, or ``None`` when the
+        transit constraint is off, the observation is not priority 2, or
+        its planet has no ephemeris.
+        """
+        ephemerides = getattr(self, "transit_ephemerides", None)
+        if (
+            not ephemerides
+            or not getattr(self, "transit_duration_constraint_min", 0)
+            or seq.priority != 2
+        ):
+            return None
+        key = planet_key(seq.target)
+        if key not in ephemerides:
+            return None
+        epoch = transit_epoch(
+            ephemerides[key], seq.start_time + seq.duration / 2
+        )
+        # The barycentric correction is the slow part; a transit's core
+        # never changes, so it is worked out once.
+        cores = self.__dict__.setdefault("_transit_cores", {})
+        if (key, epoch) not in cores:
+            cores[(key, epoch)] = transit_core(
+                ephemerides[key], epoch, self.transit_middle_frac
+            )
+        return (key, epoch, *cores[(key, epoch)])
+
+    def _transit_coverage(
+        self,
+        calendar: ScienceCalendar,
+        transit: tuple[str, int, Time, Time],
+        replace: tuple[ObservationSequence, Time, Time] | None = None,
+    ) -> int:
+        """Visible minutes of a transit's core its observations cover.
+
+        Every priority-2 observation placed around ``transit`` counts, each
+        judged at its own roll under the model its priority flies.
+        ``replace`` gives one of them new start and stop times, to judge a
+        change before it is made.
+        """
+        key, epoch, core_start, core_stop = transit
+        n_minutes = int(np.floor((core_stop - core_start).to_value(u.min)))
+        minutes = core_start + np.arange(n_minutes) * u.min
+        covered = 0
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                found = self._transit_of(seq)
+                if found is None or found[:2] != (key, epoch):
+                    continue
+                start, stop = seq.start_time, seq.stop_time
+                if replace is not None and seq is replace[0]:
+                    start, stop = replace[1], replace[2]
+                inside = (minutes >= start) & (minutes < stop)
+                if not inside.any():
+                    continue
+                coord = SkyCoord(seq.ra, seq.dec, frame="icrs", unit="deg")
+                covered += int(
+                    self._visibility_for_sequence(
+                        seq, coord, minutes[inside]
+                    ).sum()
+                )
+        return covered
+
+    def _transit_allows(
+        self,
+        calendar: ScienceCalendar,
+        visit_id: Any,
+        seq: ObservationSequence,
+        new_start: Time,
+        new_stop: Time,
+        change: str,
+        refuse: bool = True,
+    ) -> bool:
+        """Whether ``seq`` may move to ``new_start``-``new_stop``.
+
+        A priority-2 observation's transit must keep
+        ``transit_duration_constraint_min`` visible minutes of its core
+        covered, and a transit the long-term calendar left short of that
+        may not lose any. A change breaking this is refused and logged as
+        a warning. With ``refuse`` False (overlap repair, which has to
+        win) the break is logged as an error and the change allowed.
+        """
+        transit = self._transit_of(seq)
+        if transit is None:
+            return True
+        needed = self.transit_duration_constraint_min
+        before = self._transit_coverage(calendar, transit)
+        after = self._transit_coverage(
+            calendar, transit, (seq, new_start, new_stop)
+        )
+        if after >= needed or after >= before:
+            return True
+
+        message = (
+            f"{self._seq_prefix(visit_id, seq)} | TRANSIT: {change} would "
+            f"leave {after} visible min of the {seq.target} transit core "
+            f"(epoch {transit[1]}, {transit[2].isot[:16]} to "
+            f"{transit[3].isot[11:16]}) covered, down from {before}; "
+            f"needs {needed:g}."
+        )
+        if not refuse:
+            self._print(f"ERROR: {message} Applied anyway.")
+            return True
+        self._print(f"WARNING: {message} Refused.")
+        summary = (getattr(self, "gap_report", None) or {}).get(
+            "processing_summary"
+        )
+        if summary is not None:
+            summary["transit_changes_refused"] = (
+                summary.get("transit_changes_refused", 0) + 1
+            )
+        return False
+
+    def _transit_coverages(
+        self, calendar: ScienceCalendar
+    ) -> dict[tuple[str, int], tuple[str, Time, int]]:
+        """Every transit with priority-2 observations, and its coverage.
+
+        Returns ``{(planet key, epoch): (target, core_start, covered
+        minutes)}``; empty when the transit constraint is off.
+        """
+        coverages = {}
+        for visit in calendar.visits:
+            for seq in visit.sequences:
+                transit = self._transit_of(seq)
+                if transit is not None and transit[:2] not in coverages:
+                    coverages[transit[:2]] = (
+                        seq.target,
+                        transit[2],
+                        self._transit_coverage(calendar, transit),
+                    )
+        return coverages
+
     def _find_nonvisible_gaps(
         self,
         vis_arr: np.ndarray,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """Find contiguous non-visible runs as half-open index ranges."""
-        gaps: List[Tuple[int, int]] = []
+        gaps: list[tuple[int, int]] = []
         gap_start = None
         for i, visible in enumerate(vis_arr):
             if not visible:
@@ -2465,11 +4039,11 @@ class ScheduleProcessor:
     def _best_tolerable_segment(
         self,
         vis_arr: np.ndarray,
-        gaps: List[Tuple[int, int]],
-        gap_tolerable: List[bool],
-    ) -> Optional[Tuple[int, int]]:
+        gaps: list[tuple[int, int]],
+        gap_tolerable: list[bool],
+    ) -> tuple[int, int] | None:
         """Return best [start, end) span separated by intolerable gaps."""
-        segment_bounds: List[Tuple[int, int]] = []
+        segment_bounds: list[tuple[int, int]] = []
         seg_start = 0
         for i, (gap_start, gap_end) in enumerate(gaps):
             if not gap_tolerable[i]:
@@ -2501,7 +4075,7 @@ class ScheduleProcessor:
         seq: ObservationSequence,
         best_start: int,
         best_end: int,
-    ) -> Optional[ObservationSequence]:
+    ) -> ObservationSequence | None:
         """Create trimmed sequence if valid and changed from input."""
         new_start = seq.start_time + best_start * u.min
         new_stop = seq.start_time + best_end * u.min
@@ -2521,12 +4095,13 @@ class ScheduleProcessor:
             dec=seq.dec,
             payload_params=deepcopy(seq.payload_params),
             roll=seq.roll,
+            is_main=seq.is_main,
         )
 
     def _extend_previous_after_mid_trim(
         self,
         working_cal: ScienceCalendar,
-        all_sequences: List[Tuple[str, ObservationSequence]],
+        all_sequences: list[tuple[str, ObservationSequence]],
         idx: int,
         old_start: Time,
         new_start: Time,
@@ -2569,6 +4144,7 @@ class ScheduleProcessor:
             dec=prev_seq.dec,
             payload_params=deepcopy(prev_seq.payload_params),
             roll=prev_seq.roll,
+            is_main=prev_seq.is_main,
         )
         working_cal.replace_sequence(prev_visit_id, prev_seq.id, extended_prev)
         all_sequences[idx - 1] = (prev_visit_id, extended_prev)
@@ -2582,7 +4158,7 @@ class ScheduleProcessor:
     def _extend_next_after_mid_trim(
         self,
         working_cal: ScienceCalendar,
-        all_sequences: List[Tuple[str, ObservationSequence]],
+        all_sequences: list[tuple[str, ObservationSequence]],
         idx: int,
         new_stop: Time,
         old_stop: Time,
@@ -2624,6 +4200,7 @@ class ScheduleProcessor:
             dec=next_seq.dec,
             payload_params=deepcopy(next_seq.payload_params),
             roll=next_seq.roll,
+            is_main=next_seq.is_main,
         )
         working_cal.replace_sequence(next_visit_id, next_seq.id, extended_next)
         all_sequences[idx + 1] = (next_visit_id, extended_next)
@@ -2636,7 +4213,7 @@ class ScheduleProcessor:
 
     def get_minute_by_minute_assignments(
         self, calendar: ScienceCalendar
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Generate assignments using synchronized time grid."""
         # Use synchronized time grid
         total_minutes, start_time, end_time, time_grid = (
@@ -2743,7 +4320,7 @@ class ScheduleProcessor:
         sequence: ObservationSequence,
         override_fields: Any,
         data_cls: Any,
-        extra_kwargs: Optional[Dict[str, Any]] = None,
+        extra_kwargs: dict[str, Any] | None = None,
     ):
         """Build a NirdaData/VisdaData object from a sequence's payload.
 
@@ -2780,12 +4357,12 @@ class ScheduleProcessor:
             overrides = {field: None for field in (override_fields or ())}
 
         default_config = data_cls().get_config()
-        kwargs: Dict[str, Any] = dict(extra_kwargs or {})
+        kwargs: dict[str, Any] = dict(extra_kwargs or {})
         # Share the run logger so the data class's own warnings (zero frame
         # time, oversize, VITL fallback, ...) land in the same log.
         kwargs.setdefault("logger", getattr(self, "logger", None))
-        writeback: Dict[str, str] = {}
-        missing: List[str] = []
+        writeback: dict[str, str] = {}
+        missing: list[str] = []
 
         for field, (tag, from_xml, to_xml) in spec.items():
             if field in overrides:
@@ -2859,10 +4436,10 @@ class ScheduleProcessor:
 
     @staticmethod
     def _normalize_priority_keys(
-        raw: Optional[Dict[Any, Any]],
-    ) -> Dict[int, Any]:
+        raw: dict[Any, Any] | None,
+    ) -> dict[int, Any]:
         """Coerce override priority keys to ints (accepts 'Priority_0', '0')."""
-        out: Dict[int, Any] = {}
+        out: dict[int, Any] = {}
         for key, value in (raw or {}).items():
             if isinstance(key, bool):
                 # bool is an int subclass; reject to avoid surprises.
@@ -2893,7 +4470,7 @@ class ScheduleProcessor:
     def _set_override_element(
         self,
         parent: "ET.Element",
-        mapping: Dict[str, Any],
+        mapping: dict[str, Any],
         prefix: str,
         path: str,
     ) -> None:
@@ -3010,12 +4587,8 @@ class ScheduleProcessor:
 
         return sequence
 
-    @staticmethod
-    def _clean_name(name: str) -> str:
-        """Replace every :data:`BAD_NAME_SYMBOLS` character in *name*."""
-        for bad, good in BAD_NAME_SYMBOLS.items():
-            name = name.replace(bad, good)
-        return name
+    # Kept as a method; the rule lives in models so roll.py can share it.
+    _clean_name = staticmethod(clean_target_name)
 
     def _normalize_sequence_names(
         self, sequence: ObservationSequence, visit_id: Any = None
@@ -3240,7 +4813,7 @@ class ScheduleProcessor:
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        overhead: Optional[OverheadTiming] = None,
+        overhead: OverheadTiming | None = None,
         override_fields: Any = (),
         visit_id: Any = None,
     ) -> ObservationSequence:
@@ -3322,7 +4895,7 @@ class ScheduleProcessor:
         self,
         sequence: ObservationSequence,
         duration: TimeDelta,
-        overhead: Optional[OverheadTiming] = None,
+        overhead: OverheadTiming | None = None,
         override_fields: Any = (),
         visit_id: Any = None,
     ) -> ObservationSequence:
@@ -3420,7 +4993,7 @@ class ScheduleProcessor:
 
     def validate_visibility(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate that all sequences have good visibility.
 
         Returns a list of issue dicts. Each dict contains:
@@ -3456,7 +5029,7 @@ class ScheduleProcessor:
                 deltas = np.arange(n_mins) * u.min
                 times = seq.start_time + deltas
 
-                model = self._visibility_for_priority(seq.priority)
+                model = self._visibility_for(seq)
                 vis = self._visibility_for_sequence(seq, target_coord, times)
 
                 if not np.all(vis):
@@ -3708,7 +5281,7 @@ class ScheduleProcessor:
         """Assign an observation to the UTC day with the largest overlap."""
         if stop_dt <= start_dt:
             return start_dt.date().isoformat()
-        day_seconds: Dict[str, float] = defaultdict(float)
+        day_seconds: dict[str, float] = defaultdict(float)
         cursor = start_dt
         while cursor < stop_dt:
             next_midnight = datetime(
@@ -3725,11 +5298,11 @@ class ScheduleProcessor:
     def _fits_files_for_sequence(
         seq: ObservationSequence,
         overhead: OverheadTiming,
-        nirda: Optional[NirdaData],
+        nirda: NirdaData | None,
         sc_integrations: int,
-        visda: Optional[VisdaData],
+        visda: VisdaData | None,
         num_total_frames: int,
-    ) -> List[str]:
+    ) -> list[str]:
         """Return the FITS product filenames packaged in a sequence's ``.bin``.
 
         Names follow the Pandora flight-software conventions (InfImg from
@@ -3737,7 +5310,7 @@ class ScheduleProcessor:
         observation's payload parameters. The per-detector capture-start
         timestamps are the sequence start plus the detector pre-overhead.
         """
-        files: List[str] = []
+        files: list[str] = []
         target = seq.target
 
         # NIRDA: InfImg cube (only if integrations were scheduled).
@@ -3778,8 +5351,8 @@ class ScheduleProcessor:
     def generate_diagnostics(
         self,
         calendar: ScienceCalendar,
-        output_path: Optional[Any] = None,
-        pass_data_volume_mb: Optional[float] = None,
+        output_path: Any | None = None,
+        pass_data_volume_mb: float | None = None,
     ) -> str:
         """Build a per-day ``.diag`` report and (optionally) write it.
 
@@ -3830,7 +5403,7 @@ class ScheduleProcessor:
             except (TypeError, ValueError):
                 return 0
 
-        def new_bucket() -> Dict[str, Any]:
+        def new_bucket() -> dict[str, Any]:
             return {
                 "count": 0,
                 "priority_counts": {0: 0, 1: 0, 2: 0},
@@ -3845,7 +5418,7 @@ class ScheduleProcessor:
                 "manifest": [],
             }
 
-        daily: Dict[str, Dict[str, Any]] = {}
+        daily: dict[str, dict[str, Any]] = {}
 
         # Per-detector capture-start offsets for FITS filenames.
         overhead = getattr(self, "overhead", None) or OverheadTiming()
@@ -3936,8 +5509,8 @@ class ScheduleProcessor:
 
     @staticmethod
     def _diag_observing_and_gaps(
-        timelines: List[Tuple],
-    ) -> Tuple[float, float]:
+        timelines: list[tuple],
+    ) -> tuple[float, float]:
         """Return (observing_minutes, gap_minutes) for a day's timelines."""
         observing = 0.0
         gaps = 0.0
@@ -3990,7 +5563,7 @@ class ScheduleProcessor:
             summary["observing"] += observing
             summary["gaps"] += gaps
 
-        lines: List[str] = []
+        lines: list[str] = []
 
         # ── Week summary ───────────────────────────────────────────
         sum_total = summary["nir_data"] + summary["vis_data"]
@@ -4066,7 +5639,7 @@ class ScheduleProcessor:
 
     def validate_target_names(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate that all target names do not contain spaces.
 
         Parameters
@@ -4106,7 +5679,7 @@ class ScheduleProcessor:
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
-    def _settings_for_header(self) -> Dict[str, str]:
+    def _settings_for_header(self) -> dict[str, str]:
         """The keepouts and tolerances this run actually applied.
 
         Read back off the ``Visibility`` instances rather than off the
@@ -4140,8 +5713,13 @@ class ScheduleProcessor:
             "Use_Dynamic_Earthlimb": str(
                 bool(getattr(nominal, "use_dynamic_earthlimb", False))
             ),
-            "Priority_0_Earthlimb_Min_Deg": angle(
-                getattr(self, "priority_0_visibility", None), "earthlimb_min"
+            "Occultation_Earthlimb_Min_Deg": angle(
+                getattr(self, "occultation_visibility", None), "earthlimb_min"
+            ),
+            "Occultation_Overrides": (
+                ",".join(self.occultation_overrides)
+                if getattr(self, "occultation_overrides", None)
+                else None
             ),
             "Earthlimb_Gap_Tolerance_Min": str(self.earthlimb_gap_tolerance),
             "Earthlimb_Gap_Tolerance_Start_Buffer_Min": str(
@@ -4154,11 +5732,60 @@ class ScheduleProcessor:
             "Max_Movement_Min": str(self.max_movement_minutes),
             "Grow_By_Priority": str(self.grow_by_priority),
             "Drop_Priority0": str(getattr(self, "drop_priority0", False)),
+            "Refine_Edges_To_Second": str(
+                getattr(self, "refine_edges_to_second", False)
+            ),
             "Roll_Step_Deg": f"{float(self.roll_step):g}",
             "Min_Power_Frac": f"{float(self.min_power_frac):g}",
+            "Use_Trace_Sweep": str(
+                bool(getattr(nominal, "use_trace_sweep", False))
+            ),
         }
+        if getattr(nominal, "use_trace_sweep", False):
+            settings["Trace_Contamination_Tol"] = (
+                f"{float(nominal.trace_contamination_tol):g}"
+            )
+            settings["Trace_NIRDA_ROI"] = (
+                f"{nominal.nirda_roi_x}x{nominal.nirda_roi_y}"
+            )
+            settings["Drop_Observations_Based_On_Trace"] = str(
+                bool(getattr(self, "drop_observations_based_on_trace", False))
+            )
+        transit_on = bool(
+            getattr(self, "transit_ephemerides", None)
+            and getattr(self, "transit_duration_constraint_min", 0)
+        )
+        settings["Transit_Constraint"] = str(transit_on)
+        if transit_on:
+            settings["Transit_Middle_Frac"] = f"{self.transit_middle_frac:g}"
+            settings["Transit_Duration_Constraint_Min"] = (
+                f"{self.transit_duration_constraint_min:g}"
+            )
+        adds_on = bool(getattr(self, "add_high_pri_observations", False))
+        settings["Add_High_Pri_Observations"] = str(adds_on)
+        if adds_on:
+            if self.high_priority_adds_earthlimb_min is not None:
+                settings["High_Priority_Adds_Earthlimb_Min_Deg"] = (
+                    f"{float(self.high_priority_adds_earthlimb_min):g}"
+                )
+            settings["High_Priority_Adds_Min_Duration_Min"] = (
+                f"{self.high_priority_adds_min_duration:g}"
+            )
+            settings["High_Priority_Adds_Max_Duration_Min"] = (
+                f"{self.high_priority_adds_max_duration:g}"
+            )
+            settings["High_Priority_Adds_Min_Observations"] = str(
+                self.high_priority_adds_min_observations
+            )
+            settings["High_Priority_Adds_Transit_Buffer_Min"] = (
+                f"{self.high_priority_adds_transit_buffer_min:g}"
+            )
+            if getattr(self, "high_priority_adds_exclude", None):
+                settings["High_Priority_Adds_Exclude"] = ",".join(
+                    self.high_priority_adds_exclude
+                )
         # A keepout with no value is left out rather than written empty:
-        # Priority_0_Earthlimb_Min_Deg absent means it was not in use.
+        # Occultation_Earthlimb_Min_Deg absent means it was not in use.
         return {k: v for k, v in settings.items() if v is not None}
 
     @property
@@ -4202,7 +5829,7 @@ class ScheduleProcessor:
         self,
         calendar: ScienceCalendar,
         verbose: bool,
-        log_path: Optional[Any] = None,
+        log_path: Any | None = None,
     ) -> None:
         """Configure ``self.logger`` for a processing run.
 
@@ -4264,7 +5891,7 @@ class ScheduleProcessor:
             # Write a header recording the run start time in UTC and US
             # Eastern, so individual entries need not carry timestamps. The
             # FileHandler below then appends to this file.
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             utc_str = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
             if ZoneInfo is not None:
                 eastern = now_utc.astimezone(ZoneInfo("America/New_York"))
@@ -4311,7 +5938,7 @@ class ScheduleProcessor:
             start = str(getattr(seq, "start_time", "?"))
         return f"{start}-{seq.target}-{visit_id}-{seq.id}"
 
-    def _progress(self, iterable, desc: str, total: Optional[int] = None):
+    def _progress(self, iterable, desc: str, total: int | None = None):
         """Wraps iterables in a tqdm progress bar when available.
 
         Falls back to the plain iterable if ``tqdm`` is not installed. The
@@ -4358,8 +5985,18 @@ class ScheduleProcessor:
                 "minutes_grown_at_stops": 0,
                 "minutes_taken_from_lower_priority": 0,
                 "priority_0_dropped": 0,
+                "trace_dropped": 0,
+                "transit_changes_refused": 0,
                 "boundaries_clamped": 0,
                 "overlaps_repaired": 0,
+                "window_clipped": 0,
+                "merged_before_trims": 0,
+                "merged_at_end": 0,
+                "edge_seconds_cut": 0,
+                "edge_seconds_grown": 0,
+                "high_pri_added_visits": 0,
+                "high_pri_added_observations": 0,
+                "high_pri_added_minutes": 0,
                 "original_gap_time_minutes": 0,
                 "duty_cycle_improvement_percent": 0,
                 "duration_improvement_minutes": 0,
@@ -4465,7 +6102,7 @@ class ScheduleProcessor:
             }
         )
 
-    def get_gap_report(self) -> Dict[str, Any]:
+    def get_gap_report(self) -> dict[str, Any]:
         """Return comprehensive gap analysis report."""
         return self.gap_report
 
@@ -4527,13 +6164,21 @@ class ScheduleProcessor:
         self._print(
             f"  Overlaps Repaired: {summary.get('overlaps_repaired', 0)}"
         )
+        self._print(
+            f"  Cut At The Window Edges: {summary.get('window_clipped', 0)}"
+        )
+        self._print(
+            f"  Edges Refined To The Second: "
+            f"{summary.get('edge_seconds_cut', 0)} s cut where the target "
+            f"is not visible, {summary.get('edge_seconds_grown', 0)} s grown"
+        )
 
     def debug_sequence_visibility(
         self,
         calendar: ScienceCalendar,
         sequence_id: str,
-        target_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        target_name: str | None = None,
+    ) -> dict[str, Any]:
         """Debug visibility for a specific sequence."""
         # Find the sequence
         target_seq = None
@@ -4572,9 +6217,9 @@ class ScheduleProcessor:
         deltas = np.arange(n_mins) * u.min
         times = target_seq.start_time + deltas
 
-        vis = self._visibility_for_priority(
-            target_seq.priority
-        ).get_visibility(target_coord, times)["visible"]
+        vis = self._visibility_for(target_seq).get_visibility(
+            target_coord, times
+        )["visible"]
 
         self._print("\nMinute-by-minute visibility:")
         for i, (time, visible) in enumerate(zip(times, vis)):
@@ -4595,7 +6240,7 @@ class ScheduleProcessor:
 
     def validate_no_overlaps_astropy(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Detect overlapping sequences using Astropy time comparison.
 
         Returns a list of overlap dicts containing:
@@ -4673,21 +6318,24 @@ class ScheduleProcessor:
 
     def validate_sequence_timing(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Comprehensive timing validation.
 
-        Checks for overlaps, short sequences, and large gaps.
-        Each sub-issue includes a ``message`` with actionable detail.
+        Checks for overlaps, short sequences, observations reaching outside
+        the schedule window (once ``process_calendar`` has set one), and
+        large gaps. Each sub-issue includes a ``message`` with actionable
+        detail.
 
         Returns
         -------
         dict
-            Keys: ``overlaps``, ``short_sequences``, ``large_gaps``,
-            ``timing_summary``.
+            Keys: ``overlaps``, ``short_sequences``, ``outside_window``,
+            ``large_gaps``, ``timing_summary``.
         """
-        issues: Dict[str, Any] = {
+        issues: dict[str, Any] = {
             "overlaps": [],
             "short_sequences": [],
+            "outside_window": [],
             "large_gaps": [],
             "timing_summary": {},
         }
@@ -4748,6 +6396,36 @@ class ScheduleProcessor:
                 }
                 issues["short_sequences"].append(short_issue)
 
+        # Nothing may reach outside the schedule window. Extraction and
+        # growth both hold to it, so a hit here is a scheduler bug.
+        window_start = getattr(self, "window_start", None)
+        window_end = getattr(self, "window_end", None)
+        if window_start is not None and window_end is not None:
+            for seq_info in all_sequences:
+                seq = seq_info["sequence"]
+                before = (window_start - seq.start_time).sec
+                after = (seq.stop_time - window_end).sec
+                if before <= 1e-3 and after <= 1e-3:
+                    continue
+                message = (
+                    f"Seq {seq.id} ({seq.target}) in visit "
+                    f"{seq_info['visit_id']}: "
+                    f"{seq.start_time.isot} - {seq.stop_time.isot} reaches "
+                    f"outside the window {window_start.isot} - "
+                    f"{window_end.isot}."
+                )
+                self._print(f"ERROR: {message}")
+                issues["outside_window"].append(
+                    {
+                        "sequence_id": seq.id,
+                        "target": seq.target,
+                        "visit_id": seq_info["visit_id"],
+                        "start_time": seq.start_time,
+                        "stop_time": seq.stop_time,
+                        "message": message,
+                    }
+                )
+
         # Check for large gaps between sequences
         max_acceptable_gap = 2.0 * u.minute  # 2 minutes
         for i in range(len(all_sequences) - 1):
@@ -4788,9 +6466,11 @@ class ScheduleProcessor:
             "total_sequences": len(all_sequences),
             "overlaps_found": len(issues["overlaps"]),
             "short_sequences_found": len(issues["short_sequences"]),
+            "outside_window_found": len(issues["outside_window"]),
             "large_gaps_found": len(issues["large_gaps"]),
             "total_issues": len(issues["overlaps"])
             + len(issues["short_sequences"])
+            + len(issues["outside_window"])
             + len(issues["large_gaps"]),
         }
 
@@ -4831,6 +6511,18 @@ class ScheduleProcessor:
 
             self._print()
 
+            if issues["outside_window"]:
+                self._print(
+                    f"OUTSIDE THE WINDOW "
+                    f"({len(issues['outside_window'])} found):"
+                )
+                for i, out in enumerate(issues["outside_window"]):
+                    self._print(f"  {i+1}. {out['message']}")
+            else:
+                self._print("\u2713 OUTSIDE THE WINDOW: None found")
+
+            self._print()
+
             if issues["large_gaps"]:
                 self._print(
                     f"LARGE GAPS ({len(issues['large_gaps'])} "
@@ -4850,7 +6542,7 @@ class ScheduleProcessor:
 
     def validate_payload_exposures(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate payload exposure times against sequence duration.
 
         Checks that single-frame exposure, total-frame exposure, and
@@ -5096,7 +6788,7 @@ class ScheduleProcessor:
 
     def validate_star_roi_consistency(
         self, calendar: ScienceCalendar, report_issues: bool = True
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Validate MaxNumStarRois/numPredefinedStarRois consistency.
 
@@ -5291,7 +6983,7 @@ class ScheduleProcessor:
         calendar: ScienceCalendar,
         report_issues: bool = True,
         tolerance_deg: float = 0.001,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Validate roll-angle consistency per target within each visit.
 
         Returns
@@ -5303,7 +6995,7 @@ class ScheduleProcessor:
         issues = []
 
         for visit in calendar.visits:
-            target_sequences: Dict[str, List[ObservationSequence]] = {}
+            target_sequences: dict[str, list[ObservationSequence]] = {}
             for seq in visit.sequences:
                 if seq.target not in target_sequences:
                     target_sequences[seq.target] = []
@@ -5315,7 +7007,7 @@ class ScheduleProcessor:
 
                 roll_values = []
                 seq_ids = []
-                roll_map: Dict[str, float] = {}
+                roll_map: dict[str, float] = {}
                 for seq in sequences:
                     if seq.roll is not None:
                         roll_values.append(seq.roll)
@@ -5367,7 +7059,7 @@ class ScheduleProcessor:
         return issues
 
     def _print_issue_details(
-        self, category: str, item: Dict[str, Any]
+        self, category: str, item: dict[str, Any]
     ) -> None:
         """Print structured requirement-vs-actual detail for one issue."""
         indent = "      "
@@ -5491,7 +7183,7 @@ class ScheduleProcessor:
 
     def print_validation_summary(
         self, calendar: ScienceCalendar
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run all validators and print a unified actionable report.
 
         Returns
@@ -5501,8 +7193,8 @@ class ScheduleProcessor:
             "details": {...}}`` where *details* maps each category
             to the raw issue list.
         """
-        results: Dict[str, Any] = {}
-        counts: Dict[str, int] = {}
+        results: dict[str, Any] = {}
+        counts: dict[str, int] = {}
 
         # --- target names ---
         target_issues = self.validate_target_names(
@@ -5617,6 +7309,11 @@ class ScheduleProcessor:
             if summary["short_sequences_found"]:
                 self._print(
                     f"  - {summary['short_sequences_found']} sequences too short"
+                )
+            if summary["outside_window_found"]:
+                self._print(
+                    f"  - {summary['outside_window_found']} sequences "
+                    "outside the window"
                 )
             if summary["large_gaps_found"]:
                 self._print(f"  - {summary['large_gaps_found']} large gaps")

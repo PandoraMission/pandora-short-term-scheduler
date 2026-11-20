@@ -64,6 +64,33 @@ def test_boresight_contains_pri_cmd_dir(tmp_path):
         assert pri.text == "9", f"PRI_CMD_DIR should be 9, got {pri.text}"
 
 
+def test_visit_main_is_written_after_priority_and_read_back(tmp_path):
+    """<VisitMain> carries is_main through the short-term XML."""
+    cal = parse_science_calendar(get_sample_calendar_path())
+    sequences = [seq for visit in cal.visits for seq in visit.sequences]
+    # The long-term sample has no VisitMain, so every flag reads False.
+    assert not any(seq.is_main for seq in sequences)
+    sequences[0].is_main = True
+
+    written = XMLWriter().write_calendar(cal, str(tmp_path / "main.xml"))
+
+    root = ET.parse(written).getroot()
+    ns = {"pandora": root.tag.split("}")[0].strip("{")}
+    params = root.findall(".//pandora:Observational_Parameters", ns)
+    tags = [child.tag.split("}")[-1] for child in params[0]]
+    assert tags[tags.index("Priority") + 1] == "VisitMain"
+    assert [p.find("pandora:VisitMain", ns).text for p in params[:2]] == [
+        "True",
+        "False",
+    ]
+    reread = [
+        seq.is_main
+        for visit in parse_science_calendar(written).visits
+        for seq in visit.sequences
+    ]
+    assert reread == [True] + [False] * (len(sequences) - 1)
+
+
 def test_payload_element_roundtrip_preserves_tags():
     sample = get_sample_calendar_path()
     cal = parse_science_calendar(sample)

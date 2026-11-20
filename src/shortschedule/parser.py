@@ -14,7 +14,7 @@ without losing attributes or nested elements.
 
 # Standard library
 import xml.etree.ElementTree as ET
-from typing import Dict, Optional
+from typing import Optional
 
 # Third-party
 import numpy as np
@@ -69,8 +69,11 @@ def parse_science_calendar(
             "calendar_weights": meta.get("Calendar_Weights"),
             "ephemeris": meta.get("Ephemeris"),
             "keepout_angles": meta.get("Keepout_Angles"),
+            # Long-term calendars write the ``_max`` name; the bare one is
+            # read as a fallback.
             "observation_sequence_duration": meta.get(
-                "Observation_Sequence_Duration_hrs"
+                "Observation_Sequence_Duration_hrs_max",
+                meta.get("Observation_Sequence_Duration_hrs"),
             ),
             "removed_sequences_shorter_than": meta.get(
                 "Removed_Sequences_Shorter_Than_min"
@@ -133,7 +136,7 @@ def parse_science_calendar(
 
 
 def _parse_observation_sequence(
-    seq_elem: ET.Element, namespace: Dict[str, str]
+    seq_elem: ET.Element, namespace: dict[str, str]
 ) -> Optional["ObservationSequence"]:
     """Parse a single `Observation_Sequence` XML element into an
     `ObservationSequence` object.
@@ -170,6 +173,13 @@ def _parse_observation_sequence(
 
     priority_elem = obs_params_elem.find("pandora:Priority", namespace)
     priority = int(priority_elem.text) if priority_elem is not None else 0
+
+    # Written on short-term calendars only
+    visit_main_elem = obs_params_elem.find("pandora:VisitMain", namespace)
+    is_main = (
+        visit_main_elem is not None
+        and (visit_main_elem.text or "").strip().lower() == "true"
+    )
 
     # --- Parse timing ---
     timing_elem = obs_params_elem.find("pandora:Timing", namespace)
@@ -222,6 +232,7 @@ def _parse_observation_sequence(
         dec=dec,
         payload_params=payload_params,
         roll=roll,
+        is_main=is_main,
     )
 
 
@@ -249,11 +260,11 @@ def _create_clean_element_copy(element: ET.Element) -> ET.Element:
 
 
 def _get_element_text(
-    element: Optional[ET.Element],
+    element: ET.Element | None,
     child_path: str,
-    namespace: Optional[Dict[str, str]] = None,
-    default: Optional[str] = None,
-) -> Optional[str]:
+    namespace: dict[str, str] | None = None,
+    default: str | None = None,
+) -> str | None:
     """Safely get text content from an element's child."""
     if element is None:
         return default

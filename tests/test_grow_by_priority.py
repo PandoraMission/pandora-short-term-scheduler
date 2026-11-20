@@ -66,7 +66,7 @@ def test_higher_priority_takes_from_a_lower_neighbor_down_to_its_floor(
     summary = proc.gap_report["processing_summary"]
     assert summary["minutes_taken_from_lower_priority"] == 32
     out = capsys.readouterr().out
-    assert "GROWTH: took 32 min from lower-priority B" in out
+    assert "GROWTH: took 32 min from lower-ranked B" in out
     assert "ERROR" in out and "GROWTH BLOCKED: visibility allows 13" in out
 
 
@@ -91,6 +91,113 @@ def test_walk_order_is_priority_then_start_time(monkeypatch):
     )
     assert [sid for sid, _ in seen[::2]] == ["p2b", "p2a", "p1", "p0"]
     assert [direction for _, direction in seen] == [-1, 1] * 4
+
+
+def _main(seq):
+    seq.is_main = True
+    return seq
+
+
+def _grow_visits(proc, visits):
+    """Grow a calendar of ``visits``, each a list of sequences, in order."""
+    cal = ScienceCalendar(
+        metadata={},
+        visits=[
+            Visit(id=f"v{index}", sequences=sequences)
+            for index, sequences in enumerate(visits, start=1)
+        ],
+    )
+    proc._grow_into_free_time(cal, _timing(cal))
+    return [seq for visit in cal.visits for seq in visit.sequences]
+
+
+def _walk(monkeypatch, proc, visits):
+    seen = []
+    monkeypatch.setattr(
+        proc,
+        "_grow_one_side",
+        lambda ordered, index, direction, timing: (
+            seen.append(ordered[index][1].id) or (0, 0)
+        ),
+    )
+    _grow_visits(proc, visits)
+    return seen[::2]
+
+
+def test_walk_order_is_priority_then_main_target(monkeypatch):
+    proc = _proc()
+    walk = _walk(
+        monkeypatch,
+        proc,
+        [
+            [
+                _seq("p0", "C", 0, 10, 0),
+                _main(_seq("main", "A", 20, 10, 0)),
+                _seq("p1", "D", 40, 10, 1),
+                _seq("p2", "B", 60, 10, 2),
+            ]
+        ],
+    )
+    assert walk == ["p2", "p1", "main", "p0"]
+
+
+def test_walk_order_breaks_a_tie_on_the_earlier_visit(monkeypatch):
+    """The later visit's observation starts first in time, but the
+    earlier visit walks first at equal rank."""
+    proc = _proc()
+    walk = _walk(
+        monkeypatch,
+        proc,
+        [[_seq("early", "A", 40, 10, 0)], [_seq("late", "B", 0, 10, 0)]],
+    )
+    assert walk == ["early", "late"]
+
+
+def test_a_higher_priority_in_another_visit_takes_from_a_main_target(
+    capsys,
+):
+    """Across visits priority decides: a priority 1 takes from the
+    priority-0 main target of the visit before it, down to its floor."""
+    proc = _proc()
+    main, other = _grow_visits(
+        proc,
+        [[_main(_seq("s1", "A", 0, 20, 0))], [_seq("s2", "B", 20, 40, 1)]],
+    )
+    assert (_minute(main.stop_time), _minute(other.start_time)) == (8, 8)
+    assert "GROWTH: took 12 min from lower-ranked A" in (
+        capsys.readouterr().out
+    )
+
+
+def test_within_a_visit_the_main_target_outranks_equal_priority():
+    proc = _proc()
+    other, main = _grow(
+        proc, [_seq("s1", "B", 0, 20, 0), _main(_seq("s2", "A", 20, 40, 0))]
+    )
+    assert (_minute(other.stop_time), _minute(main.start_time)) == (8, 8)
+
+
+def test_an_equal_rank_in_an_earlier_visit_takes_from_the_later_one():
+    """Same rank, different visits: the earlier visit takes from the
+    later one down to its floor; the later one cannot take back."""
+    proc = _proc()
+    early, late = _grow_visits(
+        proc,
+        [[_seq("s1", "A", 0, 20, 0)], [_seq("s2", "B", 20, 40, 0)]],
+    )
+    assert (_minute(early.stop_time), _minute(late.start_time)) == (52, 52)
+
+
+def test_an_override_still_grows_by_its_priority():
+    """occultation_overrides changes the keepout, not the rank: a
+    priority-0 override is taken from like any priority 0."""
+    proc = _proc()
+    proc.occultation_overrides = ["A"]
+    proc._occultation_override_names = frozenset({"A"})
+    low, high = _grow(
+        proc, [_seq("s1", "A", 0, 40, 0), _seq("s2", "B", 40, 20, 1)]
+    )
+    assert (_minute(low.stop_time), _minute(high.start_time)) == (8, 8)
 
 
 def test_equal_priority_neighbor_is_a_hard_bound(capsys):
@@ -194,12 +301,12 @@ def test_timing_log_says_why_each_boundary_moved(capsys):
     out = capsys.readouterr().out
     assert (
         "ELONGATED: stop later 32.0 min (duration 20.0 -> 52.0 min): "
-        "stop: grew 32 min, 32 of them taken from lower-priority B"
+        "stop: grew 32 min, 32 of them taken from lower-ranked B"
     ) in out
     assert (
         "ELONGATED: start later 32.0 min, stop later 45.0 min "
         "(duration 40.0 -> 53.0 min): start: gave 32 min to "
-        "higher-priority A; stop: grew 45 min into idle time"
+        "higher-ranked A; stop: grew 45 min into idle time"
     ) in out
 
 

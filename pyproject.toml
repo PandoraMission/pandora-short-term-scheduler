@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "shortschedule"
-version = "1.6.1"
+version = "1.7.0"
 description = ""
 authors = ["Tom Barclay <barclay.astro@gmail.com>"]
 readme = "README.md"
@@ -14,7 +14,7 @@ numpy = "^2.1.0"
 pandas = "^2.2.3"
 appdirs = "^1.4.4"
 astropy = "^7.1.1"
-pandoravisibility = ">=2.0.0,<2.1.0"
+pandoravisibility = ">=2.1.0,<2.2.0"
 requests = "^2.32.5"
 tqdm = "^4.66.0"
 cmasher = "^1.9.2"
@@ -31,7 +31,7 @@ mkdocs-jupyter = "^0.25.1"
 mkdocs-material = "^9.6.22"
 pytkdocs = {version = "^0.16.5", extras = ["numpy-style"]}
 mkdocs-include-markdown-plugin = "^7.1.4"
-mkdocstrings = {version = "^0.30.1", extras = ["python"]}
+mkdocstrings = {version = "^1.0.8", extras = ["python"]}
 notebook = "^7.5.4"
 
 [build-system]
