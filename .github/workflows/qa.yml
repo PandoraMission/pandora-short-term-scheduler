@@ -36,6 +36,10 @@ jobs:
           pip install poetry
 
       - name: Install dependencies (poetry)
+        env:
+          # lxml 5.x's C sources trip GCC 14+'s incompatible-pointer-types
+          # error against libxml2 >= 2.14 (const-only mismatch; harmless).
+          CFLAGS: -Wno-error=incompatible-pointer-types
         run: |
           poetry config virtualenvs.create false --local
           poetry install --no-interaction --with dev

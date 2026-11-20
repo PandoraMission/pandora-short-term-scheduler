@@ -25,6 +25,10 @@ jobs:
         sudo apt-get install -y libxml2-dev libxslt1-dev
 
     - name: Install dependencies
+      env:
+        # lxml 5.x's C sources trip GCC 14+'s incompatible-pointer-types
+        # error against libxml2 >= 2.14 (const-only mismatch; harmless).
+        CFLAGS: -Wno-error=incompatible-pointer-types
       run: |
         python -m pip install --upgrade pip
         python -m pip install poetry
