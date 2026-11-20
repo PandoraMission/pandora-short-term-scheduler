@@ -9,6 +9,6 @@ max-line-length = 140
 max-complexity = 30
 count = True
 show-source = True
-extend-ignore = E203, E741, W605
+extend-ignore = E203, E741, W605, F401, C901
 per-file-ignores =
     src/pandorasat/citations.py:E501
